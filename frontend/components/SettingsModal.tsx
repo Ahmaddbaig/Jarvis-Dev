@@ -22,11 +22,16 @@ export type JarvisPosition = 'center' | 'bottom-left' | 'bottom-right' | 'top-le
 export type RealtimeModel = 'gpt-realtime-2' | 'gpt-realtime-1.5' | 'gpt-realtime-mini';
 
 export interface JarvisSettings {
-  apiMode: 'openai' | 'elevenlabs';
+  apiMode: 'openai' | 'elevenlabs' | 'local';
   apiKey: string;
   realtimeModel?: RealtimeModel;
   elevenLabsAgentId?: string;
   elevenLabsFirstMessage?: string;
+  /** OpenAI chat model for the Voicebox engine's brain (e.g. gpt-4o-mini). */
+  chatModel?: string;
+  /** Voicebox voice profile id; empty = auto-created "Jarvis" preset voice. */
+  voiceboxProfileId?: string;
+  localFirstMessage?: string;
   voice: 'alloy' | 'ash' | 'ballad' | 'coral' | 'echo' | 'sage' | 'shimmer' | 'verse' | 'marin' | 'cedar';
   initialPrompt: string;
   enabledFunctions: string[];
@@ -97,6 +102,10 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
   const [diagOutput, setDiagOutput] = useState<string | null>(null);
   const [diagError, setDiagError] = useState<string | null>(null);
 
+  // Voicebox engine status (OpenAI brain + Voicebox profiles)
+  const [brainStatus, setBrainStatus] = useState<{ ok: boolean; error?: string } | null>(null);
+  const [voiceboxStatus, setVoiceboxStatus] = useState<{ ok: boolean; profiles: { id: string; name: string }[]; error?: string } | null>(null);
+
   useEffect(() => {
     if (isOpen) {
       setSettings(initialSettings);
@@ -105,6 +114,22 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
       setDiagError(null);
     }
   }, [isOpen, initialSettings]);
+
+  // Probe brain + Voicebox whenever the Voicebox engine is selected
+  const isLocalMode = settings.apiMode === 'local';
+  useEffect(() => {
+    if (!isOpen || !isLocalMode) return;
+    let cancelled = false;
+    fetch('/api/voice/chat')
+      .then((res) => res.json())
+      .then((data) => { if (!cancelled) setBrainStatus(data); })
+      .catch(() => { if (!cancelled) setBrainStatus({ ok: false, error: 'Status check failed' }); });
+    fetch('/api/voice/profiles')
+      .then((res) => res.json())
+      .then((data) => { if (!cancelled) setVoiceboxStatus(data); })
+      .catch(() => { if (!cancelled) setVoiceboxStatus({ ok: false, profiles: [], error: 'Status check failed' }); });
+    return () => { cancelled = true; };
+  }, [isOpen, isLocalMode]);
 
   async function runDiagnostics() {
     sfx('click_sfx', 0.5);
@@ -178,11 +203,11 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
               {/* API Mode switcher */}
               <div className="space-y-2">
                 <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">Voice Engine</label>
-                <div className="grid grid-cols-2 gap-2">
-                  {(['openai', 'elevenlabs'] as const).map((mode) => {
+                <div className="grid grid-cols-3 gap-2">
+                  {(['openai', 'elevenlabs', 'local'] as const).map((mode) => {
                     const active = (settings.apiMode ?? 'openai') === mode;
-                    const labels = { openai: 'OpenAI Realtime', elevenlabs: 'ElevenLabs' };
-                    const descs  = { openai: 'GPT-4o via WebRTC', elevenlabs: 'Jarvis Agent via WebRTC' };
+                    const labels = { openai: 'OpenAI Realtime', elevenlabs: 'ElevenLabs', local: 'Voicebox' };
+                    const descs  = { openai: 'GPT-4o via WebRTC', elevenlabs: 'Jarvis Agent via WebRTC', local: 'GPT brain + JARVIS voice' };
                     return (
                       <button
                         key={mode}
@@ -203,8 +228,8 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
                 </div>
               </div>
 
-              {/* OpenAI fields */}
-              {(settings.apiMode ?? 'openai') === 'openai' && (
+              {/* OpenAI fields — the key also powers the Voicebox engine's brain */}
+              {((settings.apiMode ?? 'openai') === 'openai' || settings.apiMode === 'local') && (
                 <div className="space-y-2">
                   <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">OpenAI API Key</label>
                   <input
@@ -270,6 +295,93 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
                       className="w-full bg-cyan-950/20 border border-cyan-500/30 rounded px-3 py-2 text-cyan-100 focus:outline-none focus:border-cyan-400 focus:shadow-[0_0_10px_rgba(34,211,238,0.3)] transition-all font-mono text-sm"
                     />
                     <p className="text-xs text-cyan-700">Leave empty to use the agent&apos;s default greeting.</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Local engine fields */}
+              {(settings.apiMode ?? 'openai') === 'local' && (
+                <div className="space-y-4">
+                  {/* Service status */}
+                  <div className="space-y-1 text-xs font-mono">
+                    <p className={brainStatus?.ok ? 'text-green-400' : 'text-red-400'}>
+                      ● Brain (OpenAI API) {brainStatus === null ? '— checking…' : brainStatus.ok ? 'ready' : `not ready — ${brainStatus.error ?? 'no API key'}`}
+                    </p>
+                    <p className={voiceboxStatus?.ok ? 'text-green-400' : 'text-red-400'}>
+                      ● Voicebox {voiceboxStatus === null ? '— checking…' : voiceboxStatus.ok ? 'online' : `offline — ${voiceboxStatus.error ?? 'not reachable'}`}
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">Brain Model (OpenAI)</label>
+                    <div className="grid grid-cols-3 gap-2">
+                      {(['gpt-4o-mini', 'gpt-4.1-mini', 'gpt-4o'] as const).map((model) => {
+                        const active = (settings.chatModel ?? 'gpt-4o-mini') === model;
+                        return (
+                          <button
+                            key={model}
+                            onClick={() => { sfx('select', 0.5); setSettings({ ...settings, chatModel: model }); }}
+                            className={`px-3 py-2 border rounded text-xs font-mono text-left transition-all ${
+                              active
+                                ? 'bg-cyan-500/20 border-cyan-400 text-cyan-300 shadow-[0_0_10px_rgba(34,211,238,0.2)]'
+                                : 'bg-transparent border-cyan-500/20 text-cyan-600 hover:border-cyan-500/50 hover:text-cyan-400'
+                            }`}
+                          >
+                            {model}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <input
+                      type="text"
+                      value={settings.chatModel ?? 'gpt-4o-mini'}
+                      onChange={(e) => setSettings({ ...settings, chatModel: e.target.value })}
+                      placeholder="gpt-4o-mini"
+                      className="w-full bg-cyan-950/20 border border-cyan-500/30 rounded px-3 py-2 text-cyan-100 focus:outline-none focus:border-cyan-400 focus:shadow-[0_0_10px_rgba(34,211,238,0.3)] transition-all font-mono text-sm"
+                    />
+                    <p className="text-xs text-cyan-700">Uses the OpenAI API key above. Any chat model with tool calling works.</p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">Voice (Voicebox profile)</label>
+                    {voiceboxStatus?.ok && voiceboxStatus.profiles.length > 0 ? (
+                      <div className="grid grid-cols-2 gap-2">
+                        {voiceboxStatus.profiles.map((profile) => {
+                          const active = (settings.voiceboxProfileId ?? '') === profile.id
+                            || (!settings.voiceboxProfileId && profile.name === 'Jarvis');
+                          return (
+                            <button
+                              key={profile.id}
+                              onClick={() => { sfx('select', 0.5); setSettings({ ...settings, voiceboxProfileId: profile.id }); }}
+                              className={`px-3 py-2 border rounded text-xs text-left transition-all ${
+                                active
+                                  ? 'bg-cyan-500/20 border-cyan-400 text-cyan-300 shadow-[0_0_10px_rgba(34,211,238,0.2)]'
+                                  : 'bg-transparent border-cyan-500/20 text-cyan-600 hover:border-cyan-500/50 hover:text-cyan-400'
+                              }`}
+                            >
+                              {profile.name}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-cyan-700">
+                        A &quot;Jarvis&quot; voice (British male) is created automatically on first use.
+                        Clone your own in the Voicebox app and it will appear here.
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">First Message <span className="text-cyan-700 normal-case font-normal">(optional)</span></label>
+                    <input
+                      type="text"
+                      value={settings.localFirstMessage ?? ''}
+                      onChange={(e) => setSettings({ ...settings, localFirstMessage: e.target.value })}
+                      placeholder="Good evening, sir. All systems online."
+                      className="w-full bg-cyan-950/20 border border-cyan-500/30 rounded px-3 py-2 text-cyan-100 focus:outline-none focus:border-cyan-400 focus:shadow-[0_0_10px_rgba(34,211,238,0.3)] transition-all font-mono text-sm"
+                    />
+                    <p className="text-xs text-cyan-700">Spoken when the session starts. Leave empty for silence.</p>
                   </div>
                 </div>
               )}

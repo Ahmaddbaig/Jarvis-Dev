@@ -10,6 +10,25 @@ Double-click `RUN-JARVIS-DEV.command`, or:
 npm run dev:desktop
 ```
 
+## Voice engines
+
+Three engines are selectable in Settings:
+
+- **OpenAI Realtime** — GPT speech-to-speech over WebRTC (needs OpenAI API key).
+- **ElevenLabs** — Conversational AI agent over WebRTC (needs agent id).
+- **Voicebox** — the movie JARVIS voice: Silero VAD → whisper.cpp STT →
+  OpenAI Chat Completions brain (same API key as Realtime, default
+  `gpt-4o-mini`) → Voicebox TTS with a cloned voice profile.
+
+The Voicebox engine expects:
+
+```bash
+brew install whisper-cpp
+curl -L -o ~/.cache/whisper-cpp/ggml-base.en.bin \
+  https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin
+# plus the Voicebox app running on http://127.0.0.1:17493
+```
+
 ## Project layout
 
 ```

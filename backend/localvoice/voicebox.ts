@@ -1,0 +1,126 @@
+import { getVoiceboxUrl } from './config';
+
+/**
+ * Thin server-side client for the Voicebox REST API (local TTS/STT studio).
+ * Only the endpoints Jarvis needs: profiles, generation queue, audio fetch.
+ */
+
+const DEFAULT_PROFILE_NAME = 'Jarvis';
+const DEFAULT_PRESET_ENGINE = 'kokoro';
+const DEFAULT_PRESET_VOICE_ID = 'bm_george';
+const GENERATION_POLL_INTERVAL_MS = 250;
+// Generous: the first generation after idle cold-loads the TTS engine into
+// MLX, which can take over a minute on a memory-pressured machine.
+const GENERATION_TIMEOUT_MS = 120_000;
+const REQUEST_TIMEOUT_MS = 15_000;
+
+export interface VoiceboxProfile {
+  id: string;
+  name: string;
+  default_engine?: string | null;
+}
+
+interface GenerationResponse {
+  id: string;
+  status: string;
+  error?: string | null;
+}
+
+function api(pathname: string): string {
+  return `${getVoiceboxUrl()}${pathname}`;
+}
+
+export async function listProfiles(): Promise<VoiceboxProfile[]> {
+  const res = await fetch(api('/profiles'), {
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (!res.ok) throw new Error(`Voicebox /profiles failed: ${res.status}`);
+  const data = (await res.json()) as VoiceboxProfile[];
+  return Array.isArray(data) ? data : [];
+}
+
+/**
+ * Find the profile to speak with. If none is configured and no "Jarvis"
+ * profile exists yet, create one from a Kokoro preset voice (British male)
+ * so the local engine works with zero manual Voicebox setup.
+ */
+export async function resolveProfile(profileId?: string): Promise<VoiceboxProfile> {
+  const profiles = await listProfiles();
+
+  if (profileId) {
+    const match = profiles.find((p) => p.id === profileId);
+    if (match) return match;
+  }
+
+  const existing = profiles.find((p) => p.name === DEFAULT_PROFILE_NAME);
+  if (existing) return existing;
+
+  const res = await fetch(api('/profiles'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: DEFAULT_PROFILE_NAME,
+      description: 'Auto-created by Jarvis local voice engine',
+      language: 'en',
+      voice_type: 'preset',
+      preset_engine: DEFAULT_PRESET_ENGINE,
+      preset_voice_id: DEFAULT_PRESET_VOICE_ID,
+      default_engine: DEFAULT_PRESET_ENGINE,
+    }),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (!res.ok) {
+    throw new Error(`Voicebox profile creation failed: ${res.status} ${await res.text()}`);
+  }
+  return (await res.json()) as VoiceboxProfile;
+}
+
+/** Submit a generation, wait for it to finish, and return the audio bytes. */
+export async function generateSpeech(
+  text: string,
+  profile: VoiceboxProfile,
+): Promise<{ audio: ArrayBuffer; contentType: string }> {
+  const submitRes = await fetch(api('/generate'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      text,
+      profile_id: profile.id,
+      language: 'en',
+      engine: profile.default_engine ?? DEFAULT_PRESET_ENGINE,
+    }),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (!submitRes.ok) {
+    throw new Error(`Voicebox /generate failed: ${submitRes.status} ${await submitRes.text()}`);
+  }
+  const generation = (await submitRes.json()) as GenerationResponse;
+
+  const deadline = Date.now() + GENERATION_TIMEOUT_MS;
+  let status = generation.status;
+  while (status !== 'completed') {
+    if (status === 'failed' || status === 'cancelled') {
+      throw new Error(`Voicebox generation ${status}`);
+    }
+    if (Date.now() > deadline) {
+      throw new Error('Voicebox generation timed out');
+    }
+    await new Promise((resolve) => setTimeout(resolve, GENERATION_POLL_INTERVAL_MS));
+    // NB: /generate/{id}/status is an SSE stream; /history/{id} returns the
+    // same status as plain JSON, so poll that instead.
+    const statusRes = await fetch(api(`/history/${generation.id}`), {
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    if (!statusRes.ok) throw new Error(`Voicebox status check failed: ${statusRes.status}`);
+    status = ((await statusRes.json()) as GenerationResponse).status;
+  }
+
+  const audioRes = await fetch(api(`/audio/${generation.id}`), {
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (!audioRes.ok) throw new Error(`Voicebox audio fetch failed: ${audioRes.status}`);
+  return {
+    audio: await audioRes.arrayBuffer(),
+    contentType: audioRes.headers.get('content-type') ?? 'audio/wav',
+  };
+}

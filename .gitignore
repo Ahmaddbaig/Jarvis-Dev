@@ -5,6 +5,9 @@ node_modules/
 .next/
 out/
 
+# VAD runtime assets (copied from node_modules by scripts/copy-vad-assets.js)
+public/vad/
+
 # Local settings & secrets (contains API keys)
 jarvis-server-settings.json
 .bambu-token.json
