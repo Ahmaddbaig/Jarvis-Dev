@@ -22,7 +22,6 @@ const FFT_BARS = 64;
 // Keep speaker bleed and song vocals below the activation point while still
 // allowing a nearby user speaking clearly to interrupt playback.
 const REALTIME_VAD_THRESHOLD = 0.7;
-const ELEVENLABS_DUCK_VAD_THRESHOLD = 0.85;
 const MUSIC_TOOL_ROUTING_INSTRUCTIONS =
   'For any request to play a named artist, song, album, or playlist, always call play_spotify. ' +
   'Keep playback in the installed Spotify desktop application. Never open Spotify Web Player or a Spotify website, and never use open_url, web_search, run_shell_command, or computer_use for a music request. ' +
@@ -37,6 +36,10 @@ function buildAssistantInstructions(initialPrompt: string): string {
     '\n\n' + MUSIC_TOOL_ROUTING_INSTRUCTIONS +
     '\n\nDo not call navigate_to_page as part of a greeting or on your own initiative — only call it when the user explicitly asks to go to a different page.'
   );
+}
+
+function hasJarvisWakeWord(transcript: string): boolean {
+  return /\b(?:jarvis|jervis)\b/i.test(transcript);
 }
 
 const DEFAULT_SETTINGS: JarvisSettings = {
@@ -167,9 +170,6 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
       setStatus('error');
       setLastError(msg);
       emitError('elevenlabs', msg);
-    },
-    onVadScore: ({ vadScore }) => {
-      if (vadScore >= ELEVENLABS_DUCK_VAD_THRESHOLD) void duckMusic();
     },
     onModeChange: ({ mode }) => {
       if (mode === 'speaking') {
@@ -886,12 +886,17 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
         audio: {
           input: {
             noise_reduction: { type: 'far_field' },
+            transcription: {
+              model: 'gpt-4o-mini-transcribe',
+              language: 'en',
+              prompt: 'The speaker may address an assistant named Jarvis. Spell the wake word as Jarvis.',
+            },
             turn_detection: {
               type: 'server_vad',
               threshold: REALTIME_VAD_THRESHOLD,
               prefix_padding_ms: 500,
               silence_duration_ms: 650,
-              create_response: true,
+              create_response: false,
               interrupt_response: true,
             },
           },
@@ -939,12 +944,17 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
             audio: {
               input: {
                 noise_reduction: { type: 'far_field' },
+                transcription: {
+                  model: 'gpt-4o-mini-transcribe',
+                  language: 'en',
+                  prompt: 'The speaker may address an assistant named Jarvis. Spell the wake word as Jarvis.',
+                },
                 turn_detection: {
                   type: 'server_vad',
                   threshold: REALTIME_VAD_THRESHOLD,
                   prefix_padding_ms: 500,
                   silence_duration_ms: 650,
-                  create_response: true,
+                  create_response: false,
                   interrupt_response: true,
                 },
               },
@@ -982,8 +992,44 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
             );
           }
 
-          if (data.type === 'input_audio_buffer.speech_started') {
-            void duckMusic();
+          if (data.type === 'conversation.item.input_audio_transcription.completed') {
+            const transcript = typeof data.transcript === 'string' ? data.transcript.trim() : '';
+            const itemId = typeof data.item_id === 'string' ? data.item_id : '';
+
+            let musicIsPlaying = false;
+            try {
+              const musicRes = await fetch('/api/music');
+              const musicData = await musicRes.json() as { isPlaying?: boolean };
+              musicIsPlaying = musicRes.ok && musicData.isPlaying === true;
+            } catch {
+              // If playback status is unavailable, preserve normal conversation behavior.
+            }
+
+            if (musicIsPlaying && !hasJarvisWakeWord(transcript)) {
+              console.log('[Jarvis] Ignored background audio while music was playing:', transcript);
+              if (itemId) {
+                dc.send(JSON.stringify({
+                  type: 'conversation.item.delete',
+                  item_id: itemId,
+                }));
+              }
+              return;
+            }
+
+            if (musicIsPlaying) await duckMusic();
+            dc.send(JSON.stringify({ type: 'response.create' }));
+            return;
+          }
+
+          if (data.type === 'conversation.item.input_audio_transcription.failed') {
+            const itemId = typeof data.item_id === 'string' ? data.item_id : '';
+            if (itemId) {
+              dc.send(JSON.stringify({
+                type: 'conversation.item.delete',
+                item_id: itemId,
+              }));
+            }
+            return;
           }
 
           if (
