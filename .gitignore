@@ -1,0 +1,19 @@
+# Dependencies
+node_modules/
+
+# Next.js build output
+.next/
+out/
+
+# Local settings & secrets (contains API keys)
+jarvis-server-settings.json
+.bambu-token.json
+.env
+.env.*
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+npm-debug.log*
