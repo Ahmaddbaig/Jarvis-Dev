@@ -255,6 +255,51 @@ export const FUNCTION_REGISTRY: JarvisFunction[] = [
     },
   },
   {
+    name: 'deskflow_control',
+    label: 'Deskflow Control',
+    description: 'Check connected Deskflow computers and move keyboard/mouse control between them',
+    tool: {
+      type: 'function',
+      name: 'deskflow_control',
+      description:
+        'Check Deskflow status or switch the shared keyboard and mouse to another configured computer. ' +
+        'Use action="status" first if the computer names are unknown. This only transfers input control; ' +
+        'it does not let computer_use see a remote screen.',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: ['status', 'switch'],
+            description: 'Read Deskflow status or switch to a computer.',
+          },
+          target: {
+            type: 'string',
+            description: 'For switch: a Deskflow screen name, or “Mac” / “Windows” when there is one of each.',
+          },
+        },
+        required: ['action'],
+      },
+    },
+    handler: async (args) => {
+      const action = args.action === 'switch' ? 'switch' : 'status';
+      try {
+        const res = await fetch('/api/deskflow', action === 'switch'
+          ? {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action, target: args.target }),
+            }
+          : { cache: 'no-store' });
+        const data = await res.json();
+        if (!res.ok && !data.error) return { error: `Deskflow request failed with HTTP ${res.status}.` };
+        return data;
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+  },
+  {
     name: 'xray',
     label: 'X-Ray',
     description: "Let Jarvis capture your camera and generate an X-ray scan of what it sees",
