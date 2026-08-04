@@ -54,7 +54,9 @@ async function currentSite() {
     return;
   }
   const url = new URL(tab.url);
-  const granted = await chrome.permissions.contains({ origins: [currentPattern] });
+  const granted = Array.isArray(extensionState?.approvedOrigins) &&
+    extensionState.approvedOrigins.includes(currentPattern) &&
+    await chrome.permissions.contains({ origins: [currentPattern] });
   elements.siteText.textContent = url.host;
   elements.permissionText.textContent = granted
     ? 'Jarvis may read and control this site.'
@@ -121,6 +123,8 @@ elements.allowSiteButton.addEventListener('click', async () => {
   try {
     const granted = await chrome.permissions.request({ origins: [currentPattern] });
     if (!granted) return setMessage('Chrome did not grant access to this site.', 'error');
+    const response = await sendMessage({ type: 'record_site_permission', pattern: currentPattern, granted: true });
+    extensionState = response.state;
     await currentSite();
     setMessage('Site access granted.', 'success');
   } catch (error) {
@@ -132,6 +136,8 @@ elements.removeSiteButton.addEventListener('click', async () => {
   if (!currentPattern) return;
   try {
     await chrome.permissions.remove({ origins: [currentPattern] });
+    const response = await sendMessage({ type: 'record_site_permission', pattern: currentPattern, granted: false });
+    extensionState = response.state;
     await currentSite();
     setMessage('Site access removed.', 'success');
   } catch (error) {

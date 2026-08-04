@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { NextRequest, NextResponse } from 'next/server';
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
@@ -17,14 +18,23 @@ export function isLoopbackRequest(req: NextRequest): boolean {
 export function isJarvisUiRequest(req: NextRequest): boolean {
   if (!isLoopbackRequest(req)) return false;
 
+  const expectedToken = process.env.JARVIS_CHROME_UI_TOKEN || '';
+  const authorization = req.headers.get('authorization') || '';
+  const suppliedToken = authorization.startsWith('Bearer ') ? authorization.slice(7).trim() : '';
+  if (expectedToken.length < 32 || expectedToken.length > 128 || suppliedToken.length !== expectedToken.length) {
+    return false;
+  }
+  if (!crypto.timingSafeEqual(Buffer.from(suppliedToken, 'utf8'), Buffer.from(expectedToken, 'utf8'))) {
+    return false;
+  }
+
   const origin = req.headers.get('origin');
-  if (!origin) return false;
+  const fetchSite = req.headers.get('sec-fetch-site');
+  if (fetchSite !== null && fetchSite !== 'same-origin') return false;
+  if (!origin) return fetchSite === 'same-origin';
 
   const originHost = hostnameFromOrigin(origin);
-  if (!originHost || !LOOPBACK_HOSTS.has(originHost)) return false;
-
-  const fetchSite = req.headers.get('sec-fetch-site');
-  return fetchSite === null || fetchSite === 'same-origin';
+  return Boolean(originHost && LOOPBACK_HOSTS.has(originHost));
 }
 
 export function extensionOrigin(req: NextRequest): string | null {

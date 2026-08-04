@@ -6,13 +6,13 @@ import {
   issueChromeCommand,
   revokeChromePairing,
 } from '@/backend/chrome/control';
-import { forbidden, isJarvisUiRequest, isLoopbackRequest } from '@/backend/chrome/http';
+import { forbidden, isJarvisUiRequest } from '@/backend/chrome/http';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
-  if (!isLoopbackRequest(req)) return forbidden();
+  if (!isJarvisUiRequest(req)) return forbidden();
   return NextResponse.json(chromeControlStatus(), { headers: { 'Cache-Control': 'no-store' } });
 }
 

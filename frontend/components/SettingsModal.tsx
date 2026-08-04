@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { FUNCTION_REGISTRY, JarvisFunction } from '@/frontend/lib/functions';
 import { sfx } from '@/frontend/lib/sfx';
+import { chromeControlFetch } from '@/frontend/lib/chromeControlClient';
 import {
   DEFAULT_LOCAL_AI_BASE_URL,
   LOCAL_AI_PROFILES,
@@ -202,7 +203,7 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
 
   async function refreshChromeStatus() {
     try {
-      const response = await fetch('/api/chrome-control', { cache: 'no-store' });
+      const response = await chromeControlFetch('/api/chrome-control');
       if (!response.ok) throw new Error(`Chrome status returned HTTP ${response.status}.`);
       setChromeStatus(await response.json() as ChromeControlStatus);
       setChromeError(null);
@@ -215,7 +216,7 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
     setChromeBusy(true);
     setChromeError(null);
     try {
-      const response = await fetch('/api/chrome-control', {
+      const response = await chromeControlFetch('/api/chrome-control', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ operation: 'create_pairing' }),
@@ -236,7 +237,7 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
     setChromeBusy(true);
     setChromeError(null);
     try {
-      const response = await fetch('/api/chrome-control', {
+      const response = await chromeControlFetch('/api/chrome-control', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ operation: 'revoke_pairing' }),

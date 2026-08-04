@@ -1,4 +1,5 @@
 import { getCachedSetting, loadServerSettings } from './serverSettings';
+import { chromeControlFetch } from './chromeControlClient';
 
 /** Paths from Settings → System — sent with shell / computer-use API calls. */
 export function readToolkitOverrides(): {
@@ -658,10 +659,7 @@ export const FUNCTION_REGISTRY: JarvisFunction[] = [
           text: { type: 'string', description: 'Visible element text for click, or text to enter for type.' },
           replace: { type: 'boolean', description: 'For type: replace the existing value when true; append when false.' },
           key: { type: 'string', description: 'Key for press_key, such as Enter, Tab, Escape, or ArrowDown.' },
-          ctrl: { type: 'boolean' },
-          alt: { type: 'boolean' },
-          shift: { type: 'boolean' },
-          meta: { type: 'boolean' },
+          shift: { type: 'boolean', description: 'Supported only with Tab to move focus backward.' },
           direction: { type: 'string', enum: ['up', 'down', 'top', 'bottom'] },
           amount: { type: 'number', description: 'Optional scroll distance in pixels.' },
         },
@@ -679,7 +677,7 @@ export const FUNCTION_REGISTRY: JarvisFunction[] = [
       delete commandArgs.confirmed;
 
       const send = async (confirmed = false) => {
-        const response = await fetch('/api/chrome-control', {
+        const response = await chromeControlFetch('/api/chrome-control', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({

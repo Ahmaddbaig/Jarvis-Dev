@@ -5,6 +5,7 @@ const STORAGE_DEFAULTS = {
   pairedAt: '',
   lastPollAt: 0,
   lastError: '',
+  approvedOrigins: [],
 };
 
 let pollLoopRunning = false;
@@ -47,7 +48,13 @@ function originPattern(urlValue) {
 async function hasTabAccess(tab) {
   const pattern = originPattern(tab?.url);
   if (!pattern) return false;
-  return chrome.permissions.contains({ origins: [pattern] });
+  const state = await readState();
+  if (!Array.isArray(state.approvedOrigins) || !state.approvedOrigins.includes(pattern)) return false;
+  const granted = await chrome.permissions.contains({ origins: [pattern] });
+  if (!granted) {
+    await updateState({ approvedOrigins: state.approvedOrigins.filter((origin) => origin !== pattern) });
+  }
+  return granted;
 }
 
 async function activeTab(tabId) {
@@ -105,29 +112,121 @@ function inspectPage(action, args) {
 
   const compact = (value, max = 300) => String(value || '').replace(/\s+/g, ' ').trim().slice(0, max);
 
-  const selectorFor = (element) => {
-    if (element.id) return `#${CSS.escape(element.id)}`;
+  const isNearViewport = (element) => {
+    const rect = element.getBoundingClientRect();
+    return rect.bottom >= -window.innerHeight * 0.25 && rect.top <= window.innerHeight * 1.25;
+  };
+
+  const uniqueMatch = (selector, element) => {
+    try {
+      const matches = document.querySelectorAll(selector);
+      return matches.length === 1 && matches[0] === element;
+    } catch {
+      return false;
+    }
+  };
+
+  const attributeSelector = (element) => {
+    if (element.id) {
+      const candidate = `#${CSS.escape(element.id)}`;
+      if (uniqueMatch(candidate, element)) return candidate;
+    }
     for (const attr of ['data-testid', 'aria-label', 'name']) {
       const value = element.getAttribute(attr);
-      if (value) return `${element.tagName.toLowerCase()}[${attr}="${CSS.escape(value)}"]`;
+      if (!value) continue;
+      const candidate = `${element.tagName.toLowerCase()}[${attr}="${CSS.escape(value)}"]`;
+      if (uniqueMatch(candidate, element)) return candidate;
     }
-    const parts = [];
+    return null;
+  };
+
+  const positionalPart = (element) => {
+    let part = element.tagName.toLowerCase();
+    const siblings = element.parentElement
+      ? Array.from(element.parentElement.children).filter((candidate) => candidate.tagName === element.tagName)
+      : [];
+    if (siblings.length > 1) part += `:nth-of-type(${siblings.indexOf(element) + 1})`;
+    return part;
+  };
+
+  const selectorFor = (element) => {
+    const direct = attributeSelector(element);
+    if (direct) return direct;
+
+    const parts = [positionalPart(element)];
     let current = element;
-    while (current && current.nodeType === Node.ELEMENT_NODE && current !== document.body && parts.length < 5) {
-      let part = current.tagName.toLowerCase();
-      const siblings = current.parentElement
-        ? Array.from(current.parentElement.children).filter((candidate) => candidate.tagName === current.tagName)
-        : [];
-      if (siblings.length > 1) part += `:nth-of-type(${siblings.indexOf(current) + 1})`;
-      parts.unshift(part);
+    while (current.parentElement && current.parentElement !== document.body) {
       current = current.parentElement;
+      const anchor = attributeSelector(current);
+      if (anchor) {
+        const candidate = `${anchor} > ${parts.join(' > ')}`;
+        if (uniqueMatch(candidate, element)) return candidate;
+      }
+      parts.unshift(positionalPart(current));
     }
-    return `body > ${parts.join(' > ')}`;
+    const candidate = `body > ${parts.join(' > ')}`;
+    if (uniqueMatch(candidate, element)) return candidate;
+    throw new Error('Jarvis could not create a unique selector for this element. Use visible text or inspect the page again.');
   };
 
   const interactiveElements = () => Array.from(document.querySelectorAll(
     'a[href], button, input:not([type="hidden"]), textarea, select, [role="button"], [role="link"], [contenteditable="true"]'
   )).filter(isVisible);
+
+  const labelFor = (element) => {
+    const labels = 'labels' in element && element.labels
+      ? Array.from(element.labels).map((label) => label.innerText).join(' ')
+      : '';
+    const ordinaryText = element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement || element.isContentEditable
+      ? ''
+      : element.innerText;
+    return compact(
+      ordinaryText || labels || element.getAttribute('aria-label') || element.getAttribute('title') || element.getAttribute('placeholder') || element.getAttribute('name')
+    );
+  };
+
+  const isSensitiveField = (element) => {
+    if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element.isContentEditable)) return false;
+    if (element instanceof HTMLInputElement && ['password', 'file'].includes(element.type)) return true;
+    const autocomplete = String(element.getAttribute('autocomplete') || '').toLocaleLowerCase();
+    if (/^(?:current-password|new-password|one-time-code|cc-|transaction-|webauthn)/.test(autocomplete)) return true;
+    const labels = 'labels' in element && element.labels
+      ? Array.from(element.labels).map((label) => label.innerText).join(' ')
+      : '';
+    const metadata = [
+      element.id,
+      element.getAttribute('name'),
+      element.getAttribute('aria-label'),
+      element.getAttribute('placeholder'),
+      labels,
+    ].filter(Boolean).join(' ');
+    return /\b(?:password|passcode|otp|one[ -]?time|verification code|security code|cvv|cvc|card number|credit card|debit card|api[ _-]?key|access token|secret|routing number|account number|ssn|social security)\b/i.test(metadata);
+  };
+
+  const viewportText = () => {
+    if (!document.body) return '';
+    const pieces = [];
+    let length = 0;
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode() && length < 24_000) {
+      const node = walker.currentNode;
+      const parent = node.parentElement;
+      const text = compact(node.textContent, 2_000);
+      if (!parent || !text || ['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE'].includes(parent.tagName)) continue;
+      if (parent.closest('input, textarea, select, [contenteditable="true"]')) continue;
+      const style = window.getComputedStyle(parent);
+      if (style.visibility === 'hidden' || style.display === 'none') continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      const intersects = Array.from(range.getClientRects()).some(
+        (rect) => rect.bottom >= -window.innerHeight * 0.25 && rect.top <= window.innerHeight * 1.25 && rect.width > 0 && rect.height > 0
+      );
+      if (!intersects) continue;
+      pieces.push(text);
+      length += text.length + 1;
+    }
+    return compact(pieces.join(' '), 20_000);
+  };
 
   const summarizeElement = (element, index) => {
     const input = element instanceof HTMLInputElement ? element : null;
@@ -135,9 +234,10 @@ function inspectPage(action, args) {
       index,
       tag: element.tagName.toLowerCase(),
       type: input?.type || undefined,
-      text: compact(element.innerText || (input?.type === 'password' ? '' : input?.value) || element.getAttribute('aria-label') || element.getAttribute('title') || element.getAttribute('placeholder')),
+      text: labelFor(element),
       ariaLabel: compact(element.getAttribute('aria-label')) || undefined,
       placeholder: compact(element.getAttribute('placeholder')) || undefined,
+      sensitive: isSensitiveField(element) || undefined,
       selector: selectorFor(element),
     };
   };
@@ -145,30 +245,43 @@ function inspectPage(action, args) {
   const locate = () => {
     if (args.selector) {
       try {
-        const selected = document.querySelector(args.selector);
+        const matches = document.querySelectorAll(args.selector);
+        if (matches.length > 1) {
+          throw new Error('The supplied selector matches more than one element. Read the page again for a unique selector.');
+        }
+        const selected = matches[0];
         if (selected && isVisible(selected)) return selected;
       } catch {
-        throw new Error('The supplied CSS selector is invalid. Read the page again for current selectors.');
+        throw new Error('The supplied CSS selector is invalid or ambiguous. Read the page again for current selectors.');
       }
     }
     if (args.text) {
       const wanted = compact(args.text).toLocaleLowerCase();
       const candidates = interactiveElements();
-      return candidates.find((element) => compact(
-        element.innerText || element.value || element.getAttribute('aria-label') || element.getAttribute('title')
-      ).toLocaleLowerCase() === wanted) || candidates.find((element) => compact(
-        element.innerText || element.value || element.getAttribute('aria-label') || element.getAttribute('title')
-      ).toLocaleLowerCase().includes(wanted));
+      const exact = candidates.filter((element) => labelFor(element).toLocaleLowerCase() === wanted);
+      if (exact.length === 1) return exact[0];
+      if (exact.length > 1) throw new Error('More than one visible control has that text. Read the page and use its unique selector.');
+      const partial = candidates.filter((element) => labelFor(element).toLocaleLowerCase().includes(wanted));
+      if (partial.length === 1) return partial[0];
+      if (partial.length > 1) throw new Error('More than one visible control partially matches that text. Read the page and use its unique selector.');
     }
     return null;
   };
 
   if (action === 'read_page') {
-    const all = interactiveElements().slice(0, 120);
+    const all = interactiveElements().filter(isNearViewport).slice(0, 120);
+    const pageHeight = Math.max(document.body?.scrollHeight || 0, document.documentElement.scrollHeight);
     return {
       title: document.title,
       url: location.href,
-      text: compact(document.body?.innerText || '', 20_000),
+      text: viewportText(),
+      viewport: {
+        scrollY: Math.round(window.scrollY),
+        height: window.innerHeight,
+        pageHeight,
+        atTop: window.scrollY <= 1,
+        atBottom: window.scrollY + window.innerHeight >= pageHeight - 2,
+      },
       elements: all.map(summarizeElement),
     };
   }
@@ -194,24 +307,22 @@ function inspectPage(action, args) {
 
   if (action === 'scroll') {
     const amount = Number(args.amount) || Math.round(window.innerHeight * 0.8);
-    if (args.direction === 'top') window.scrollTo({ top: 0, behavior: 'smooth' });
-    else if (args.direction === 'bottom') window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' });
-    else window.scrollBy({ top: args.direction === 'up' ? -amount : amount, behavior: 'smooth' });
+    if (args.direction === 'top') window.scrollTo({ top: 0, behavior: 'auto' });
+    else if (args.direction === 'bottom') window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'auto' });
+    else window.scrollBy({ top: args.direction === 'up' ? -amount : amount, behavior: 'auto' });
     return { scrolled: args.direction, scrollY: Math.round(window.scrollY) };
   }
 
   if (action === 'click') {
     const target = locate();
     if (!target) throw new Error('No matching visible element was found. Read the page again and use a returned selector.');
-    const description = compact(
-      target.innerText || target.value || target.getAttribute('aria-label') || target.getAttribute('title') || target.getAttribute('name')
-    );
+    const description = labelFor(target);
     const destination = compact(
       target.getAttribute('href') || target.closest('form')?.getAttribute('action') || '',
       500
     );
     const inputType = target instanceof HTMLInputElement ? target.type : '';
-    const isSubmit = (target instanceof HTMLButtonElement && target.type === 'submit') || inputType === 'submit';
+    const isSubmit = (target instanceof HTMLButtonElement && target.type === 'submit') || ['submit', 'image'].includes(inputType);
     const risky = isSubmit || /\b(?:buy|checkout|purchase|place order|pay|transfer|send|delete|remove|confirm|submit|publish|post|subscribe|unsubscribe|sign|accept|book|reserve)\b/i.test(`${description} ${destination}`);
     if (risky && args.confirmed !== true) {
       return {
@@ -227,8 +338,8 @@ function inspectPage(action, args) {
   if (action === 'type') {
     const target = locate();
     if (!target) throw new Error('The typing target was not found. Read the page again and use a returned selector.');
-    if (target instanceof HTMLInputElement && ['password', 'file'].includes(target.type)) {
-      throw new Error('Jarvis Chrome Control never types into password or file-upload fields.');
+    if (isSensitiveField(target)) {
+      throw new Error('Jarvis Chrome Control never types into password, one-time-code, payment, secret, or file-upload fields.');
     }
     if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target.isContentEditable)) {
       throw new Error('The selected element is not editable.');
@@ -251,30 +362,107 @@ function inspectPage(action, args) {
 
   if (action === 'press_key') {
     const key = String(args.key);
+    if (args.ctrl === true || args.alt === true || args.meta === true || (args.shift === true && key !== 'Tab')) {
+      throw new Error('Jarvis does not emulate browser or operating-system keyboard shortcuts. Use a page control instead.');
+    }
     if (key === 'Enter' && args.confirmed !== true) {
       return {
         confirmationRequired: true,
         confirmationMessage: `Allow Jarvis to press Enter on ${location.host}? This may submit the current form.`,
       };
     }
-    const target = document.activeElement || document.body;
-    const options = {
-      key,
-      code: key.length === 1 ? `Key${key.toUpperCase()}` : key,
-      bubbles: true,
-      cancelable: true,
-      ctrlKey: args.ctrl === true,
-      altKey: args.alt === true,
-      shiftKey: args.shift === true,
-      metaKey: args.meta === true,
-    };
-    target.dispatchEvent(new KeyboardEvent('keydown', options));
-    if (key === 'Enter' && args.confirmed === true && target instanceof HTMLElement) {
-      const form = target.closest('form');
-      if (form instanceof HTMLFormElement) form.requestSubmit();
+    const target = document.activeElement instanceof HTMLElement ? document.activeElement : document.body;
+
+    if (key === 'Tab') {
+      const focusable = interactiveElements().filter((element) => !element.hasAttribute('disabled') && element.tabIndex >= 0);
+      if (!focusable.length) throw new Error('This page has no visible focusable controls.');
+      const currentIndex = focusable.indexOf(target);
+      const offset = args.shift === true ? -1 : 1;
+      const nextIndex = currentIndex < 0
+        ? (offset > 0 ? 0 : focusable.length - 1)
+        : (currentIndex + offset + focusable.length) % focusable.length;
+      const next = focusable[nextIndex];
+      next.focus();
+      return { pressed: key, effect: 'focus moved', selector: selectorFor(next), target: labelFor(next) };
     }
-    target.dispatchEvent(new KeyboardEvent('keyup', options));
-    return { pressed: key };
+
+    if (key === 'Escape') {
+      if (target === document.body) throw new Error('Escape has no supported effect because no page control is focused.');
+      target.blur();
+      return { pressed: key, effect: 'focused control blurred' };
+    }
+
+    if (isSensitiveField(target)) {
+      throw new Error('Jarvis does not send key actions to sensitive fields.');
+    }
+
+    if (key === 'Enter') {
+      if (target instanceof HTMLTextAreaElement) {
+        const start = target.selectionStart ?? target.value.length;
+        const end = target.selectionEnd ?? start;
+        target.setRangeText('\n', start, end, 'end');
+        target.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertLineBreak', data: null }));
+        return { pressed: key, effect: 'line break inserted' };
+      }
+      const form = target.closest('form');
+      if (form instanceof HTMLFormElement) {
+        form.requestSubmit();
+        return { pressed: key, effect: 'form submitted' };
+      }
+      if (target.matches('button, a[href], input[type="button"], input[type="submit"], input[type="image"]')) {
+        target.click();
+        return { pressed: key, effect: 'focused control activated' };
+      }
+      throw new Error('Enter has no supported effect on the focused element.');
+    }
+
+    if (target instanceof HTMLSelectElement && ['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(key)) {
+      const previous = target.selectedIndex;
+      if (key === 'ArrowUp') target.selectedIndex = Math.max(0, previous - 1);
+      if (key === 'ArrowDown') target.selectedIndex = Math.min(target.options.length - 1, previous + 1);
+      if (key === 'Home') target.selectedIndex = 0;
+      if (key === 'End') target.selectedIndex = Math.max(0, target.options.length - 1);
+      target.dispatchEvent(new Event('input', { bubbles: true }));
+      target.dispatchEvent(new Event('change', { bubbles: true }));
+      return { pressed: key, effect: 'selection changed', selectedIndex: target.selectedIndex };
+    }
+
+    if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
+      const start = target.selectionStart;
+      const end = target.selectionEnd;
+      if (start === null || end === null) throw new Error(`The focused field does not support ${key}.`);
+      if (key === 'ArrowLeft' || key === 'ArrowRight' || key === 'Home' || key === 'End') {
+        let position = start;
+        if (key === 'ArrowLeft') position = Math.max(0, start - 1);
+        if (key === 'ArrowRight') position = Math.min(target.value.length, end + 1);
+        if (key === 'Home') position = 0;
+        if (key === 'End') position = target.value.length;
+        target.setSelectionRange(position, position);
+        return { pressed: key, effect: 'caret moved', position };
+      }
+      if (key === 'Backspace' || key === 'Delete') {
+        let deleteStart = start;
+        let deleteEnd = end;
+        if (start === end && key === 'Backspace') deleteStart = Math.max(0, start - 1);
+        if (start === end && key === 'Delete') deleteEnd = Math.min(target.value.length, end + 1);
+        target.setRangeText('', deleteStart, deleteEnd, 'end');
+        target.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: key === 'Backspace' ? 'deleteContentBackward' : 'deleteContentForward', data: null }));
+        return { pressed: key, effect: 'text deleted' };
+      }
+    }
+
+    if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End'].includes(key)) {
+      if (key === 'Home') window.scrollTo({ top: 0, behavior: 'auto' });
+      else if (key === 'End') window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'auto' });
+      else {
+        const direction = key === 'ArrowUp' || key === 'PageUp' ? -1 : 1;
+        const amount = key.startsWith('Page') ? window.innerHeight * 0.8 : 80;
+        window.scrollBy({ top: direction * amount, behavior: 'auto' });
+      }
+      return { pressed: key, effect: 'page scrolled', scrollY: Math.round(window.scrollY) };
+    }
+
+    throw new Error(`${key} has no supported effect on the focused element.`);
   }
 
   throw new Error(`Unsupported page action: ${action}`);
@@ -303,12 +491,16 @@ async function executeCommand(command) {
   if (action === 'list_tabs') {
     const tabs = await chrome.tabs.query({});
     return {
-      tabs: tabs.map((tab) => ({
-        id: tab.id,
-        title: tab.title || 'Site access not granted',
-        url: tab.url || null,
-        active: tab.active,
-        windowId: tab.windowId,
+      tabs: await Promise.all(tabs.map(async (tab) => {
+        const approved = await hasTabAccess(tab);
+        return {
+          id: tab.id,
+          title: approved ? (tab.title || 'Untitled page') : 'Site access not granted',
+          url: approved ? (tab.url || null) : null,
+          active: tab.active,
+          windowId: tab.windowId,
+          approved,
+        };
       })),
     };
   }
@@ -331,15 +523,22 @@ async function executeCommand(command) {
   if (action === 'switch_tab') {
     const tab = await chrome.tabs.update(args.tabId, { active: true });
     if (tab?.windowId) await chrome.windows.update(tab.windowId, { focused: true });
-    return { activeTabId: tab?.id, title: tab?.title, url: tab?.url };
+    const approved = await hasTabAccess(tab);
+    return {
+      activeTabId: tab?.id,
+      title: approved ? tab?.title : 'Site access not granted',
+      url: approved ? tab?.url : null,
+      approved,
+    };
   }
 
   if (action === 'close_tab') {
     if (args.confirmed !== true) {
       const tab = await chrome.tabs.get(args.tabId);
+      const approved = await hasTabAccess(tab);
       return {
         confirmationRequired: true,
-        confirmationMessage: `Allow Jarvis to close “${tab.title || `tab ${args.tabId}`}”? Unsaved page changes may be lost.`,
+        confirmationMessage: `Allow Jarvis to close “${approved && tab.title ? tab.title : `tab ${args.tabId}`}”? Unsaved page changes may be lost.`,
       };
     }
     await chrome.tabs.remove(args.tabId);
@@ -370,9 +569,21 @@ async function executeCommand(command) {
   }
   if (action === 'screenshot') {
     await requireTabAccess(tab);
-    if (!tab.active) await chrome.tabs.update(tab.id, { active: true });
-    const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'jpeg', quality: 70 });
-    return { title: tab.title, url: tab.url, screenshotDataUrl: dataUrl };
+    const [previouslyActive] = await chrome.tabs.query({ active: true, windowId: tab.windowId });
+    const changedActiveTab = previouslyActive?.id !== tab.id;
+    try {
+      if (changedActiveTab) await chrome.tabs.update(tab.id, { active: true });
+      const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'jpeg', quality: 70 });
+      return { title: tab.title, url: tab.url, screenshotDataUrl: dataUrl };
+    } finally {
+      if (changedActiveTab && previouslyActive?.id) {
+        try {
+          await chrome.tabs.update(previouslyActive.id, { active: true });
+        } catch {
+          // The previous tab may have closed while the screenshot was captured.
+        }
+      }
+    }
   }
 
   return runPageAction(tab, action, args);
@@ -467,6 +678,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   const handle = async () => {
     if (message?.type === 'pair') return { ok: true, state: await pairWithJarvis(message) };
     if (message?.type === 'get_status') return { ok: true, state: await readState(), extensionId: chrome.runtime.id };
+    if (message?.type === 'record_site_permission') {
+      const pattern = originPattern(String(message.pattern || '').replace(/\*$/, ''));
+      if (!pattern || pattern !== message.pattern) throw new Error('Invalid site permission pattern.');
+      const state = await readState();
+      const approvedOrigins = new Set(Array.isArray(state.approvedOrigins) ? state.approvedOrigins : []);
+      if (message.granted === true) approvedOrigins.add(pattern);
+      else approvedOrigins.delete(pattern);
+      return { ok: true, state: await updateState({ approvedOrigins: Array.from(approvedOrigins).sort() }) };
+    }
     if (message?.type === 'set_paused') {
       const state = await updateState({ paused: message.paused === true });
       if (state.paused) currentPollController?.abort();
@@ -491,6 +711,13 @@ chrome.runtime.onInstalled.addListener(() => {
 chrome.runtime.onStartup.addListener(() => void runPollLoop());
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === 'jarvis-poll') void runPollLoop();
+});
+chrome.permissions.onRemoved.addListener((permissions) => {
+  if (!permissions.origins?.length) return;
+  void readState().then((state) => updateState({
+    approvedOrigins: (Array.isArray(state.approvedOrigins) ? state.approvedOrigins : [])
+      .filter((origin) => !permissions.origins.includes(origin)),
+  }));
 });
 
 void runPollLoop();

@@ -245,14 +245,14 @@ function normalizeCommandArgs(action: ChromeControlAction, raw: Record<string, u
 
   if (action === 'press_key') {
     const key = cleanString(raw.key, 40);
-    if (!key || !/^(?:Enter|Tab|Escape|ArrowUp|ArrowDown|ArrowLeft|ArrowRight|PageUp|PageDown|Home|End|Backspace|Delete| |[a-z0-9])$/i.test(key)) {
+    if (!key || !/^(?:Enter|Tab|Escape|ArrowUp|ArrowDown|ArrowLeft|ArrowRight|PageUp|PageDown|Home|End|Backspace|Delete)$/.test(key)) {
       throw new Error('Unsupported key.');
     }
+    if (raw.ctrl === true || raw.alt === true || raw.meta === true || (raw.shift === true && key !== 'Tab')) {
+      throw new Error('Keyboard shortcuts are not supported. Shift is allowed only with Tab.');
+    }
     args.key = key;
-    args.ctrl = raw.ctrl === true;
-    args.alt = raw.alt === true;
     args.shift = raw.shift === true;
-    args.meta = raw.meta === true;
     if (raw.confirmed === true) args.confirmed = true;
   }
 

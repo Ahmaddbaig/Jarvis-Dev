@@ -11,6 +11,8 @@ const fs_1 = __importDefault(require("fs"));
 const crypto_1 = __importDefault(require("crypto"));
 const child_process_1 = require("child_process");
 const os_1 = require("os");
+const CHROME_CONTROL_UI_TOKEN = process.env.JARVIS_CHROME_UI_TOKEN || crypto_1.default.randomBytes(32).toString('base64url');
+process.env.JARVIS_CHROME_UI_TOKEN = CHROME_CONTROL_UI_TOKEN;
 const isDev = !electron_1.app.isPackaged;
 const PORT = Number.parseInt(process.env.JARVIS_PORT || (isDev ? '3100' : '3000'), 10);
 const HTTPS_PORT = Number.parseInt(process.env.JARVIS_HTTPS_PORT || (isDev ? '3543' : '3443'), 10);
@@ -336,6 +338,19 @@ function setDesktopMode(options) {
     return { success: true, enabled: false };
 }
 function setupDesktopModeIpc() {
+    electron_1.ipcMain.handle('chrome-control:get-ui-token', (event) => {
+        const senderUrl = event.senderFrame?.url || event.sender.getURL();
+        try {
+            const parsed = new URL(senderUrl);
+            if (parsed.protocol !== 'http:' || !['127.0.0.1', 'localhost'].includes(parsed.hostname) || parsed.port !== String(PORT)) {
+                throw new Error('Chrome-control authorization is available only to the local Jarvis renderer.');
+            }
+            return CHROME_CONTROL_UI_TOKEN;
+        }
+        catch {
+            throw new Error('Chrome-control authorization is available only to the local Jarvis renderer.');
+        }
+    });
     electron_1.ipcMain.handle('desktop-mode:set', (_event, options) => {
         return setDesktopMode(options);
     });
@@ -548,6 +563,11 @@ async function startHttpsProxy() {
             catch { /* already sent */ }
         });
         httpsServer = https_1.default.createServer({ key: pems.private, cert: pems.cert }, (req, res) => {
+            if (req.url?.startsWith('/api/chrome-control')) {
+                res.writeHead(403, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+                res.end(JSON.stringify({ error: 'Chrome control is available only in the local Jarvis desktop window.' }));
+                return;
+            }
             proxy.web(req, res);
         });
         // Handle socket-level errors on every incoming TLS connection.

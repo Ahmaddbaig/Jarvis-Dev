@@ -7,7 +7,8 @@ approves each website.
 
 Chrome and the full Jarvis app must currently run on the same computer. This
 extension does not require macOS Accessibility permission and does not control
-other desktop applications.
+other desktop applications. Chrome control is available only in the Electron
+desktop window; LAN browser clients cannot issue Chrome commands.
 
 ## What Jarvis can do
 
@@ -124,6 +125,9 @@ Jarvis displays a confirmation before:
 
 The extension refuses to type into password and file-upload fields. Enter
 passwords, one-time codes, payment information, and file selections yourself.
+Page summaries omit all form-control values, including ordinary text, telephone,
+and number inputs. Keyboard commands perform only the documented explicit page
+effect; browser and operating-system shortcuts are not emulated.
 
 Webpage text is treated as untrusted content. A page may contain prompt
 injection telling Jarvis to reveal secrets or perform an unrelated action.
