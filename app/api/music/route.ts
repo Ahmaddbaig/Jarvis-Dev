@@ -244,9 +244,26 @@ tell application "System Events"
   key code 36
   delay 1
   key code 36
-end tell`);
+end tell
+delay 0.5
+tell application "Spotify" to play
+delay 1`);
 
-      return NextResponse.json({ success: true, command, query: searchQuery, app: 'Spotify' });
+      const track = await getNowPlaying('Spotify');
+      if (!track?.isPlaying) {
+        return NextResponse.json(
+          { error: `Spotify found results for "${searchQuery}" but did not start playback.` },
+          { status: 502 }
+        );
+      }
+
+      return NextResponse.json({
+        success: true,
+        command,
+        query: searchQuery,
+        app: 'Spotify',
+        track,
+      });
     }
 
     if (isWindowsMediaHost()) {
