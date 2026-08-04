@@ -34,6 +34,7 @@ interface ChromeRuntimeState {
   queue: ChromeControlCommand[];
   pollWaiters: Array<(command: ChromeControlCommand | null) => void>;
   pendingResults: Map<string, PendingResult>;
+  completedCommandIds: Map<string, number>;
 }
 
 const PAIRING_CODE_TTL_MS = 10 * 60_000;
@@ -87,6 +88,7 @@ function getState(): ChromeRuntimeState {
       queue: [],
       pollWaiters: [],
       pendingResults: new Map(),
+      completedCommandIds: new Map(),
     };
   }
   return root.__jarvisChromeRuntime;
@@ -109,6 +111,7 @@ function failPendingCommands(message: string): void {
     pending.resolve({ commandId, ok: false, error: message });
   }
   state.pendingResults.clear();
+  state.completedCommandIds.clear();
   for (const waiter of state.pollWaiters.splice(0)) waiter(null);
 }
 
@@ -189,7 +192,9 @@ export function chromeControlStatus(): ChromeControlStatus {
     extensionId: pairing?.extensionId,
     pairedAt: pairing?.pairedAt,
     lastSeen: state.lastSeenAt > 0 ? new Date(state.lastSeenAt).toISOString() : undefined,
-    extensionPath: path.join(process.cwd(), 'chrome-extension'),
+    extensionPath: process.env.JARVIS_CHROME_EXTENSION_PATH && path.isAbsolute(process.env.JARVIS_CHROME_EXTENSION_PATH)
+      ? path.normalize(process.env.JARVIS_CHROME_EXTENSION_PATH)
+      : path.join(process.cwd(), 'chrome-extension'),
     supportedEndpoints: ['http://127.0.0.1:3100', 'http://127.0.0.1:3000'],
   };
 }
@@ -209,6 +214,13 @@ function cleanString(value: unknown, max: number): string | undefined {
   if (typeof value !== 'string') return undefined;
   const cleaned = value.replace(/[\0\r]/g, '').trim();
   return cleaned ? cleaned.slice(0, max) : undefined;
+}
+
+function exactTypedText(value: unknown, max: number): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  if (value.length > max) throw new Error(`Typed text cannot exceed ${max} characters.`);
+  if (value.includes('\0')) throw new Error('Typed text cannot contain a null character.');
+  return value;
 }
 
 function normalizeCommandArgs(action: ChromeControlAction, raw: Record<string, unknown>): Record<string, unknown> {
@@ -234,13 +246,18 @@ function normalizeCommandArgs(action: ChromeControlAction, raw: Record<string, u
 
   if (action === 'click' || action === 'type') {
     const selector = cleanString(raw.selector, 500);
-    const text = cleanString(raw.text, action === 'type' ? 4_000 : 500);
+    const text = action === 'type' ? exactTypedText(raw.text, 4_000) : cleanString(raw.text, 500);
     if (selector) args.selector = selector;
-    if (text) args.text = text;
+    if (text !== undefined) args.text = text;
     if (action === 'click' && !selector && !text) throw new Error('Click requires a selector or visible text.');
-    if (action === 'type' && (!selector || !text)) throw new Error('Type requires both selector and text.');
+    if (action === 'type' && (!selector || text === undefined)) throw new Error('Type requires both selector and text.');
     if (action === 'type') args.replace = raw.replace !== false;
-    if (action === 'click' && raw.confirmed === true) args.confirmed = true;
+    if (action === 'click' && raw.confirmed === true) {
+      const confirmationId = cleanString(raw.confirmationId, 80);
+      if (!confirmationId) throw new Error('Confirmed clicks require a one-time confirmation identifier.');
+      args.confirmed = true;
+      args.confirmationId = confirmationId;
+    }
   }
 
   if (action === 'press_key') {
@@ -349,8 +366,12 @@ export function pollChromeCommand(timeoutMs = 12_000, signal?: AbortSignal): Pro
 export function completeChromeCommand(result: ChromeControlResult): boolean {
   const state = getState();
   state.lastSeenAt = Date.now();
+  const completedBefore = Date.now() - 5 * 60_000;
+  for (const [commandId, completedAt] of state.completedCommandIds) {
+    if (completedAt < completedBefore) state.completedCommandIds.delete(commandId);
+  }
   const pending = state.pendingResults.get(result.commandId);
-  if (!pending) return false;
+  if (!pending) return state.completedCommandIds.has(result.commandId);
 
   let safeResult = result;
   try {
@@ -363,6 +384,12 @@ export function completeChromeCommand(result: ChromeControlResult): boolean {
 
   clearTimeout(pending.timeout);
   state.pendingResults.delete(result.commandId);
+  while (state.completedCommandIds.size >= 500) {
+    const oldest = state.completedCommandIds.keys().next().value as string | undefined;
+    if (!oldest) break;
+    state.completedCommandIds.delete(oldest);
+  }
+  state.completedCommandIds.set(result.commandId, Date.now());
   pending.resolve(safeResult);
   return true;
 }

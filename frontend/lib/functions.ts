@@ -675,15 +675,18 @@ export const FUNCTION_REGISTRY: JarvisFunction[] = [
       // Confirmation is deliberately not part of the model-facing schema. Only
       // this handler adds it after the person approves the native dialog.
       delete commandArgs.confirmed;
+      delete commandArgs.confirmationId;
 
-      const send = async (confirmed = false) => {
+      const send = async (confirmed = false, confirmationId?: string) => {
         const response = await chromeControlFetch('/api/chrome-control', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             operation: 'command',
             action,
-            args: confirmed ? { ...commandArgs, confirmed: true } : commandArgs,
+            args: confirmed
+              ? { ...commandArgs, confirmed: true, ...(confirmationId ? { confirmationId } : {}) }
+              : commandArgs,
           }),
         });
         const data = await response.json() as {
@@ -703,7 +706,11 @@ export const FUNCTION_REGISTRY: JarvisFunction[] = [
             ? result.confirmationMessage
             : 'Allow Jarvis to perform this potentially sensitive Chrome action?';
           if (!window.confirm(message)) return { cancelled: true, message: 'The user declined the Chrome action.' };
-          result = await send(true);
+          const confirmationId = typeof result.confirmationId === 'string' ? result.confirmationId : undefined;
+          if (action === 'click' && !confirmationId) {
+            return { error: 'Chrome did not provide a valid one-time click confirmation. Read the page and try again.' };
+          }
+          result = await send(true, confirmationId);
           if ('error' in result) return result;
         }
 

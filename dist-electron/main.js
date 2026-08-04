@@ -14,6 +14,9 @@ const os_1 = require("os");
 const CHROME_CONTROL_UI_TOKEN = process.env.JARVIS_CHROME_UI_TOKEN || crypto_1.default.randomBytes(32).toString('base64url');
 process.env.JARVIS_CHROME_UI_TOKEN = CHROME_CONTROL_UI_TOKEN;
 const isDev = !electron_1.app.isPackaged;
+process.env.JARVIS_CHROME_EXTENSION_PATH = isDev
+    ? path_1.default.join(__dirname, '..', 'chrome-extension')
+    : path_1.default.join(process.resourcesPath, 'chrome-extension');
 const PORT = Number.parseInt(process.env.JARVIS_PORT || (isDev ? '3100' : '3000'), 10);
 const HTTPS_PORT = Number.parseInt(process.env.JARVIS_HTTPS_PORT || (isDev ? '3543' : '3443'), 10);
 // Keep this editable build separate from the Patreon-installed Jarvis app.

@@ -8,6 +8,10 @@ const STORAGE_DEFAULTS = {
   approvedOrigins: [],
 };
 
+const PENDING_RESULT_KEY = 'pendingChromeResult';
+const CLICK_APPROVALS_KEY = 'pendingClickApprovals';
+const CLICK_APPROVAL_TTL_MS = 60_000;
+
 let pollLoopRunning = false;
 let currentPollController = null;
 
@@ -22,6 +26,54 @@ async function readState() {
 async function updateState(patch) {
   await chrome.storage.local.set(patch);
   return readState();
+}
+
+async function readPendingResult() {
+  const stored = await chrome.storage.session.get(PENDING_RESULT_KEY);
+  return stored[PENDING_RESULT_KEY] || null;
+}
+
+async function storePendingResult(result) {
+  await chrome.storage.session.set({ [PENDING_RESULT_KEY]: result });
+}
+
+async function clearPendingResult() {
+  await chrome.storage.session.remove(PENDING_RESULT_KEY);
+}
+
+async function createClickApproval(tabId, fingerprint) {
+  const now = Date.now();
+  const stored = await chrome.storage.session.get(CLICK_APPROVALS_KEY);
+  const existing = stored[CLICK_APPROVALS_KEY];
+  const approvals = existing && typeof existing === 'object' ? existing : {};
+  for (const [id, approval] of Object.entries(approvals)) {
+    if (!approval || Number(approval.expiresAt) <= now) delete approvals[id];
+  }
+  const confirmationId = crypto.randomUUID();
+  approvals[confirmationId] = { tabId, fingerprint, expiresAt: now + CLICK_APPROVAL_TTL_MS };
+  const newest = Object.fromEntries(Object.entries(approvals).slice(-20));
+  await chrome.storage.session.set({ [CLICK_APPROVALS_KEY]: newest });
+  return confirmationId;
+}
+
+async function consumeClickApproval(confirmationId, tabId) {
+  if (typeof confirmationId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(confirmationId)) {
+    throw new Error('The click confirmation is missing or invalid. Read the page and confirm the action again.');
+  }
+  const stored = await chrome.storage.session.get(CLICK_APPROVALS_KEY);
+  const existing = stored[CLICK_APPROVALS_KEY];
+  const approvals = existing && typeof existing === 'object' ? existing : {};
+  const approval = approvals[confirmationId];
+  delete approvals[confirmationId];
+  await chrome.storage.session.set({ [CLICK_APPROVALS_KEY]: approvals });
+  if (!approval || Number(approval.expiresAt) <= Date.now() || approval.tabId !== tabId || typeof approval.fingerprint !== 'string') {
+    throw new Error('The click confirmation expired or belongs to a different tab. Read the page and confirm the action again.');
+  }
+  return approval.fingerprint;
+}
+
+async function clearTransientCommandState() {
+  await chrome.storage.session.remove([PENDING_RESULT_KEY, CLICK_APPROVALS_KEY]);
 }
 
 function normalizeBaseUrl(value) {
@@ -188,8 +240,15 @@ function inspectPage(action, args) {
   const isSensitiveField = (element) => {
     if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element.isContentEditable)) return false;
     if (element instanceof HTMLInputElement && ['password', 'file'].includes(element.type)) return true;
-    const autocomplete = String(element.getAttribute('autocomplete') || '').toLocaleLowerCase();
-    if (/^(?:current-password|new-password|one-time-code|cc-|transaction-|webauthn)/.test(autocomplete)) return true;
+    const autocompleteTokens = String(element.getAttribute('autocomplete') || '')
+      .toLocaleLowerCase()
+      .split(/\s+/)
+      .filter(Boolean);
+    if (autocompleteTokens.some((token) =>
+      ['current-password', 'new-password', 'one-time-code', 'webauthn'].includes(token) ||
+      token.startsWith('cc-') ||
+      token.startsWith('transaction-')
+    )) return true;
     const labels = 'labels' in element && element.labels
       ? Array.from(element.labels).map((label) => label.innerText).join(' ')
       : '';
@@ -324,10 +383,22 @@ function inspectPage(action, args) {
     const inputType = target instanceof HTMLInputElement ? target.type : '';
     const isSubmit = (target instanceof HTMLButtonElement && target.type === 'submit') || ['submit', 'image'].includes(inputType);
     const risky = isSubmit || /\b(?:buy|checkout|purchase|place order|pay|transfer|send|delete|remove|confirm|submit|publish|post|subscribe|unsubscribe|sign|accept|book|reserve)\b/i.test(`${description} ${destination}`);
+    const confirmationFingerprint = JSON.stringify({
+      description,
+      destination,
+      tag: target.tagName.toLowerCase(),
+      inputType,
+      url: location.href,
+      selector: selectorFor(target),
+    });
+    if (args.confirmed === true && args.confirmationFingerprint !== confirmationFingerprint) {
+      throw new Error('The page changed after confirmation. Jarvis did not click anything; read the page and confirm the current target again.');
+    }
     if (risky && args.confirmed !== true) {
       return {
         confirmationRequired: true,
         confirmationMessage: `Allow Jarvis to click “${description || target.tagName.toLowerCase()}” on ${location.host}?`,
+        confirmationFingerprint,
       };
     }
     target.scrollIntoView({ block: 'center', inline: 'center' });
@@ -586,7 +657,23 @@ async function executeCommand(command) {
     }
   }
 
-  return runPageAction(tab, action, args);
+  let pageArgs = args;
+  if (action === 'click' && args.confirmed === true) {
+    const confirmationFingerprint = await consumeClickApproval(args.confirmationId, tab.id);
+    pageArgs = { ...args, confirmationFingerprint };
+  }
+  const pageResult = await runPageAction(tab, action, pageArgs);
+  if (
+    action === 'click' &&
+    pageResult?.confirmationRequired === true &&
+    typeof pageResult.confirmationFingerprint === 'string'
+  ) {
+    const confirmationId = await createClickApproval(tab.id, pageResult.confirmationFingerprint);
+    const { confirmationFingerprint: _privateFingerprint, ...safeResult } = pageResult;
+    void _privateFingerprint;
+    return { ...safeResult, confirmationId };
+  }
+  return pageResult;
 }
 
 async function postResult(baseUrl, token, payload) {
@@ -598,9 +685,17 @@ async function postResult(baseUrl, token, payload) {
     },
     body: JSON.stringify(payload),
   });
-  if (!response.ok && response.status !== 404) {
-    throw new Error(`Jarvis rejected the Chrome result with HTTP ${response.status}.`);
+  if (response.status === 403) {
+    const error = new Error('Jarvis rejected this Chrome pairing. Pair again.');
+    error.authenticationFailed = true;
+    throw error;
   }
+  // A 404 means the command expired or Jarvis no longer recognizes it. Accepted
+  // command IDs remain idempotently acknowledged for five minutes.
+  if (response.status === 404) return;
+  if (!response.ok) throw new Error(`Jarvis rejected the Chrome result with HTTP ${response.status}.`);
+  const acknowledgement = await response.json();
+  if (acknowledgement.accepted !== true) throw new Error('Jarvis did not acknowledge the Chrome result.');
 }
 
 async function runPollLoop() {
@@ -612,6 +707,24 @@ async function runPollLoop() {
       if (!state.token || state.paused) return;
 
       try {
+        const pendingResult = await readPendingResult();
+        if (pendingResult) {
+          try {
+            await postResult(state.baseUrl, state.token, pendingResult);
+            await clearPendingResult();
+            await updateState({ lastError: '' });
+          } catch (error) {
+            if (error?.authenticationFailed === true) {
+              await clearTransientCommandState();
+              await updateState({ token: '', pairedAt: '', lastError: error.message });
+              return;
+            }
+            await updateState({ lastError: `Retrying Chrome result delivery: ${error instanceof Error ? error.message : String(error)}` });
+            await delay(2_500);
+          }
+          continue;
+        }
+
         currentPollController = new AbortController();
         const response = await fetch(`${state.baseUrl}/api/chrome-control/extension`, {
           headers: { Authorization: `Bearer ${state.token}` },
@@ -637,7 +750,7 @@ async function runPollLoop() {
         } catch (error) {
           result = { commandId: command.id, ok: false, error: error instanceof Error ? error.message : String(error) };
         }
-        await postResult(state.baseUrl, state.token, result);
+        await storePendingResult(result);
       } catch (error) {
         currentPollController = null;
         if (error instanceof DOMException && error.name === 'AbortError') continue;
@@ -663,6 +776,7 @@ async function pairWithJarvis(message) {
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok || !payload.token) throw new Error(payload.error || `Pairing failed with HTTP ${response.status}.`);
+  await clearTransientCommandState();
   await updateState({
     baseUrl,
     token: payload.token,
@@ -694,6 +808,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       return { ok: true, state };
     }
     if (message?.type === 'forget_pairing') {
+      await clearTransientCommandState();
       const state = await updateState({ token: '', pairedAt: '', lastPollAt: 0, lastError: '' });
       currentPollController?.abort();
       return { ok: true, state };

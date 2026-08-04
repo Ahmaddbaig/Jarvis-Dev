@@ -39,7 +39,8 @@ git pull
 ```
 
 The development launcher serves Jarvis on `http://127.0.0.1:3100`. A packaged
-Jarvis application uses port `3000`.
+Jarvis application uses port `3000`. Packaged builds copy the extension outside
+the application archive, and Settings displays that real unpacked directory.
 
 ## 2. Load the local Chrome extension
 
