@@ -10,6 +10,11 @@ Double-click `RUN-JARVIS-DEV.command`, or:
 npm run dev:desktop
 ```
 
+For free on-device voice AI, including the separate M2, M3, and M5 profiles,
+see [LOCAL_AI_INSTALL.md](LOCAL_AI_INSTALL.md). Install only the profile matching
+the Mac that will run Jarvis. For a complete M2/8 GB walkthrough, see
+[localllm.md](localllm.md).
+
 ## Project layout
 
 ```

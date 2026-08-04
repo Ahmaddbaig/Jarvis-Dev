@@ -57,7 +57,12 @@ function normalizeDesktopPanelPosition(value: unknown): DesktopPanelPosition | u
 }
 
 function normalizeSpotifyQuery(query: string): string {
-  return query.replace(/\b(?:chef|chief|shef)\s+g\b/gi, 'Sheff G');
+  return query
+    .replace(/([a-z0-9])by(?=(?:skillet|skillia)\b)/gi, '$1 by ')
+    .replace(/\b(?:chef|chief|shef)\s+g\b/gi, 'Sheff G')
+    .replace(/\bskillia\b/gi, 'Skillet')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 async function readActiveApiKey(): Promise<string> {
@@ -685,7 +690,9 @@ export const FUNCTION_REGISTRY: JarvisFunction[] = [
         properties: {
           query: {
             type: 'string',
-            description: 'The artist, song, album, or playlist to find and play in Spotify.',
+            description:
+              'The artist, song, album, or playlist to find and play in Spotify. ' +
+              'Preserve normal spaces between the song title, the word "by", and the artist name.',
           },
         },
         required: ['query'],
