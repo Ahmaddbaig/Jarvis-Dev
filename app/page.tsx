@@ -3,20 +3,20 @@
 import { useState, useEffect } from 'react';
 import dynamic from 'next/dynamic';
 import { ConversationProvider } from '@elevenlabs/react';
-import { JarvisAssistant } from "./components/JarvisAssistant";
-import { HUDLayer } from "./components/HUD/HUDLayer";
-import { IntroAnimation } from "./components/IntroAnimation";
-import { NewsPage } from "./components/pages/NewsPage";
-import { CalendarPage } from "./components/pages/CalendarPage";
-import { HomeAssistantPage } from "./components/pages/HomeAssistantPage";
-import { PrinterPage } from "./components/pages/PrinterPage";
-import { MusicPage } from "./components/pages/MusicPage";
+import { JarvisAssistant } from "@/frontend/components/JarvisAssistant";
+import { HUDLayer } from "@/frontend/components/HUD/HUDLayer";
+import { IntroAnimation } from "@/frontend/components/IntroAnimation";
+import { NewsPage } from "@/frontend/components/pages/NewsPage";
+import { CalendarPage } from "@/frontend/components/pages/CalendarPage";
+import { HomeAssistantPage } from "@/frontend/components/pages/HomeAssistantPage";
+import { PrinterPage } from "@/frontend/components/pages/PrinterPage";
+import { MusicPage } from "@/frontend/components/pages/MusicPage";
 import { AnimatePresence } from 'framer-motion';
-import { loadServerSettings } from './lib/serverSettings';
+import { loadServerSettings } from '@/frontend/lib/serverSettings';
 
 // MapLibre GL JS accesses browser APIs on import — must be client-only (no SSR)
 const MapPage = dynamic(
-  () => import('./components/pages/MapPage').then((m) => ({ default: m.MapPage })),
+  () => import('@/frontend/components/pages/MapPage').then((m) => ({ default: m.MapPage })),
   { ssr: false }
 );
 

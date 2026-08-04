@@ -1,4 +1,4 @@
-import { DesktopOverlayVisual } from './DesktopOverlayVisual';
+import { DesktopOverlayVisual } from '@/frontend/components/DesktopOverlayVisual';
 
 type SearchParams = Promise<Record<string, string | string[] | undefined>>;
 

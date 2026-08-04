@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { McpServerManager } from '@/app/lib/mcp/server-manager';
-import { GOOGLE_CALENDAR_SERVER_NAME } from '@/app/lib/mcp/dynamic-config';
+import { McpServerManager } from '@/backend/mcp/server-manager';
+import { GOOGLE_CALENDAR_SERVER_NAME } from '@/backend/mcp/dynamic-config';
 import type { ICalEvent } from '@/app/api/ical/route';
 
 // MCP tool expects ISO 8601 without milliseconds and without trailing Z

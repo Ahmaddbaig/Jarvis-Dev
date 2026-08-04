@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { isTokenValid, getToken } from '@/app/lib/bambu/mqtt-manager';
+import { isTokenValid, getToken } from '@/backend/bambu/mqtt-manager';
 
 const BAMBU_API = 'https://api.bambulab.com';
 

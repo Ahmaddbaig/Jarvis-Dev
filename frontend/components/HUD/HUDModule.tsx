@@ -2,7 +2,7 @@
 
 import { motion, useDragControls } from 'framer-motion';
 import { useEffect, useRef, useState } from 'react';
-import { sfx } from '../../lib/sfx';
+import { sfx } from '@/frontend/lib/sfx';
 
 const SCAN_DURATION = 0.7;
 import { clsx, type ClassValue } from 'clsx';

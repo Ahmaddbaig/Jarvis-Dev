@@ -1,7 +1,7 @@
 'use client';
 
 import Image from 'next/image';
-import worldMap from '@/elements/world_map.png';
+import worldMap from '@/frontend/assets/world_map.png';
 
 export function MapWidget() {
   return (

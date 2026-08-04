@@ -1,6 +1,6 @@
 'use client';
 import { useState, useEffect } from 'react';
-import { getCachedSetting } from '../../../lib/serverSettings';
+import { getCachedSetting } from '@/frontend/lib/serverSettings';
 
 interface WeatherData {
   temp: number; condition: string; icon: string;

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { saveServerSettings, getCachedSetting } from '../../lib/serverSettings';
+import { saveServerSettings, getCachedSetting } from '@/frontend/lib/serverSettings';
 import { PageHeader } from '../PageHeader';
 
 // ── Types ──────────────────────────────────────────────────────────────────────

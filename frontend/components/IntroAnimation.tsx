@@ -3,8 +3,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import Image from 'next/image';
-import { sfx, sfxSlide } from '../lib/sfx';
-import { useIsMobile } from '../lib/useIsMobile';
+import { sfx, sfxSlide } from '@/frontend/lib/sfx';
+import { useIsMobile } from '@/frontend/hooks/useIsMobile';
 
 type Phase = 'black' | 'scan' | 'assemble' | 'widgets';
 

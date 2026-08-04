@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { isTokenValid, getToken, getPrinters, fetchPrintersRest, connectMqtt } from '@/app/lib/bambu/mqtt-manager';
+import { isTokenValid, getToken, getPrinters, fetchPrintersRest, connectMqtt } from '@/backend/bambu/mqtt-manager';
 
 export async function GET(req: NextRequest) {
   // Allow passing token via header for first-load scenarios

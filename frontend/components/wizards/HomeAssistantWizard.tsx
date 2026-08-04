@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { saveServerSettings } from '../../lib/serverSettings';
+import { saveServerSettings } from '@/frontend/lib/serverSettings';
 
 interface Props {
   onComplete: (url: string, token: string) => void;

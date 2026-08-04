@@ -3,7 +3,7 @@ import {
   GOOGLE_CREDENTIALS_DIR,
   GOOGLE_CREDENTIALS_PATH,
   LEGACY_GOOGLE_CALENDAR_CREDENTIALS_PATH,
-} from '@/app/lib/mcp/dynamic-config';
+} from '@/backend/mcp/dynamic-config';
 import fs from 'fs';
 
 const CRED_PATH = GOOGLE_CREDENTIALS_PATH;

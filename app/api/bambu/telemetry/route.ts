@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getTelemetry, isTokenValid, isMqttConnected, getToken, connectMqtt } from '@/app/lib/bambu/mqtt-manager';
+import { getTelemetry, isTokenValid, isMqttConnected, getToken, connectMqtt } from '@/backend/bambu/mqtt-manager';
 
 export async function GET() {
   if (!isTokenValid()) {

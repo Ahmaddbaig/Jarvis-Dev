@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { searchDuckDuckGoHtml } from '@/app/lib/ddg-html-search';
+import { searchDuckDuckGoHtml } from '@/backend/search/ddg-html-search';
 import {
   buildDatasheetQueries,
   manufacturerHostsForPart,
   pickBestPdf,
   rankPdfCandidate,
   type RankedPdfCandidate,
-} from '@/app/lib/datasheet-ranking';
+} from '@/backend/search/datasheet-ranking';
 
 const MAX_QUERIES = 6;
 const DDG_DELAY_MS = 160;

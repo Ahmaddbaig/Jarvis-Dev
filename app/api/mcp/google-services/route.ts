@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
-import { GOOGLE_SERVICES } from '@/app/lib/google-services';
-import { McpServerManager } from '@/app/lib/mcp/server-manager';
-import { GOOGLE_CREDENTIALS_PATH } from '@/app/lib/mcp/dynamic-config';
-import { getGoogleServiceRuntime } from '@/app/lib/mcp/google-service-runtime';
+import { GOOGLE_SERVICES } from '@/shared/google-services';
+import { McpServerManager } from '@/backend/mcp/server-manager';
+import { GOOGLE_CREDENTIALS_PATH } from '@/backend/mcp/dynamic-config';
+import { getGoogleServiceRuntime } from '@/backend/mcp/google-service-runtime';
 import fs from 'fs';
 
 export async function GET() {

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { McpServerManager } from '@/app/lib/mcp/server-manager';
-import { GOOGLE_CALENDAR_SERVER_NAME } from '@/app/lib/mcp/dynamic-config';
+import { McpServerManager } from '@/backend/mcp/server-manager';
+import { GOOGLE_CALENDAR_SERVER_NAME } from '@/backend/mcp/dynamic-config';
 
 const DELETE_EVENT_TOOLS = ['delete-event', 'delete_event', 'deleteEvent'];
 const LIST_EVENT_TOOLS   = ['list-events',  'list_events',  'listEvents'];

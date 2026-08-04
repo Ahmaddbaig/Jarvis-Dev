@@ -2,9 +2,9 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import type { ICalEvent } from '../../api/ical/route';
+import type { ICalEvent } from '@/app/api/ical/route';
 import { GoogleCalendarWizard } from '../wizards/GoogleCalendarWizard';
-import type { GoogleServiceId } from '@/app/lib/google-services';
+import type { GoogleServiceId } from '@/shared/google-services';
 import { PageHeader } from '../PageHeader';
 
 // ── Types ─────────────────────────────────────────────────────────────────────

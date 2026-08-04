@@ -6,7 +6,7 @@ import {
   controlWindowsMedia,
   getWindowsNowPlaying,
   isWindowsMediaHost,
-} from '@/app/lib/server/windowsMediaSession';
+} from '@/backend/media/windowsMediaSession';
 
 const execAsync = promisify(exec);
 

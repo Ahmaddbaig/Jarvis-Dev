@@ -5,8 +5,8 @@ import { useConversation } from '@elevenlabs/react';
 import Image from 'next/image';
 import { AnimatePresence, motion } from 'framer-motion';
 import { SettingsModal, JarvisSettings } from './SettingsModal';
-import { FUNCTION_REGISTRY, getFunctionByName, JarvisFunction } from '../lib/functions';
-import { loadDynamicFunctions, createGetFunctionByName, DynamicFunctionState } from '../lib/dynamic-functions';
+import { FUNCTION_REGISTRY, getFunctionByName, JarvisFunction } from '@/frontend/lib/functions';
+import { loadDynamicFunctions, createGetFunctionByName, DynamicFunctionState } from '@/frontend/lib/dynamic-functions';
 import { XrayWidget } from './XrayWidget';
 import { CameraWidget } from './CameraWidget';
 import { ArcReactorVisualizer } from './visualizers/ArcReactorVisualizer';
@@ -14,9 +14,9 @@ import { SphereNodesVisualizer } from './visualizers/SphereNodesVisualizer';
 import { QuarterRingsVisualizer } from './visualizers/QuarterRingsVisualizer';
 import { OriginalVisualizer } from './visualizers/OriginalVisualizer';
 import { PhotoWidget, PhotoEntry } from './PhotoWidget';
-import { sfx } from '../lib/sfx';
-import { installErrorInterceptors, emitError } from '../lib/errorBus';
-import { loadServerSettings, saveServerSettings } from '../lib/serverSettings';
+import { sfx } from '@/frontend/lib/sfx';
+import { installErrorInterceptors, emitError } from '@/frontend/lib/errorBus';
+import { loadServerSettings, saveServerSettings } from '@/frontend/lib/serverSettings';
 
 const FFT_BARS = 64;
 const DEFAULT_SETTINGS: JarvisSettings = {

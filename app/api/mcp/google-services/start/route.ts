@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { McpServerManager } from '@/app/lib/mcp/server-manager';
-import { getGoogleServiceRuntime } from '@/app/lib/mcp/google-service-runtime';
+import { McpServerManager } from '@/backend/mcp/server-manager';
+import { getGoogleServiceRuntime } from '@/backend/mcp/google-service-runtime';
 import fs from 'fs';
 
 export async function POST(req: NextRequest) {

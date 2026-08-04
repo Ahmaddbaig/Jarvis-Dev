@@ -1,6 +1,6 @@
 'use client';
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { getCachedSetting } from '../../../lib/serverSettings';
+import { getCachedSetting } from '@/frontend/lib/serverSettings';
 
 interface HAEntity {
   entity_id: string;

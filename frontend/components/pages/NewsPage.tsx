@@ -7,7 +7,7 @@ import { MarketIndicesBar } from './MarketIndicesBar';
 import { StocksColumn } from './StocksColumn';
 import { TopStories } from './TopStories';
 import { NewsSettingsModal, NewsSettings } from './NewsSettingsModal';
-import { saveServerSettings, getCachedSetting } from '../../lib/serverSettings';
+import { saveServerSettings, getCachedSetting } from '@/frontend/lib/serverSettings';
 import { PageHeader } from '../PageHeader';
 
 const DEFAULT_NEWS_SETTINGS: NewsSettings = {

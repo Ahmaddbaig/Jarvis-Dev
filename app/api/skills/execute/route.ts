@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { SkillManager } from '@/app/lib/skills/config-loader';
+import { SkillManager } from '@/backend/skills/config-loader';
 import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
@@ -76,7 +76,7 @@ export async function POST(req: NextRequest) {
 
     // Handle MCP type — proxy to MCP server
     if (tool.handler.type === 'mcp') {
-      const { McpServerManager } = await import('@/app/lib/mcp/server-manager');
+      const { McpServerManager } = await import('@/backend/mcp/server-manager');
       const mcpManager = McpServerManager.getInstance();
       await mcpManager.initialize();
       const result = await mcpManager.callTool(

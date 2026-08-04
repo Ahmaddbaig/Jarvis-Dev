@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { resolvePdfDisplayUrl } from '@/app/lib/resolve-pdf-src';
+import { resolvePdfDisplayUrl } from '@/frontend/lib/resolve-pdf-src';
 
 export function PdfWidget({ source }: { source: string }) {
   const [failed, setFailed] = useState(false);

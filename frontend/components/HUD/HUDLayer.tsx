@@ -2,8 +2,8 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { useIsMobile } from '../../lib/useIsMobile';
-import { sfx } from '../../lib/sfx';
+import { useIsMobile } from '@/frontend/hooks/useIsMobile';
+import { sfx } from '@/frontend/lib/sfx';
 import { HUDModule } from './HUDModule';
 import { SystemStatusWidget } from './widgets/SystemStatusWidget';
 import { NetworkGraphWidget } from './widgets/NetworkGraphWidget';
@@ -19,7 +19,7 @@ import { TVWidget } from './widgets/TVWidget';
 import { PrinterWidget } from './widgets/PrinterWidget';
 import { WeatherHomeWidget } from './widgets/WeatherHomeWidget';
 import { HADeviceWidget } from './widgets/HADeviceWidget';
-import { getCachedSetting, loadServerSettings } from '../../lib/serverSettings';
+import { getCachedSetting, loadServerSettings } from '@/frontend/lib/serverSettings';
 
 type WidgetType = 'system' | 'network' | 'map' | 'clock' | 'suit' | 'music' | 'text' | 'pdf' | 'image' | 'terminal' | 'tv' | 'printer' | 'weather-home' | 'ha-device' | 'ha-toggle';
 

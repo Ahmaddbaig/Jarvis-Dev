@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { McpServerManager } from '@/app/lib/mcp/server-manager';
-import { GOOGLE_CALENDAR_SERVER_NAME } from '@/app/lib/mcp/dynamic-config';
+import { McpServerManager } from '@/backend/mcp/server-manager';
+import { GOOGLE_CALENDAR_SERVER_NAME } from '@/backend/mcp/dynamic-config';
 
 const CREATE_EVENT_TOOLS = ['create-event', 'create_event', 'createEvent'];
 

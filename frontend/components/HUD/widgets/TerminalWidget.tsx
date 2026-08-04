@@ -7,7 +7,7 @@ import {
   clearEntries,
   getEntries,
   onError,
-} from '../../../lib/errorBus';
+} from '@/frontend/lib/errorBus';
 
 const SOURCE_LABELS: Record<ErrorSource, string> = {
   openai:    'OPENAI  ',

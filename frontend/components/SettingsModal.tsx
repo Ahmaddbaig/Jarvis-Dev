@@ -2,8 +2,8 @@
 
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { FUNCTION_REGISTRY, JarvisFunction } from '../lib/functions';
-import { sfx } from '../lib/sfx';
+import { FUNCTION_REGISTRY, JarvisFunction } from '@/frontend/lib/functions';
+import { sfx } from '@/frontend/lib/sfx';
 
 interface SettingsModalProps {
   isOpen: boolean;

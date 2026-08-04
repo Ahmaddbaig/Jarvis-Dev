@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { isTokenValid, isMqttConnected, sendCommand } from '@/app/lib/bambu/mqtt-manager';
+import { isTokenValid, isMqttConnected, sendCommand } from '@/backend/bambu/mqtt-manager';
 
 export async function POST(req: NextRequest) {
   if (!isTokenValid()) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });

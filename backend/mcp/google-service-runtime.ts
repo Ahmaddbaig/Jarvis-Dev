@@ -1,7 +1,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { getGoogleService, getGoogleServiceByServerName, type GoogleServiceId } from '@/app/lib/google-services';
+import { getGoogleService, getGoogleServiceByServerName, type GoogleServiceId } from '@/shared/google-services';
 import {
   GOOGLE_CREDENTIALS_DIR,
   GOOGLE_CREDENTIALS_PATH,

@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { HomeAssistantWizard } from '../wizards/HomeAssistantWizard';
-import { loadServerSettings } from '../../lib/serverSettings';
+import { loadServerSettings } from '@/frontend/lib/serverSettings';
 import { PageHeader } from '../PageHeader';
 
 // ── Types ──────────────────────────────────────────────────────────────────────

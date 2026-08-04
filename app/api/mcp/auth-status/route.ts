@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getGoogleService } from '@/app/lib/google-services';
-import { getGoogleTokenPath } from '@/app/lib/mcp/google-service-runtime';
+import { getGoogleService } from '@/shared/google-services';
+import { getGoogleTokenPath } from '@/backend/mcp/google-service-runtime';
 import fs from 'fs';
 
 export async function GET(req: NextRequest) {

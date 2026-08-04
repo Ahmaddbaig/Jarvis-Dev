@@ -7,7 +7,7 @@ import {
   getGoogleServiceIds,
   getScopeText,
   type GoogleServiceId,
-} from '@/app/lib/google-services';
+} from '@/shared/google-services';
 
 interface GoogleCalendarWizardProps {
   onComplete: (connectedServices?: GoogleServiceId[]) => void;

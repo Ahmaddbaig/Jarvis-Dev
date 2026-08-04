@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { searchDuckDuckGoHtml } from '@/app/lib/ddg-html-search';
+import { searchDuckDuckGoHtml } from '@/backend/search/ddg-html-search';
 
 export async function POST(req: NextRequest) {
   const { query } = await req.json();

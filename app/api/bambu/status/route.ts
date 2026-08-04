@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { isTokenValid, isMqttConnected, getPrinters, getToken, connectMqtt } from '@/app/lib/bambu/mqtt-manager';
+import { isTokenValid, isMqttConnected, getPrinters, getToken, connectMqtt } from '@/backend/bambu/mqtt-manager';
 
 export async function GET() {
   const valid = isTokenValid();
@@ -18,7 +18,7 @@ export async function GET() {
 }
 
 export async function DELETE() {
-  const { setToken } = await import('@/app/lib/bambu/mqtt-manager');
+  const { setToken } = await import('@/backend/bambu/mqtt-manager');
   setToken(null);
   return NextResponse.json({ success: true });
 }

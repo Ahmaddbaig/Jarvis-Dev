@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { SkillManager } from '@/app/lib/skills/config-loader';
+import { SkillManager } from '@/backend/skills/config-loader';
 
 export async function GET() {
   try {

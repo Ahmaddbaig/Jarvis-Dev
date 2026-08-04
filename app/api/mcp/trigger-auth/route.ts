@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { spawn, ChildProcess } from 'child_process';
-import { getGoogleServiceRuntime } from '@/app/lib/mcp/google-service-runtime';
+import { getGoogleServiceRuntime } from '@/backend/mcp/google-service-runtime';
 import fs from 'fs';
 
 // Keep the auth process alive between requests so the OAuth callback server
