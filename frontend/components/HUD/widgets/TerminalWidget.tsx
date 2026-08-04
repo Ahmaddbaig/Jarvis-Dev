@@ -11,6 +11,7 @@ import {
 
 const SOURCE_LABELS: Record<ErrorSource, string> = {
   openai:    'OPENAI  ',
+  'local-ai':'LOCAL AI',
   elevenlabs:'ELEVENLABS',
   function:  'FUNCTION',
   app:       'APP     ',
@@ -19,6 +20,7 @@ const SOURCE_LABELS: Record<ErrorSource, string> = {
 
 const SOURCE_COLORS: Record<ErrorSource, string> = {
   openai:    'text-cyan-400',
+  'local-ai':'text-emerald-400',
   elevenlabs:'text-purple-400',
   function:  'text-amber-400',
   app:       'text-slate-400',

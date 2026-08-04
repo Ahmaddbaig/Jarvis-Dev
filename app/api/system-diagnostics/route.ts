@@ -81,6 +81,39 @@ function probePython(): { ok: boolean; via: string | null; detail: string } {
   return { ok: false, via: null, detail: 'No py -3, python, or python3 found (try a Python path override in Settings → System)' };
 }
 
+function probeMacAccessibility(): { available: boolean; granted: boolean; detail: string } {
+  if (process.platform !== 'darwin') {
+    return { available: false, granted: false, detail: 'macOS only' };
+  }
+
+  try {
+    const probeResult = execFileSync(
+      '/usr/bin/osascript',
+      [
+        '-e',
+        `tell application "System Events"
+  set frontApp to first application process whose frontmost is true
+  set frontName to name of frontApp
+  set uiElementCount to count of UI elements of frontApp
+  return frontName & "||" & (uiElementCount as text)
+end tell`,
+      ],
+      { timeout: 4000, stdio: ['ignore', 'pipe', 'pipe'] }
+    ).toString().trim();
+    const [frontmostApp, uiElementCount = '0'] = probeResult.split('||');
+    return {
+      available: true,
+      granted: frontmostApp.length > 0,
+      detail: frontmostApp
+        ? `Accessibility UI query succeeded (frontmost app: ${frontmostApp}, UI elements: ${uiElementCount})`
+        : 'Accessibility UI query returned no application',
+    };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return { available: true, granted: false, detail };
+  }
+}
+
 export async function GET() {
   const SCRIPTS_DIR = path.join(process.cwd(), 'scripts');
   const binaryName = process.platform === 'win32' ? 'computer_use.exe' : 'computer_use';
@@ -121,6 +154,7 @@ export async function GET() {
       binaryExists: fs.existsSync(BINARY_PATH),
     },
     deskflow: getDeskflowStatus(),
+    macAccessibility: probeMacAccessibility(),
     python,
   });
 }

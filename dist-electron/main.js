@@ -365,6 +365,15 @@ function setupDesktopModeIpc() {
             return null;
         }
     });
+    electron_1.ipcMain.handle('macos-permissions:get', () => getMacPermissionStatus());
+    electron_1.ipcMain.handle('macos-permissions:request', (_event, permission) => requestMacPermission(permission));
+    electron_1.ipcMain.handle('macos-permissions:reveal-app', () => {
+        const status = getMacPermissionStatus();
+        if (status.appBundlePath) {
+            electron_1.shell.showItemInFolder(status.appBundlePath);
+        }
+        return status;
+    });
 }
 function waitForServer(retries = 40, delay = 500) {
     return new Promise((resolve, reject) => {
@@ -460,25 +469,36 @@ async function requestMediaPermissions() {
         console.error('[jarvis] Native media permission request failed:', error);
     }
 }
-function requestAccessibilityAndScreenRecording() {
+function getMacPermissionStatus() {
     if (process.platform !== 'darwin')
-        return;
-    // Screen recording — triggers the system prompt the first time.
-    // The app needs this for the computer-use screenshot feature (mss).
-    const screenStatus = electron_1.systemPreferences.getMediaAccessStatus('screen');
-    if (screenStatus !== 'granted') {
-        // Open System Settings directly to the Screen Recording pane so the
-        // user can add Jarvis without hunting through menus.
-        electron_1.shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture');
+        return { available: false };
+    return {
+        available: true,
+        accessibility: electron_1.systemPreferences.isTrustedAccessibilityClient(false) ? 'granted' : 'denied',
+        screen: electron_1.systemPreferences.getMediaAccessStatus('screen'),
+        microphone: electron_1.systemPreferences.getMediaAccessStatus('microphone'),
+        appBundlePath: path_1.default.dirname(path_1.default.dirname(path_1.default.dirname(process.execPath))),
+    };
+}
+async function requestMacPermission(permission) {
+    if (process.platform !== 'darwin')
+        return { available: false };
+    if (permission === 'accessibility') {
+        const trusted = electron_1.systemPreferences.isTrustedAccessibilityClient(true);
+        if (!trusted) {
+            await electron_1.shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility');
+        }
     }
-    // Accessibility — needed by pyautogui for mouse/keyboard control.
-    // isTrustedAccessibilityClient(true) shows the system prompt requesting trust.
-    const trusted = electron_1.systemPreferences.isTrustedAccessibilityClient(false);
-    if (!trusted) {
-        electron_1.systemPreferences.isTrustedAccessibilityClient(true);
-        // Also open System Settings as a fallback in case the prompt is missed.
-        electron_1.shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility');
+    else if (permission === 'screen') {
+        await electron_1.shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture');
     }
+    else if (permission === 'microphone') {
+        await electron_1.systemPreferences.askForMediaAccess('microphone');
+        if (electron_1.systemPreferences.getMediaAccessStatus('microphone') !== 'granted') {
+            await electron_1.shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone');
+        }
+    }
+    return getMacPermissionStatus();
 }
 function getLanIp() {
     for (const ifaces of Object.values((0, os_1.networkInterfaces)())) {
@@ -663,8 +683,13 @@ electron_1.app.whenReady().then(async () => {
     // Do not hold the entire app startup behind a macOS privacy dialog. The
     // request continues in the background and the UI can open immediately.
     void requestMediaPermissions();
-    // Computer-control permissions are optional. Do not open System Settings
-    // every time Jarvis starts; request them only when that feature is used.
+    // Ask macOS to register Jarvis in Accessibility on first launch. macOS
+    // requires the user to flip the switch; this call cannot grant it silently.
+    if (process.platform === 'darwin' && !electron_1.systemPreferences.isTrustedAccessibilityClient(false)) {
+        setTimeout(() => {
+            electron_1.systemPreferences.isTrustedAccessibilityClient(true);
+        }, 1000);
+    }
     if (isDev) {
         createWindow();
         startHttpsProxy();
