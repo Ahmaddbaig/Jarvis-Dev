@@ -19,6 +19,30 @@ import { installErrorInterceptors, emitError } from '@/frontend/lib/errorBus';
 import { loadServerSettings, saveServerSettings } from '@/frontend/lib/serverSettings';
 
 const FFT_BARS = 64;
+// Keep speaker bleed and song vocals below the activation point while still
+// allowing a nearby user speaking clearly to interrupt playback.
+const REALTIME_VAD_THRESHOLD = 0.7;
+const MUSIC_PLAYBACK_RESTORE_FALLBACK_MS = 10_000;
+const MUSIC_TOOL_ROUTING_INSTRUCTIONS =
+  'For any request to play a named artist, song, album, or playlist, always call play_spotify. ' +
+  'Keep playback in the installed Spotify desktop application. Never open Spotify Web Player or a Spotify website, and never use open_url, web_search, run_shell_command, or computer_use for a music request. ' +
+  'Do not rely on your own knowledge of whether an artist exists, is mainstream, or is available. ' +
+  'Spotify search is the source of truth, so search even when the name is unfamiliar or the audio may be ambiguous. ' +
+  'Never reject a music request before trying the tool. Treat the phonetic variants "Chef G", "Chief G", and "Shef G" as the artist "Sheff G". ' +
+  'Music, song lyrics, television, and other background audio are not user turns. Only respond when speech is clearly directed to you; otherwise remain silent and do not ask what the user was saying.';
+
+function buildAssistantInstructions(initialPrompt: string): string {
+  return (
+    initialPrompt +
+    '\n\n' + MUSIC_TOOL_ROUTING_INSTRUCTIONS +
+    '\n\nDo not call navigate_to_page as part of a greeting or on your own initiative — only call it when the user explicitly asks to go to a different page.'
+  );
+}
+
+function hasJarvisWakeWord(transcript: string): boolean {
+  return /\b(?:jarvis|jervis)\b/i.test(transcript);
+}
+
 const DEFAULT_SETTINGS: JarvisSettings = {
   apiMode: 'openai',
   apiKey: '',
@@ -26,7 +50,7 @@ const DEFAULT_SETTINGS: JarvisSettings = {
   elevenLabsFirstMessage: '',
   voice: 'echo',
   initialPrompt: 'You are Jarvis, a helpful AI assistant. You are always helpful, polite, and concise. Subtle British accent. Robotic. Emotionally controlled. Witty and a little bit poking fun at the user.',
-  enabledFunctions: ['desktop_mode', 'navigate_to_page', 'jarvis_disconnect'],
+  enabledFunctions: ['desktop_mode', 'navigate_to_page', 'jarvis_disconnect', 'play_spotify'],
   theme: 'arc-reactor',
   grid: 'off',
   visualizer: 'frequency-ring',
@@ -77,6 +101,17 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
   // session auto-reconnects, which prevents the model from navigating the
   // user back to "home" as part of its unsolicited greeting.
   const sessionStartTimeRef = useRef<number>(0);
+  const musicDuckRef = useRef<{
+    active: boolean;
+    previousVolume: number | null;
+    app: 'Spotify' | 'Music' | null;
+  }>({
+    active: false,
+    previousVolume: null,
+    app: null,
+  });
+  const musicDuckRequestRef = useRef<Promise<void> | null>(null);
+  const musicRestoreTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Dynamic function state — starts unloaded; gates auto-start.
   const [dynamicState, setDynamicState] = useState<DynamicFunctionState>({
@@ -96,6 +131,9 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
         fn.name,
         async (params: Record<string, unknown>) => {
           const result = await fn.handler(params);
+          if (fn.name === 'play_spotify') {
+            scheduleMusicRestore(MUSIC_PLAYBACK_RESTORE_FALLBACK_MS);
+          }
           const r = result as Record<string, unknown> | null;
           if (typeof r?.error === 'string') {
             emitError('function', `${fn.name}(): ${r.error}`, 'error');
@@ -117,6 +155,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
       setStatus('active');
     },
     onDisconnect: (details?: { reason?: string; code?: number; message?: string }) => {
+      void restoreMusicVolume();
       const reason = details?.message ?? details?.reason ?? (details?.code != null ? `code ${details.code}` : null);
       console.log('ElevenLabs disconnected', details ?? '');
       if (reason && statusRef.current !== 'idle') {
@@ -136,7 +175,93 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
       setLastError(msg);
       emitError('elevenlabs', msg);
     },
+    onModeChange: ({ mode }) => {
+      if (mode === 'speaking') {
+        void duckMusic();
+      } else {
+        scheduleMusicRestore(500);
+      }
+    },
+    onInterruption: () => {
+      void duckMusic();
+    },
   });
+
+  async function duckMusic(): Promise<void> {
+    if (musicRestoreTimerRef.current) {
+      clearTimeout(musicRestoreTimerRef.current);
+      musicRestoreTimerRef.current = null;
+    }
+    if (musicDuckRef.current.active || musicDuckRequestRef.current) return;
+
+    musicDuckRef.current.active = true;
+    const request = (async () => {
+      try {
+        const res = await fetch('/api/music', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ command: 'duck', value: 18 }),
+        });
+        const data = await res.json() as {
+          error?: string;
+          ducked?: boolean;
+          previousVolume?: number | null;
+          app?: 'Spotify' | 'Music';
+        };
+        if (!res.ok || data.error || !data.ducked) {
+          musicDuckRef.current = { active: false, previousVolume: null, app: null };
+          return;
+        }
+        musicDuckRef.current.previousVolume =
+          typeof data.previousVolume === 'number' ? data.previousVolume : null;
+        musicDuckRef.current.app = data.app ?? null;
+        // Failsafe in case a provider disconnects without an audio-finished event.
+        scheduleMusicRestore(30_000);
+      } catch {
+        musicDuckRef.current = { active: false, previousVolume: null, app: null };
+      }
+    })();
+
+    musicDuckRequestRef.current = request;
+    await request;
+    musicDuckRequestRef.current = null;
+  }
+
+  function scheduleMusicRestore(delayMs = 350): void {
+    if (musicRestoreTimerRef.current) clearTimeout(musicRestoreTimerRef.current);
+    musicRestoreTimerRef.current = setTimeout(() => {
+      musicRestoreTimerRef.current = null;
+      void restoreMusicVolume();
+    }, delayMs);
+  }
+
+  async function restoreMusicVolume(): Promise<void> {
+    if (musicRestoreTimerRef.current) {
+      clearTimeout(musicRestoreTimerRef.current);
+      musicRestoreTimerRef.current = null;
+    }
+    if (musicDuckRequestRef.current) await musicDuckRequestRef.current;
+    if (musicRestoreTimerRef.current) {
+      clearTimeout(musicRestoreTimerRef.current);
+      musicRestoreTimerRef.current = null;
+    }
+
+    const previousVolume = musicDuckRef.current.previousVolume;
+    const duckedApp = musicDuckRef.current.app;
+    const wasActive = musicDuckRef.current.active;
+    musicDuckRef.current = { active: false, previousVolume: null, app: null };
+    if (!wasActive || previousVolume === null || duckedApp === null) return;
+
+    try {
+      await fetch('/api/music', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ command: 'volume', value: previousVolume, app: duckedApp }),
+      });
+    } catch {
+      // The failsafe is best-effort; a later manual volume change remains available.
+    }
+  }
 
   // Photo context state
   const [photos, setPhotos] = useState<PhotoEntry[]>([]);
@@ -759,7 +884,29 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
 
       const fd = new FormData();
       fd.set('sdp', offer.sdp ?? '');
-      fd.set('session', JSON.stringify({ type: 'realtime', model, audio: { output: { voice: currentSettings.voice ?? 'echo' } } }));
+      fd.set('session', JSON.stringify({
+        type: 'realtime',
+        model,
+        audio: {
+          input: {
+            noise_reduction: { type: 'far_field' },
+            transcription: {
+              model: 'gpt-4o-mini-transcribe',
+              language: 'en',
+              prompt: 'The speaker may address an assistant named Jarvis. Spell the wake word as Jarvis.',
+            },
+            turn_detection: {
+              type: 'server_vad',
+              threshold: REALTIME_VAD_THRESHOLD,
+              prefix_padding_ms: 500,
+              silence_duration_ms: 650,
+              create_response: false,
+              interrupt_response: true,
+            },
+          },
+          output: { voice: currentSettings.voice ?? 'echo' },
+        },
+      }));
 
       const response = await fetch('https://api.openai.com/v1/realtime/calls', {
         method: 'POST',
@@ -796,10 +943,26 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
           type: 'session.update',
           session: {
             type: 'realtime',
-            instructions:
-              currentSettings.initialPrompt +
-              '\n\nDo not call navigate_to_page as part of a greeting or on your own initiative — only call it when the user explicitly asks to go to a different page.',
+            instructions: buildAssistantInstructions(currentSettings.initialPrompt),
             tool_choice: 'auto',
+            audio: {
+              input: {
+                noise_reduction: { type: 'far_field' },
+                transcription: {
+                  model: 'gpt-4o-mini-transcribe',
+                  language: 'en',
+                  prompt: 'The speaker may address an assistant named Jarvis. Spell the wake word as Jarvis.',
+                },
+                turn_detection: {
+                  type: 'server_vad',
+                  threshold: REALTIME_VAD_THRESHOLD,
+                  prefix_padding_ms: 500,
+                  silence_duration_ms: 650,
+                  create_response: false,
+                  interrupt_response: true,
+                },
+              },
+            },
             ...(enabledTools.length > 0 ? { tools: enabledTools } : { tools: [] }),
           },
         };
@@ -831,6 +994,57 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
               `%c[Jarvis] session.updated — tools: ${(data.session?.tools ?? []).map((t: {name:string}) => t.name).join(', ') || '(none)'}`,
               'background:#1a3a1a;color:#a5d6a7;padding:2px 6px;border-radius:3px'
             );
+          }
+
+          if (data.type === 'conversation.item.input_audio_transcription.completed') {
+            const transcript = typeof data.transcript === 'string' ? data.transcript.trim() : '';
+            const itemId = typeof data.item_id === 'string' ? data.item_id : '';
+
+            let musicIsPlaying = false;
+            try {
+              const musicRes = await fetch('/api/music');
+              const musicData = await musicRes.json() as { isPlaying?: boolean };
+              musicIsPlaying = musicRes.ok && musicData.isPlaying === true;
+            } catch {
+              // If playback status is unavailable, preserve normal conversation behavior.
+            }
+
+            if (musicIsPlaying && !hasJarvisWakeWord(transcript)) {
+              console.log('[Jarvis] Ignored background audio while music was playing:', transcript);
+              if (itemId) {
+                dc.send(JSON.stringify({
+                  type: 'conversation.item.delete',
+                  item_id: itemId,
+                }));
+              }
+              return;
+            }
+
+            if (musicIsPlaying) await duckMusic();
+            dc.send(JSON.stringify({ type: 'response.create' }));
+            return;
+          }
+
+          if (data.type === 'conversation.item.input_audio_transcription.failed') {
+            const itemId = typeof data.item_id === 'string' ? data.item_id : '';
+            if (itemId) {
+              dc.send(JSON.stringify({
+                type: 'conversation.item.delete',
+                item_id: itemId,
+              }));
+            }
+            return;
+          }
+
+          if (
+            data.type === 'output_audio_buffer.stopped' ||
+            data.type === 'output_audio_buffer.cleared'
+          ) {
+            scheduleMusicRestore();
+          }
+
+          if (data.type === 'response.done' && Object.keys(pendingCalls).length === 0) {
+            scheduleMusicRestore(500);
           }
 
           // Accumulate argument deltas
@@ -875,6 +1089,9 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
             }
 
             const result = await fn.handler(parsedArgs);
+            if (fnName === 'play_spotify') {
+              scheduleMusicRestore(MUSIC_PLAYBACK_RESTORE_FALLBACK_MS);
+            }
 
             // Surface function-level errors (e.g. ENOENT, missing API key, network failures)
             // to the Error Terminal widget so they're visible without opening devtools.
@@ -969,7 +1186,9 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
       }
 
       const overrideAgent: Record<string, unknown> = {};
-      if (currentSettings.initialPrompt) overrideAgent.prompt = { prompt: currentSettings.initialPrompt };
+      if (currentSettings.initialPrompt) {
+        overrideAgent.prompt = { prompt: buildAssistantInstructions(currentSettings.initialPrompt) };
+      }
       if (currentSettings.elevenLabsFirstMessage?.trim()) overrideAgent.firstMessage = currentSettings.elevenLabsFirstMessage.trim();
       const overrides = Object.keys(overrideAgent).length > 0 ? { agent: overrideAgent } : undefined;
 
@@ -994,6 +1213,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
   }
 
   function disconnect() {
+    void restoreMusicVolume();
     console.log(
       `%c[Jarvis] disconnect() called at ${new Date().toLocaleTimeString()} — stack: ${new Error().stack?.split('\n')[2]?.trim() ?? 'unknown'}`,
       'background:#2d0a0a;color:#ff6b6b;font-weight:bold;padding:2px 6px;border-radius:3px'
