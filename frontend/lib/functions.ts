@@ -56,6 +56,10 @@ function normalizeDesktopPanelPosition(value: unknown): DesktopPanelPosition | u
   return undefined;
 }
 
+function normalizeSpotifyQuery(query: string): string {
+  return query.replace(/\b(?:chef|chief|shef)\s+g\b/gi, 'Sheff G');
+}
+
 // ── Calendar event fetching ───────────────────────────────────────────────────
 // Tries MCP (real event titles via OAuth) first, falls back to iCal feed.
 
@@ -648,6 +652,88 @@ export const FUNCTION_REGISTRY: JarvisFunction[] = [
         const msg = String(err);
         dispatch({ state: 'error', error: msg });
         return { error: msg };
+      }
+    },
+  },
+  {
+    name: 'play_spotify',
+    label: 'Spotify Search & Play',
+    description: 'Let Jarvis find an artist, song, album, or playlist in Spotify and start playing it',
+    tool: {
+      type: 'function',
+      name: 'play_spotify',
+      description:
+        'Search Spotify and start playback for a requested artist, song, album, or playlist. ' +
+        'Use this instead of control_music whenever the user names what they want to hear, ' +
+        'for example "play Sheff G", "play Him by Sheff G", or "put on my Discover Weekly". ' +
+        'Always use the installed Spotify desktop app, never Spotify Web Player or a browser. ' +
+        'Always search; never decide that an unfamiliar artist is not mainstream or does not exist.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: {
+            type: 'string',
+            description: 'The artist, song, album, or playlist to find and play in Spotify.',
+          },
+        },
+        required: ['query'],
+      },
+    },
+    handler: async (args) => {
+      const query = typeof args.query === 'string' ? args.query.trim() : '';
+      if (!query) return { error: 'No Spotify search query provided.' };
+
+      const safeQuery = normalizeSpotifyQuery(query).slice(0, 250);
+
+      // macOS can drive Spotify directly with its native UI scripting support.
+      // This is faster and avoids depending on the optional Python Computer Use helper.
+      try {
+        const nativeRes = await fetch('/api/music', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ command: 'search_play', query: safeQuery }),
+        });
+        const nativeData = await nativeRes.json();
+        if (nativeRes.ok && !nativeData.error) {
+          window.dispatchEvent(new CustomEvent('jarvis:music:refresh'));
+          return { success: true, query: safeQuery, app: 'Spotify' };
+        }
+        // Only unsupported platforms fall back to the vision-based controller.
+        if (nativeRes.status !== 501) {
+          return { error: nativeData.error ?? `Spotify control failed with HTTP ${nativeRes.status}.` };
+        }
+      } catch (err) {
+        return { error: String(err) };
+      }
+
+      let apiKey = '';
+      try {
+        const stored = localStorage.getItem('jarvis_settings');
+        apiKey = stored ? (JSON.parse(stored).apiKey ?? '') : '';
+      } catch {
+        return { error: 'Jarvis settings could not be read.' };
+      }
+      if (!apiKey) return { error: 'No API key found in settings.' };
+
+      const platform = typeof navigator !== 'undefined' ? navigator.platform : 'unknown';
+      const task =
+        `[Platform: ${platform}] Use the Spotify desktop application's visible user interface to play ${JSON.stringify(safeQuery)}. ` +
+        'Open or focus Spotify, use its search, choose the best matching result, and start playback. ' +
+        'If the query is an artist, open the artist and play their top result. If it is a song, play the best matching song. ' +
+        'Do not stop after merely opening Spotify or displaying search results. Verify from the Spotify UI that playback has started.';
+
+      try {
+        const res = await fetch('/api/computer-use', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ task, apiKey, ...readToolkitOverrides() }),
+        });
+        const data = await res.json();
+        if (!res.ok || data.error) return { error: data.error ?? `Computer Use failed with HTTP ${res.status}.` };
+        window.dispatchEvent(new CustomEvent('jarvis:music:refresh'));
+        return { success: true, query: safeQuery, result: data.result, turns: data.turns };
+      } catch (err) {
+        return { error: String(err) };
       }
     },
   },

@@ -198,7 +198,40 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
-    const { command, value } = await req.json();
+    const { command, value, query } = await req.json();
+
+    if (command === 'search_play') {
+      if (process.platform !== 'darwin') {
+        return NextResponse.json(
+          { error: 'Native Spotify search and play is currently available on macOS only.' },
+          { status: 501 }
+        );
+      }
+
+      const searchQuery = typeof query === 'string' ? query.trim().slice(0, 250) : '';
+      if (!searchQuery) {
+        return NextResponse.json({ error: 'Missing Spotify search query.' }, { status: 400 });
+      }
+
+      const escapedQuery = JSON.stringify(searchQuery);
+      await osaScript(`tell application "Spotify" to activate
+delay 1
+tell application "System Events"
+  if UI elements enabled is false then error "Jarvis needs Accessibility permission to control Spotify."
+  tell process "Spotify" to set frontmost to true
+  keystroke "l" using command down
+  delay 0.3
+  keystroke ${escapedQuery}
+  delay 2
+  key code 125
+  delay 0.3
+  key code 36
+  delay 1
+  key code 36
+end tell`);
+
+      return NextResponse.json({ success: true, command, query: searchQuery, app: 'Spotify' });
+    }
 
     if (isWindowsMediaHost()) {
       if (!command || typeof command !== 'string') {
@@ -211,6 +244,27 @@ export async function POST(req: NextRequest) {
 
     const app = await detectApp();
     if (!app) return NextResponse.json({ error: 'No supported music app (Spotify/Music) is running for control.' });
+
+    if (command === 'duck') {
+      const track = await getNowPlaying(app);
+      if (!track?.isPlaying) {
+        return NextResponse.json({ success: true, command, app, ducked: false });
+      }
+
+      const rawVolume = await osa(`tell application "${app}" to get sound volume`);
+      const previousVolume = Math.max(0, Math.min(100, Number(rawVolume)));
+      const duckVolume = Math.max(0, Math.min(100, Number(value ?? 18)));
+      if (Number.isFinite(previousVolume) && previousVolume > duckVolume) {
+        await osa(`tell application "${app}" to set sound volume to ${duckVolume}`);
+      }
+      return NextResponse.json({
+        success: true,
+        command,
+        app,
+        ducked: Number.isFinite(previousVolume) && previousVolume > duckVolume,
+        previousVolume: Number.isFinite(previousVolume) ? previousVolume : null,
+      });
+    }
 
     let script = '';
     switch (command) {
