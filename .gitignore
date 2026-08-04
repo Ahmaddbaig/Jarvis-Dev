@@ -10,6 +10,7 @@ out/
 
 # Local settings & secrets (contains API keys)
 jarvis-server-settings.json
+jarvis-chrome-control.json
 .bambu-token.json
 .env
 .env.*

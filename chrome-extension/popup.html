@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Jarvis Chrome Control</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main>
+      <header>
+        <div class="orb"></div>
+        <div>
+          <h1>JARVIS</h1>
+          <p>CHROME CONTROL</p>
+        </div>
+        <span id="connectionBadge" class="badge offline">OFFLINE</span>
+      </header>
+
+      <section id="pairSection">
+        <h2>PAIR WITH JARVIS</h2>
+        <label for="baseUrl">LOCAL JARVIS ADDRESS</label>
+        <select id="baseUrl">
+          <option value="http://127.0.0.1:3100">Development — port 3100</option>
+          <option value="http://127.0.0.1:3000">Packaged — port 3000</option>
+        </select>
+        <label for="pairCode">SIX-DIGIT CODE FROM SETTINGS</label>
+        <input id="pairCode" type="text" inputmode="numeric" maxlength="6" placeholder="000000" autocomplete="one-time-code">
+        <button id="pairButton" class="primary">PAIR EXTENSION</button>
+      </section>
+
+      <section id="controlSection" hidden>
+        <div class="row">
+          <div>
+            <h2>LOCAL CONNECTION</h2>
+            <p id="endpointText" class="detail"></p>
+          </div>
+          <button id="pauseButton" class="small">PAUSE</button>
+        </div>
+
+        <div class="divider"></div>
+
+        <h2>CURRENT WEBSITE</h2>
+        <p id="siteText" class="site">Open a normal website tab.</p>
+        <p id="permissionText" class="detail"></p>
+        <button id="allowSiteButton" class="primary">ALLOW THIS SITE</button>
+        <button id="removeSiteButton" class="secondary" hidden>REMOVE SITE ACCESS</button>
+
+        <div class="divider"></div>
+        <button id="forgetButton" class="danger">FORGET LOCAL PAIRING</button>
+      </section>
+
+      <p id="message" role="status"></p>
+      <footer>Only approved HTTP/HTTPS sites can be read or controlled.</footer>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>
