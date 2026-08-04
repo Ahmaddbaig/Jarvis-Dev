@@ -19,12 +19,17 @@ import { installErrorInterceptors, emitError } from '@/frontend/lib/errorBus';
 import { loadServerSettings, saveServerSettings } from '@/frontend/lib/serverSettings';
 
 const FFT_BARS = 64;
+// Keep speaker bleed and song vocals below the activation point while still
+// allowing a nearby user speaking clearly to interrupt playback.
+const REALTIME_VAD_THRESHOLD = 0.7;
+const ELEVENLABS_DUCK_VAD_THRESHOLD = 0.85;
 const MUSIC_TOOL_ROUTING_INSTRUCTIONS =
   'For any request to play a named artist, song, album, or playlist, always call play_spotify. ' +
   'Keep playback in the installed Spotify desktop application. Never open Spotify Web Player or a Spotify website, and never use open_url, web_search, run_shell_command, or computer_use for a music request. ' +
   'Do not rely on your own knowledge of whether an artist exists, is mainstream, or is available. ' +
   'Spotify search is the source of truth, so search even when the name is unfamiliar or the audio may be ambiguous. ' +
-  'Never reject a music request before trying the tool. Treat the phonetic variants "Chef G", "Chief G", and "Shef G" as the artist "Sheff G".';
+  'Never reject a music request before trying the tool. Treat the phonetic variants "Chef G", "Chief G", and "Shef G" as the artist "Sheff G". ' +
+  'Music, song lyrics, television, and other background audio are not user turns. Only respond when speech is clearly directed to you; otherwise remain silent and do not ask what the user was saying.';
 
 function buildAssistantInstructions(initialPrompt: string): string {
   return (
@@ -164,7 +169,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
       emitError('elevenlabs', msg);
     },
     onVadScore: ({ vadScore }) => {
-      if (vadScore >= 0.7) void duckMusic();
+      if (vadScore >= ELEVENLABS_DUCK_VAD_THRESHOLD) void duckMusic();
     },
     onModeChange: ({ mode }) => {
       if (mode === 'speaking') {
@@ -883,7 +888,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
             noise_reduction: { type: 'far_field' },
             turn_detection: {
               type: 'server_vad',
-              threshold: 0.4,
+              threshold: REALTIME_VAD_THRESHOLD,
               prefix_padding_ms: 500,
               silence_duration_ms: 650,
               create_response: true,
@@ -936,7 +941,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
                 noise_reduction: { type: 'far_field' },
                 turn_detection: {
                   type: 'server_vad',
-                  threshold: 0.4,
+                  threshold: REALTIME_VAD_THRESHOLD,
                   prefix_padding_ms: 500,
                   silence_duration_ms: 650,
                   create_response: true,
