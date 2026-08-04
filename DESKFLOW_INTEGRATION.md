@@ -21,23 +21,22 @@ Enable **Deskflow Control** under **Settings → Abilities** on the Mac running 
 
 To use a nonstandard configuration path, start Jarvis with `JARVIS_DESKFLOW_CONFIG` set to the full `deskflow-server.conf` path.
 
-## Important limitation
+## Screen-aware remote control
 
 Deskflow transports keyboard, mouse, and clipboard events. It does not stream the remote display back to Jarvis. The existing `computer_use` agent takes screenshots only on the computer where Jarvis is running. After switching to Windows, it would still see the Mac screen and would operate the Windows computer blindly.
 
-Voice-driven switching is safe to use now. Screen-aware autonomous work on Windows needs a Jarvis companion running on Windows.
+Voice-driven switching is safe to use on its own. For screen-aware work, run the separate Jarvis Companion on the remote computer and follow [COMPANION_SETUP.md](COMPANION_SETUP.md).
 
-## Windows companion design
+## Jarvis Companion
 
-The companion should remain separate from Deskflow and provide only the missing capabilities:
+The implemented companion remains separate from Deskflow and provides the missing capabilities:
 
 1. Capture the Windows desktop locally.
 2. Execute mouse and keyboard actions locally.
 3. Return screenshots and action results to the Mac Jarvis instance.
-4. Bind only to the private LAN interface.
-5. Require a randomly generated pairing secret on every request.
-6. Reject browser-origin requests and enforce request-size, action, and timeout limits.
-7. Show a visible connected/controlled indicator and retain an emergency stop shortcut.
+4. Pair over TLS using a short-lived code and a manually verified certificate fingerprint.
+5. Authenticate each request, enforce short exclusive control leases, and validate inputs.
+6. Show a tray status with a local emergency stop/pause control.
 
 Deskflow can continue handling the human keyboard/mouse transition while the companion handles machine perception and controlled automation. This avoids injecting commands into Deskflow's encrypted wire protocol and keeps Jarvis-specific code outside Deskflow's GPL-2.0-only codebase.
 

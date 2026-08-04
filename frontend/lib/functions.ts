@@ -222,13 +222,18 @@ export const FUNCTION_REGISTRY: JarvisFunction[] = [
       type: 'function',
       name: 'computer_use',
       description:
-        'Control the user\'s computer to complete a task. Use this when the user asks you to open an app, click something, type something, or perform any action on their screen.',
+        'Control the local computer or a paired Jarvis Companion computer to complete a visual task. ' +
+        'Set target when the user names another computer, such as Windows or Mac.',
       parameters: {
         type: 'object',
         properties: {
           task: {
             type: 'string',
             description: 'A clear description of what to do on the computer, e.g. "Open Discord"',
+          },
+          target: {
+            type: 'string',
+            description: 'Optional paired companion name or OS alias such as Windows or Mac. Omit for this computer.',
           },
         },
         required: ['task'],
@@ -239,8 +244,9 @@ export const FUNCTION_REGISTRY: JarvisFunction[] = [
       if (!task) return { error: 'No task provided.' };
 
       // Platform context so the computer-use AI knows the exact OS
+      const target = typeof args.target === 'string' ? args.target.trim() : '';
       const platform = typeof navigator !== 'undefined' ? navigator.platform : 'unknown';
-      const platformHint = `[Platform: ${platform}] `;
+      const platformHint = target ? '' : `[Platform: ${platform}] `;
       const enrichedTask = platformHint + task;
 
       const stored = localStorage.getItem('jarvis_settings');
@@ -251,11 +257,77 @@ export const FUNCTION_REGISTRY: JarvisFunction[] = [
         const res = await fetch('/api/computer-use', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ task: enrichedTask, apiKey, ...readToolkitOverrides() }),
+          body: JSON.stringify({ task: enrichedTask, target: target || undefined, apiKey, ...readToolkitOverrides() }),
         });
         return await res.json();
       } catch (err) {
         return { error: String(err) };
+      }
+    },
+  },
+  {
+    name: 'companion_control',
+    label: 'Companion Computers',
+    description: 'List paired computers and perform explicit non-visual actions on them',
+    tool: {
+      type: 'function',
+      name: 'companion_control',
+      description:
+        'List or check paired Jarvis Companion computers, launch an application, type text, press keys, or click exact coordinates. ' +
+        'Use computer_use with a target for tasks that require seeing and interpreting the remote screen.',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: ['list', 'status', 'launch', 'type', 'keypress', 'click'],
+          },
+          target: {
+            type: 'string',
+            description: 'Paired device name or unique OS alias such as Windows or Mac.',
+          },
+          application: { type: 'string', description: 'Application name for launch.' },
+          text: { type: 'string', description: 'Text to type.' },
+          keys: { type: 'array', items: { type: 'string' }, description: 'Keys for keypress, e.g. ["CTRL", "L"].' },
+          x: { type: 'number', description: 'Primary-display X coordinate for click.' },
+          y: { type: 'number', description: 'Primary-display Y coordinate for click.' },
+          button: { type: 'string', enum: ['left', 'right', 'middle'] },
+        },
+        required: ['action'],
+      },
+    },
+    handler: async (args) => {
+      const action = typeof args.action === 'string' ? args.action : 'list';
+      try {
+        if (action === 'list') {
+          const res = await fetch('/api/companions', { cache: 'no-store' });
+          return await res.json();
+        }
+        const target = typeof args.target === 'string' ? args.target : '';
+        if (!target) return { error: 'A companion target is required.' };
+        let command: 'status' | 'launch' | 'input' = 'status';
+        let payload: Record<string, unknown> = {};
+        if (action === 'launch') {
+          command = 'launch';
+          payload = { application: args.application };
+        } else if (action === 'type') {
+          command = 'input';
+          payload = { actions: [{ type: 'type', text: args.text }] };
+        } else if (action === 'keypress') {
+          command = 'input';
+          payload = { actions: [{ type: 'keypress', keys: args.keys }] };
+        } else if (action === 'click') {
+          command = 'input';
+          payload = { actions: [{ type: 'click', x: args.x, y: args.y, button: args.button ?? 'left' }] };
+        }
+        const res = await fetch('/api/companions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'command', target, command, payload }),
+        });
+        return await res.json();
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : String(error) };
       }
     },
   },

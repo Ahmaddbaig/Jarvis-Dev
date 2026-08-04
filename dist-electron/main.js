@@ -550,10 +550,12 @@ async function startHttpsProxy() {
         httpsServer = https_1.default.createServer({ key: pems.private, cert: pems.cert }, (req, res) => {
             const requestPath = (req.url || '').split('?', 1)[0];
             // Mouse/keyboard routing is intentionally desktop-local. The LAN UI
-            // remains available, but it must never be able to seize Deskflow.
-            if (requestPath === '/api/deskflow' || requestPath.startsWith('/api/deskflow/')) {
+            // remains available, but it must never be able to seize a computer.
+            if (requestPath === '/api/deskflow' || requestPath.startsWith('/api/deskflow/') ||
+                requestPath === '/api/companions' || requestPath.startsWith('/api/companions/') ||
+                requestPath === '/api/computer-use' || requestPath.startsWith('/api/computer-use/')) {
                 res.writeHead(403, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'Deskflow control is available only in the Jarvis desktop app.' }));
+                res.end(JSON.stringify({ error: 'Computer control is available only in the Jarvis desktop app.' }));
                 return;
             }
             proxy.web(req, res);

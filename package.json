@@ -19,6 +19,8 @@
     "dist:win": "npm run build && electron-builder --win --publish never",
     "dist:linux": "npm run build && electron-builder --linux --publish never",
     "dist": "npm run build && electron-builder --mac --win --publish never",
+    "companion": "npm --prefix scripts/companion start",
+    "companion:server": "node scripts/companion/server.cjs",
     "start": "electron .",
     "lint": "eslint"
   },
