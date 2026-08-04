@@ -370,11 +370,24 @@ export function useLocalConversation(
         options.enabledFunctionNames,
       );
 
-      // Warm whisper.cpp now (fire-and-forget) so the first real turn
-      // doesn't pay the model-load cost.
+      // Warm every cold path now (fire-and-forget) so the first real turn
+      // doesn't pay model-load costs: whisper.cpp for STT, and the Voicebox
+      // TTS engine, whose cold load takes ~40s for the cloned JARVIS voice.
       const warmupForm = new FormData();
       warmupForm.set('audio', encodeWav(new Float32Array(8000), VAD_SAMPLE_RATE), 'warmup.wav');
       void fetch('/api/voice/transcribe', { method: 'POST', body: warmupForm })
+        .catch(() => undefined);
+      void fetch('/api/voice/warmup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ profileId: options.voiceProfileId }),
+      })
+        .then(async (res) => {
+          const data = (await res.json().catch(() => null)) as { error?: string } | null;
+          if (!res.ok) {
+            emitError('local', data?.error ?? 'Voice engine warmup failed.', 'warn');
+          }
+        })
         .catch(() => undefined);
       historyRef.current = [
         { role: 'system', content: buildSystemPrompt(options.initialPrompt) },

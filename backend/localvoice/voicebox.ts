@@ -8,7 +8,7 @@ import { getVoiceboxUrl } from './config';
 const DEFAULT_PROFILE_NAME = 'Jarvis';
 const DEFAULT_PRESET_ENGINE = 'kokoro';
 const DEFAULT_PRESET_VOICE_ID = 'bm_george';
-const GENERATION_POLL_INTERVAL_MS = 250;
+const GENERATION_POLL_INTERVAL_MS = 120;
 // Generous: the first generation after idle cold-loads the TTS engine into
 // MLX, which can take over a minute on a memory-pressured machine.
 const GENERATION_TIMEOUT_MS = 120_000;
@@ -73,6 +73,42 @@ export async function resolveProfile(profileId?: string): Promise<VoiceboxProfil
     throw new Error(`Voicebox profile creation failed: ${res.status} ${await res.text()}`);
   }
   return (await res.json()) as VoiceboxProfile;
+}
+
+// Cold-loading a TTS engine into MLX takes ~40s for luxtts on this machine.
+const MODEL_LOAD_TIMEOUT_MS = 150_000;
+
+/**
+ * Preload the TTS engine behind a profile so the first real sentence doesn't
+ * pay the ~40s cold model load. No-op when the engine is already resident.
+ */
+export async function warmUpProfileEngine(
+  profileId?: string,
+): Promise<{ engine: string; wasLoaded: boolean }> {
+  const profile = await resolveProfile(profileId);
+  const engine = profile.default_engine ?? DEFAULT_PRESET_ENGINE;
+
+  const statusRes = await fetch(api('/models/status'), {
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (!statusRes.ok) throw new Error(`Voicebox /models/status failed: ${statusRes.status}`);
+  const { models } = (await statusRes.json()) as {
+    models: { model_name: string; loaded: boolean }[];
+  };
+  const model = models.find((m) => m.model_name === engine);
+  if (model?.loaded) return { engine, wasLoaded: true };
+
+  // Blocks until the model is resident; that is the point.
+  const loadRes = await fetch(api('/models/load'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model_name: engine }),
+    signal: AbortSignal.timeout(MODEL_LOAD_TIMEOUT_MS),
+  });
+  if (!loadRes.ok) {
+    throw new Error(`Voicebox /models/load failed: ${loadRes.status} ${await loadRes.text()}`);
+  }
+  return { engine, wasLoaded: false };
 }
 
 /** Submit a generation, wait for it to finish, and return the audio bytes. */
