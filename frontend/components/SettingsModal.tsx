@@ -27,8 +27,12 @@ export interface JarvisSettings {
   realtimeModel?: RealtimeModel;
   elevenLabsAgentId?: string;
   elevenLabsFirstMessage?: string;
-  /** OpenAI chat model for the Voicebox engine's brain (e.g. gpt-4o-mini). */
+  /** Brain provider for the Voicebox engine: OpenAI or Claude (Anthropic). */
+  brainProvider?: 'openai' | 'claude';
+  /** Chat model for the Voicebox engine's brain (e.g. gpt-4o-mini, claude-opus-5). */
   chatModel?: string;
+  /** Anthropic API key, used when brainProvider is 'claude'. */
+  claudeApiKey?: string;
   /** Voicebox voice profile id; empty = auto-created "Jarvis" preset voice. */
   voiceboxProfileId?: string;
   localFirstMessage?: string;
@@ -117,10 +121,11 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
 
   // Probe brain + Voicebox whenever the Voicebox engine is selected
   const isLocalMode = settings.apiMode === 'local';
+  const brainProvider = settings.brainProvider ?? 'openai';
   useEffect(() => {
     if (!isOpen || !isLocalMode) return;
     let cancelled = false;
-    fetch('/api/voice/chat')
+    fetch(`/api/voice/chat?provider=${brainProvider}`)
       .then((res) => res.json())
       .then((data) => { if (!cancelled) setBrainStatus(data); })
       .catch(() => { if (!cancelled) setBrainStatus({ ok: false, error: 'Status check failed' }); });
@@ -129,7 +134,7 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
       .then((data) => { if (!cancelled) setVoiceboxStatus(data); })
       .catch(() => { if (!cancelled) setVoiceboxStatus({ ok: false, profiles: [], error: 'Status check failed' }); });
     return () => { cancelled = true; };
-  }, [isOpen, isLocalMode]);
+  }, [isOpen, isLocalMode, brainProvider]);
 
   async function runDiagnostics() {
     sfx('click_sfx', 0.5);
@@ -228,8 +233,9 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
                 </div>
               </div>
 
-              {/* OpenAI fields — the key also powers the Voicebox engine's brain */}
-              {((settings.apiMode ?? 'openai') === 'openai' || settings.apiMode === 'local') && (
+              {/* OpenAI fields — the key also powers the Voicebox engine's OpenAI brain */}
+              {((settings.apiMode ?? 'openai') === 'openai' ||
+                (settings.apiMode === 'local' && brainProvider === 'openai')) && (
                 <div className="space-y-2">
                   <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">OpenAI API Key</label>
                   <input
@@ -305,7 +311,7 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
                   {/* Service status */}
                   <div className="space-y-1 text-xs font-mono">
                     <p className={brainStatus?.ok ? 'text-green-400' : 'text-red-400'}>
-                      ● Brain (OpenAI API) {brainStatus === null ? '— checking…' : brainStatus.ok ? 'ready' : `not ready — ${brainStatus.error ?? 'no API key'}`}
+                      ● Brain ({brainProvider === 'claude' ? 'Claude API' : 'OpenAI API'}) {brainStatus === null ? '— checking…' : brainStatus.ok ? 'ready' : `not ready — ${brainStatus.error ?? 'no API key'}`}
                     </p>
                     <p className={voiceboxStatus?.ok ? 'text-green-400' : 'text-red-400'}>
                       ● Voicebox {voiceboxStatus === null ? '— checking…' : voiceboxStatus.ok ? 'online' : `offline — ${voiceboxStatus.error ?? 'not reachable'}`}
@@ -313,10 +319,51 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
                   </div>
 
                   <div className="space-y-2">
-                    <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">Brain Model (OpenAI)</label>
+                    <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">Brain Provider</label>
+                    <select
+                      value={brainProvider}
+                      onChange={(e) => {
+                        sfx('select', 0.5);
+                        const provider = e.target.value === 'claude' ? 'claude' as const : 'openai' as const;
+                        setSettings({
+                          ...settings,
+                          brainProvider: provider,
+                          // Reset to the provider's default model so a GPT model
+                          // is never sent to the Claude API or vice versa.
+                          chatModel: provider === 'claude' ? 'claude-opus-5' : 'gpt-4o-mini',
+                        });
+                      }}
+                      className="w-full bg-cyan-950/20 border border-cyan-500/30 rounded px-3 py-2 text-cyan-100 focus:outline-none focus:border-cyan-400 focus:shadow-[0_0_10px_rgba(34,211,238,0.3)] transition-all font-mono text-sm"
+                    >
+                      <option value="openai" className="bg-slate-900">OpenAI (GPT)</option>
+                      <option value="claude" className="bg-slate-900">Claude (Anthropic)</option>
+                    </select>
+                  </div>
+
+                  {brainProvider === 'claude' && (
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">Claude API Key</label>
+                      <input
+                        type="password"
+                        value={settings.claudeApiKey ?? ''}
+                        onChange={(e) => setSettings({ ...settings, claudeApiKey: e.target.value })}
+                        placeholder="sk-ant-..."
+                        className="w-full bg-cyan-950/20 border border-cyan-500/30 rounded px-3 py-2 text-cyan-100 focus:outline-none focus:border-cyan-400 focus:shadow-[0_0_10px_rgba(34,211,238,0.3)] transition-all font-mono text-sm"
+                      />
+                    </div>
+                  )}
+
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">
+                      Brain Model ({brainProvider === 'claude' ? 'Claude' : 'OpenAI'})
+                    </label>
                     <div className="grid grid-cols-3 gap-2">
-                      {(['gpt-4o-mini', 'gpt-4.1-mini', 'gpt-4o'] as const).map((model) => {
-                        const active = (settings.chatModel ?? 'gpt-4o-mini') === model;
+                      {(brainProvider === 'claude'
+                        ? ['claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5']
+                        : ['gpt-4o-mini', 'gpt-4.1-mini', 'gpt-4o']
+                      ).map((model) => {
+                        const fallback = brainProvider === 'claude' ? 'claude-opus-5' : 'gpt-4o-mini';
+                        const active = (settings.chatModel ?? fallback) === model;
                         return (
                           <button
                             key={model}
@@ -334,12 +381,16 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
                     </div>
                     <input
                       type="text"
-                      value={settings.chatModel ?? 'gpt-4o-mini'}
+                      value={settings.chatModel ?? (brainProvider === 'claude' ? 'claude-opus-5' : 'gpt-4o-mini')}
                       onChange={(e) => setSettings({ ...settings, chatModel: e.target.value })}
-                      placeholder="gpt-4o-mini"
+                      placeholder={brainProvider === 'claude' ? 'claude-opus-5' : 'gpt-4o-mini'}
                       className="w-full bg-cyan-950/20 border border-cyan-500/30 rounded px-3 py-2 text-cyan-100 focus:outline-none focus:border-cyan-400 focus:shadow-[0_0_10px_rgba(34,211,238,0.3)] transition-all font-mono text-sm"
                     />
-                    <p className="text-xs text-cyan-700">Uses the OpenAI API key above. Any chat model with tool calling works.</p>
+                    <p className="text-xs text-cyan-700">
+                      {brainProvider === 'claude'
+                        ? 'Uses the Claude API key above. Any Claude model with tool calling works.'
+                        : 'Uses the OpenAI API key above. Any chat model with tool calling works.'}
+                    </p>
                   </div>
 
                   <div className="space-y-2">

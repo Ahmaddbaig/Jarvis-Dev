@@ -31,8 +31,12 @@ const TOOL_HANDLER_TIMEOUT_MS = 30_000;
 
 export type LocalConversationStatus = 'disconnected' | 'connecting' | 'connected';
 
+export type BrainProvider = 'openai' | 'claude';
+
 export interface LocalSessionOptions {
-  /** OpenAI chat model, e.g. gpt-4o-mini. */
+  /** Brain provider for the chat model. */
+  provider: BrainProvider;
+  /** Chat model, e.g. gpt-4o-mini or claude-opus-5. */
   model: string;
   initialPrompt: string;
   firstMessage?: string;
@@ -123,6 +127,7 @@ export function useLocalConversation(
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          provider: options.provider,
           model: options.model,
           messages: historyRef.current,
           tools: toolsRef.current,
@@ -252,7 +257,9 @@ export function useLocalConversation(
 
     try {
       // Fail fast with a useful message if no API key is configured.
-      const health = (await (await fetch('/api/voice/chat')).json()) as {
+      const health = (await (
+        await fetch(`/api/voice/chat?provider=${options.provider}`)
+      ).json()) as {
         ok: boolean;
         error?: string;
       };

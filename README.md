@@ -17,8 +17,10 @@ Three engines are selectable in Settings:
 - **OpenAI Realtime** — GPT speech-to-speech over WebRTC (needs OpenAI API key).
 - **ElevenLabs** — Conversational AI agent over WebRTC (needs agent id).
 - **Voicebox** — the movie JARVIS voice: Silero VAD → whisper.cpp STT →
-  OpenAI Chat Completions brain (same API key as Realtime, default
-  `gpt-4o-mini`) → Voicebox TTS with a cloned voice profile.
+  API chat brain → Voicebox TTS with a cloned voice profile. The brain
+  provider is a dropdown in Settings: OpenAI (same API key as Realtime,
+  default `gpt-4o-mini`) or Claude (own Anthropic API key, default
+  `claude-opus-5`).
 
 The Voicebox engine expects:
 

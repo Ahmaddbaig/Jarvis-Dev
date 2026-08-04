@@ -32,18 +32,28 @@ export function getVoiceboxUrl(): string {
   }
 }
 
+function readJarvisSettingsField(field: string): string {
+  const raw = readServerSettings()['jarvis_settings'];
+  if (typeof raw !== 'string' || !raw.trim()) return '';
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const value = parsed[field];
+    return typeof value === 'string' ? value.trim() : '';
+  } catch {
+    return '';
+  }
+}
+
 /**
  * OpenAI API key for the Voicebox engine's brain. Read from the serialised
  * jarvis_settings blob so it is the same key the Settings UI stores for the
  * Realtime engine — one key powers both modes.
  */
 export function getOpenAiApiKey(): string {
-  const raw = readServerSettings()['jarvis_settings'];
-  if (typeof raw !== 'string' || !raw.trim()) return '';
-  try {
-    const parsed = JSON.parse(raw) as { apiKey?: unknown };
-    return typeof parsed.apiKey === 'string' ? parsed.apiKey.trim() : '';
-  } catch {
-    return '';
-  }
+  return readJarvisSettingsField('apiKey');
+}
+
+/** Anthropic API key for the Voicebox engine's Claude brain. */
+export function getClaudeApiKey(): string {
+  return readJarvisSettingsField('claudeApiKey');
 }

@@ -22,6 +22,7 @@
     "postinstall": "node scripts/copy-vad-assets.js"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.115.0",
     "@elevenlabs/react": "^1.4.0",
     "@ricky0123/vad-web": "^0.0.30",
     "@types/leaflet": "^1.9.21",

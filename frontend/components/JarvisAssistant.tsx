@@ -44,15 +44,17 @@ function hasJarvisWakeWord(transcript: string): boolean {
   return /\b(?:jarvis|jervis)\b/i.test(transcript);
 }
 
-// Brain for the Voicebox engine: fast, cheap OpenAI chat model. Swappable in
-// Settings when quality matters more than speed.
-const DEFAULT_CHAT_MODEL = 'gpt-4o-mini';
+// Brain for the Voicebox engine — per-provider defaults, swappable in Settings.
+const DEFAULT_OPENAI_CHAT_MODEL = 'gpt-4o-mini';
+const DEFAULT_CLAUDE_CHAT_MODEL = 'claude-opus-5';
 const DEFAULT_SETTINGS: JarvisSettings = {
   apiMode: 'openai',
   apiKey: '',
   elevenLabsAgentId: '',
   elevenLabsFirstMessage: '',
-  chatModel: DEFAULT_CHAT_MODEL,
+  brainProvider: 'openai',
+  chatModel: DEFAULT_OPENAI_CHAT_MODEL,
+  claudeApiKey: '',
   voice: 'echo',
   initialPrompt: 'You are Jarvis, a helpful AI assistant. You are always helpful, polite, and concise. Subtle British accent. Robotic. Emotionally controlled. Witty and a little bit poking fun at the user.',
   enabledFunctions: ['desktop_mode', 'navigate_to_page', 'jarvis_disconnect', 'play_spotify'],
@@ -1264,8 +1266,12 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
       setStatus('listening');
       setLastError(null);
 
+      const provider = currentSettings.brainProvider ?? 'openai';
       await localConversation.startSession({
-        model: currentSettings.chatModel?.trim() || DEFAULT_CHAT_MODEL,
+        provider,
+        model:
+          currentSettings.chatModel?.trim() ||
+          (provider === 'claude' ? DEFAULT_CLAUDE_CHAT_MODEL : DEFAULT_OPENAI_CHAT_MODEL),
         // Same music routing as the Realtime/ElevenLabs engines; the hook's
         // system prompt already appends the navigate_to_page caveat.
         initialPrompt: currentSettings.initialPrompt + '\n\n' + MUSIC_TOOL_ROUTING_INSTRUCTIONS,
@@ -1395,7 +1401,9 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     const shouldStart =
       (mode === 'elevenlabs' && !!settings.elevenLabsAgentId?.trim()) ||
       (mode === 'openai' && !!settings.apiKey) ||
-      (mode === 'local' && !!settings.apiKey); // Voicebox engine needs the OpenAI key for its brain
+      // Voicebox engine needs the API key matching its brain provider
+      (mode === 'local' &&
+        (settings.brainProvider === 'claude' ? !!settings.claudeApiKey : !!settings.apiKey));
 
     console.log(
       `%c[Jarvis] Auto-start effect fired at ${new Date().toLocaleTimeString()} — restartTrigger=${restartTrigger}, shouldStart=${shouldStart}, mode=${mode}`,
@@ -1422,7 +1430,10 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     const hasCredentials =
       (newSettings.apiMode === 'openai'      && !!newSettings.apiKey?.trim()) ||
       (newSettings.apiMode === 'elevenlabs'  && !!newSettings.elevenLabsAgentId?.trim()) ||
-      (newSettings.apiMode === 'local'   && !!newSettings.apiKey?.trim());
+      (newSettings.apiMode === 'local'   &&
+        (newSettings.brainProvider === 'claude'
+          ? !!newSettings.claudeApiKey?.trim()
+          : !!newSettings.apiKey?.trim()));
     if (hasCredentials) {
       saveServerSettings({ jarvis_settings: serialised });
     }
