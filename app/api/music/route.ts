@@ -32,6 +32,10 @@ type SupportedApp = 'Spotify' | 'Music';
 
 const MUSIC_APPS: SupportedApp[] = ['Spotify', 'Music'];
 
+function isSupportedApp(value: unknown): value is SupportedApp {
+  return value === 'Spotify' || value === 'Music';
+}
+
 async function isRunning(app: string): Promise<boolean> {
   try {
     const result = await osa(`application "${app}" is running`);
@@ -121,6 +125,15 @@ end tell`);
   return null;
 }
 
+async function detectPlayingApp() {
+  for (const app of MUSIC_APPS) {
+    if (!(await isRunning(app))) continue;
+    const track = await getNowPlaying(app);
+    if (track?.isPlaying) return { app, track };
+  }
+  return null;
+}
+
 // Fallback: use nowplaying-cli if installed (brew install nowplaying-cli)
 // This reads the macOS system Now Playing widget — works with any app
 async function getNowPlayingFallback() {
@@ -178,7 +191,10 @@ export async function GET() {
       return NextResponse.json({ error: win.error });
     }
 
-    // macOS: Try AppleScript apps first
+    // macOS: Prefer the app that is actively playing, then any running app.
+    const playing = await detectPlayingApp();
+    if (playing) return NextResponse.json(playing.track);
+
     const app = await detectApp();
     if (app) {
       const track = await getNowPlaying(app);
@@ -198,7 +214,7 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
-    const { command, value, query } = await req.json();
+    const { command, value, query, app: requestedApp } = await req.json();
 
     if (command === 'search_play') {
       if (process.platform !== 'darwin') {
@@ -242,15 +258,13 @@ end tell`);
       return NextResponse.json({ success: true, command, app: 'Windows' });
     }
 
-    const app = await detectApp();
-    if (!app) return NextResponse.json({ error: 'No supported music app (Spotify/Music) is running for control.' });
-
     if (command === 'duck') {
-      const track = await getNowPlaying(app);
-      if (!track?.isPlaying) {
-        return NextResponse.json({ success: true, command, app, ducked: false });
+      const playing = await detectPlayingApp();
+      if (!playing) {
+        return NextResponse.json({ success: true, command, ducked: false });
       }
 
+      const { app } = playing;
       const rawVolume = await osa(`tell application "${app}" to get sound volume`);
       const previousVolume = Math.max(0, Math.min(100, Number(rawVolume)));
       const duckVolume = Math.max(0, Math.min(100, Number(value ?? 18)));
@@ -265,6 +279,20 @@ end tell`);
         previousVolume: Number.isFinite(previousVolume) ? previousVolume : null,
       });
     }
+
+    let app: SupportedApp | null = null;
+    if (requestedApp !== undefined) {
+      if (!isSupportedApp(requestedApp)) {
+        return NextResponse.json({ error: `Unsupported music app: ${String(requestedApp)}` }, { status: 400 });
+      }
+      if (!(await isRunning(requestedApp))) {
+        return NextResponse.json({ error: `${requestedApp} is not running.` }, { status: 400 });
+      }
+      app = requestedApp;
+    } else {
+      app = await detectApp();
+    }
+    if (!app) return NextResponse.json({ error: 'No supported music app (Spotify/Music) is running for control.' });
 
     let script = '';
     switch (command) {

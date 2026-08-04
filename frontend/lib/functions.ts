@@ -60,6 +60,18 @@ function normalizeSpotifyQuery(query: string): string {
   return query.replace(/\b(?:chef|chief|shef)\s+g\b/gi, 'Sheff G');
 }
 
+async function readActiveApiKey(): Promise<string> {
+  try {
+    const serverSettings = await loadServerSettings();
+    const raw = serverSettings.jarvis_settings || getCachedSetting('jarvis_settings');
+    if (!raw) return '';
+    const parsed = JSON.parse(raw) as { apiKey?: unknown };
+    return typeof parsed.apiKey === 'string' ? parsed.apiKey.trim() : '';
+  } catch {
+    return '';
+  }
+}
+
 // ── Calendar event fetching ───────────────────────────────────────────────────
 // Tries MCP (real event titles via OAuth) first, falls back to iCal feed.
 
@@ -706,13 +718,7 @@ export const FUNCTION_REGISTRY: JarvisFunction[] = [
         return { error: String(err) };
       }
 
-      let apiKey = '';
-      try {
-        const stored = localStorage.getItem('jarvis_settings');
-        apiKey = stored ? (JSON.parse(stored).apiKey ?? '') : '';
-      } catch {
-        return { error: 'Jarvis settings could not be read.' };
-      }
+      const apiKey = await readActiveApiKey();
       if (!apiKey) return { error: 'No API key found in settings.' };
 
       const platform = typeof navigator !== 'undefined' ? navigator.platform : 'unknown';

@@ -92,9 +92,14 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
   // session auto-reconnects, which prevents the model from navigating the
   // user back to "home" as part of its unsolicited greeting.
   const sessionStartTimeRef = useRef<number>(0);
-  const musicDuckRef = useRef<{ active: boolean; previousVolume: number | null }>({
+  const musicDuckRef = useRef<{
+    active: boolean;
+    previousVolume: number | null;
+    app: 'Spotify' | 'Music' | null;
+  }>({
     active: false,
     previousVolume: null,
+    app: null,
   });
   const musicDuckRequestRef = useRef<Promise<void> | null>(null);
   const musicRestoreTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -192,17 +197,19 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
           error?: string;
           ducked?: boolean;
           previousVolume?: number | null;
+          app?: 'Spotify' | 'Music';
         };
         if (!res.ok || data.error || !data.ducked) {
-          musicDuckRef.current = { active: false, previousVolume: null };
+          musicDuckRef.current = { active: false, previousVolume: null, app: null };
           return;
         }
         musicDuckRef.current.previousVolume =
           typeof data.previousVolume === 'number' ? data.previousVolume : null;
+        musicDuckRef.current.app = data.app ?? null;
         // Failsafe in case a provider disconnects without an audio-finished event.
         scheduleMusicRestore(30_000);
       } catch {
-        musicDuckRef.current = { active: false, previousVolume: null };
+        musicDuckRef.current = { active: false, previousVolume: null, app: null };
       }
     })();
 
@@ -231,15 +238,16 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     }
 
     const previousVolume = musicDuckRef.current.previousVolume;
+    const duckedApp = musicDuckRef.current.app;
     const wasActive = musicDuckRef.current.active;
-    musicDuckRef.current = { active: false, previousVolume: null };
-    if (!wasActive || previousVolume === null) return;
+    musicDuckRef.current = { active: false, previousVolume: null, app: null };
+    if (!wasActive || previousVolume === null || duckedApp === null) return;
 
     try {
       await fetch('/api/music', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ command: 'volume', value: previousVolume }),
+        body: JSON.stringify({ command: 'volume', value: previousVolume, app: duckedApp }),
       });
     } catch {
       // The failsafe is best-effort; a later manual volume change remains available.
