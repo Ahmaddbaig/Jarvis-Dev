@@ -22,6 +22,7 @@ const FFT_BARS = 64;
 // Keep speaker bleed and song vocals below the activation point while still
 // allowing a nearby user speaking clearly to interrupt playback.
 const REALTIME_VAD_THRESHOLD = 0.7;
+const MUSIC_PLAYBACK_RESTORE_FALLBACK_MS = 10_000;
 const MUSIC_TOOL_ROUTING_INSTRUCTIONS =
   'For any request to play a named artist, song, album, or playlist, always call play_spotify. ' +
   'Keep playback in the installed Spotify desktop application. Never open Spotify Web Player or a Spotify website, and never use open_url, web_search, run_shell_command, or computer_use for a music request. ' +
@@ -130,6 +131,9 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
         fn.name,
         async (params: Record<string, unknown>) => {
           const result = await fn.handler(params);
+          if (fn.name === 'play_spotify') {
+            scheduleMusicRestore(MUSIC_PLAYBACK_RESTORE_FALLBACK_MS);
+          }
           const r = result as Record<string, unknown> | null;
           if (typeof r?.error === 'string') {
             emitError('function', `${fn.name}(): ${r.error}`, 'error');
@@ -1039,6 +1043,10 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
             scheduleMusicRestore();
           }
 
+          if (data.type === 'response.done' && Object.keys(pendingCalls).length === 0) {
+            scheduleMusicRestore(500);
+          }
+
           // Accumulate argument deltas
           if (data.type === 'response.function_call_arguments.delta') {
             const id = data.call_id as string;
@@ -1081,6 +1089,9 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
             }
 
             const result = await fn.handler(parsedArgs);
+            if (fnName === 'play_spotify') {
+              scheduleMusicRestore(MUSIC_PLAYBACK_RESTORE_FALLBACK_MS);
+            }
 
             // Surface function-level errors (e.g. ENOENT, missing API key, network failures)
             // to the Error Terminal widget so they're visible without opening devtools.
