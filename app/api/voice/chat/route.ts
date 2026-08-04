@@ -3,14 +3,20 @@ import Anthropic from '@anthropic-ai/sdk';
 import { getClaudeApiKey, getOpenAiApiKey } from '@/backend/localvoice/config';
 
 /**
- * Brain for the Voicebox voice engine: one non-streaming chat round trip with
- * optional tools, against OpenAI or Claude depending on the selected provider.
- * The client drives the tool-call loop in OpenAI chat-completions shapes; the
- * Claude branch converts to/from Anthropic Messages API format server-side so
- * the frontend stays provider-agnostic. API keys stay server-side.
+ * Brain for the Voicebox voice engine: one chat round trip with optional
+ * tools, against OpenAI or Claude depending on the selected provider.
  *
- * GET  ?provider=openai|claude — health for the Settings UI: key configured?
- * POST { provider, model, messages, tools } → { message }
+ * POST streams NDJSON so the client can start TTS on the first sentence
+ * while the model is still writing:
+ *   {"t":"d","text":"..."}  — incremental text delta
+ *   {"t":"m","message":{...}} — final OpenAI-shaped message (incl. tool_calls)
+ *   {"t":"e","error":"..."} — mid-stream failure
+ * Pre-stream failures (bad key, validation) return plain JSON with an error
+ * status. The client drives the tool-call loop in OpenAI chat-completions
+ * shapes; the Claude branch converts formats server-side. Keys stay
+ * server-side.
+ *
+ * GET ?provider=openai|claude — health for the Settings UI: key configured?
  */
 
 const OPENAI_CHAT_URL = 'https://api.openai.com/v1/chat/completions';
@@ -49,6 +55,8 @@ interface ChatRequestBody {
   messages?: ChatMessage[];
   tools?: ChatTool[];
 }
+
+type Emit = (event: Record<string, unknown>) => void;
 
 function keyForProvider(provider: Provider): string {
   return provider === 'claude' ? getClaudeApiKey() : getOpenAiApiKey();
@@ -201,17 +209,34 @@ function fromClaudeResponse(response: Anthropic.Message): ChatMessage {
   };
 }
 
-async function chatWithClaude(
+function claudeErrorMessage(err: unknown, model: string): string {
+  if (err instanceof Anthropic.AuthenticationError) {
+    return 'Anthropic rejected the API key — check it in Settings.';
+  }
+  if (err instanceof Anthropic.NotFoundError) {
+    return `Claude model "${model}" was not found — check the model name in Settings.`;
+  }
+  if (err instanceof Anthropic.RateLimitError) {
+    return 'Anthropic rate limit hit — try again in a moment.';
+  }
+  if (err instanceof Anthropic.APIError) {
+    return `Claude request failed (${err.status ?? 'network'}): ${err.message}`;
+  }
+  return 'Could not reach the Anthropic API — check your internet connection.';
+}
+
+async function streamClaude(
   apiKey: string,
   model: string,
   messages: ChatMessage[],
   tools: ChatTool[],
-): Promise<NextResponse> {
+  emit: Emit,
+): Promise<void> {
   const client = new Anthropic({ apiKey, timeout: CHAT_TIMEOUT_MS });
   const { system, claudeMessages, claudeTools } = toClaudeRequest(messages, tools);
 
   try {
-    const response = await client.messages.create({
+    const stream = client.messages.stream({
       model,
       max_tokens: CLAUDE_MAX_TOKENS,
       // effort errors on models without support (e.g. Haiku 4.5) — only send
@@ -222,53 +247,31 @@ async function chatWithClaude(
       messages: claudeMessages,
     });
 
+    for await (const event of stream) {
+      if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+        emit({ t: 'd', text: event.delta.text });
+      }
+    }
+
+    const response = await stream.finalMessage();
     if (response.stop_reason === 'refusal') {
-      return NextResponse.json({
+      emit({
+        t: 'm',
         message: {
           role: 'assistant',
           content: "I'm afraid I can't help with that request, sir.",
         },
       });
+      return;
     }
-    return NextResponse.json({ message: fromClaudeResponse(response) });
+    emit({ t: 'm', message: fromClaudeResponse(response) });
   } catch (err) {
-    if (err instanceof Anthropic.AuthenticationError) {
-      return NextResponse.json(
-        { error: 'Anthropic rejected the API key — check it in Settings.' },
-        { status: 502 },
-      );
-    }
-    if (err instanceof Anthropic.NotFoundError) {
-      return NextResponse.json(
-        { error: `Claude model "${model}" was not found — check the model name in Settings.` },
-        { status: 502 },
-      );
-    }
-    if (err instanceof Anthropic.RateLimitError) {
-      return NextResponse.json(
-        { error: 'Anthropic rate limit hit — try again in a moment.' },
-        { status: 502 },
-      );
-    }
-    if (err instanceof Anthropic.APIError) {
-      console.error('[voice/chat] claude', err.status, err.message);
-      return NextResponse.json(
-        { error: `Claude request failed (${err.status ?? 'network'}): ${err.message}` },
-        { status: 502 },
-      );
-    }
     console.error('[voice/chat] claude', err instanceof Error ? err.message : err);
-    return NextResponse.json(
-      { error: 'Could not reach the Anthropic API — check your internet connection.' },
-      { status: 502 },
-    );
+    emit({ t: 'e', error: claudeErrorMessage(err, model) });
   }
 }
 
-async function chatWithOpenAi(
-  apiKey: string,
-  body: ChatRequestBody,
-): Promise<NextResponse> {
+async function streamOpenAi(apiKey: string, body: ChatRequestBody, emit: Emit): Promise<void> {
   const tools = Array.isArray(body.tools) ? body.tools : [];
   try {
     const res = await fetch(OPENAI_CHAT_URL, {
@@ -281,12 +284,12 @@ async function chatWithOpenAi(
         model: body.model,
         messages: body.messages,
         ...(tools.length > 0 ? { tools } : {}),
-        stream: false,
+        stream: true,
       }),
       signal: AbortSignal.timeout(CHAT_TIMEOUT_MS),
     });
 
-    if (!res.ok) {
+    if (!res.ok || !res.body) {
       const text = await res.text();
       let detail = '';
       try {
@@ -301,28 +304,89 @@ async function chatWithOpenAi(
             ? 'OpenAI rate limit hit — try again in a moment.'
             : `OpenAI chat failed (${res.status})`;
       console.error('[voice/chat] openai', res.status, detail);
-      return NextResponse.json(
-        { error: detail ? `${friendly} ${detail}` : friendly },
-        { status: 502 },
-      );
+      emit({ t: 'e', error: detail ? `${friendly} ${detail}` : friendly });
+      return;
     }
 
-    const data = (await res.json()) as { choices?: { message?: ChatMessage }[] };
-    const message = data.choices?.[0]?.message ?? { role: 'assistant', content: '' };
-    return NextResponse.json({
-      message: { ...message, content: message.content ?? '' },
+    // Parse the OpenAI SSE stream, forwarding text deltas and accumulating
+    // the full message (content + indexed tool_call fragments).
+    let content = '';
+    const toolCalls = new Map<number, { id?: string; name: string; args: string }>();
+    const decoder = new TextDecoder();
+    const reader = res.body.getReader();
+    let buffer = '';
+
+    const handleLine = (line: string) => {
+      if (!line.startsWith('data:')) return;
+      const payload = line.slice(5).trim();
+      if (!payload || payload === '[DONE]') return;
+      let parsed: {
+        choices?: {
+          delta?: {
+            content?: string | null;
+            tool_calls?: {
+              index: number;
+              id?: string;
+              function?: { name?: string; arguments?: string };
+            }[];
+          };
+        }[];
+      };
+      try {
+        parsed = JSON.parse(payload);
+      } catch {
+        return;
+      }
+      const delta = parsed.choices?.[0]?.delta;
+      if (!delta) return;
+      if (typeof delta.content === 'string' && delta.content) {
+        content += delta.content;
+        emit({ t: 'd', text: delta.content });
+      }
+      for (const tc of delta.tool_calls ?? []) {
+        const entry = toolCalls.get(tc.index) ?? { name: '', args: '' };
+        if (tc.id) entry.id = tc.id;
+        if (tc.function?.name) entry.name += tc.function.name;
+        if (tc.function?.arguments) entry.args += tc.function.arguments;
+        toolCalls.set(tc.index, entry);
+      }
+    };
+
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
+      for (const line of lines) handleLine(line.trim());
+    }
+    if (buffer.trim()) handleLine(buffer.trim());
+
+    const calls: ChatToolCall[] = [...toolCalls.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([, c]) => ({
+        id: c.id,
+        type: 'function' as const,
+        function: { name: c.name, arguments: c.args || '{}' },
+      }));
+
+    emit({
+      t: 'm',
+      message: {
+        role: 'assistant',
+        content,
+        ...(calls.length > 0 ? { tool_calls: calls } : {}),
+      },
     });
   } catch (err) {
     const isTimeout = err instanceof Error && err.name === 'TimeoutError';
     console.error('[voice/chat] openai', err instanceof Error ? err.message : err);
-    return NextResponse.json(
-      {
-        error: isTimeout
-          ? 'OpenAI request timed out.'
-          : 'Could not reach the OpenAI API — check your internet connection.',
-      },
-      { status: 502 },
-    );
+    emit({
+      t: 'e',
+      error: isTimeout
+        ? 'OpenAI request timed out.'
+        : 'Could not reach the OpenAI API — check your internet connection.',
+    });
   }
 }
 
@@ -349,8 +413,31 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  if (provider === 'claude') {
-    return chatWithClaude(apiKey, body.model!, body.messages!, body.tools ?? []);
-  }
-  return chatWithOpenAi(apiKey, body);
+  const encoder = new TextEncoder();
+  const ndjson = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const emit: Emit = (event) => {
+        controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+      };
+      try {
+        if (provider === 'claude') {
+          await streamClaude(apiKey, body.model!, body.messages!, body.tools ?? [], emit);
+        } else {
+          await streamOpenAi(apiKey, body, emit);
+        }
+      } catch (err) {
+        console.error('[voice/chat]', err instanceof Error ? err.message : err);
+        emit({ t: 'e', error: 'Chat request failed.' });
+      } finally {
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(ndjson, {
+    headers: {
+      'Content-Type': 'application/x-ndjson',
+      'Cache-Control': 'no-store',
+    },
+  });
 }

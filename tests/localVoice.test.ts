@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 import {
   buildSystemPrompt,
   capHistory,
+  extractSpeakableChunks,
   parseToolArgs,
   toChatTools,
   ChatMessage,
@@ -97,6 +98,39 @@ describe('capHistory', () => {
     const capped = capHistory(history, 4);
     expect(capped[0]).toEqual(system);
     expect(capped[1].role).toBe('user');
+  });
+});
+
+describe('extractSpeakableChunks', () => {
+  test('extracts complete sentences and keeps the unfinished tail', () => {
+    const { chunks, rest } = extractSpeakableChunks(
+      'Good evening, sir. All systems are online. The weather tod',
+    );
+    expect(chunks).toEqual(['Good evening, sir.', 'All systems are online.']);
+    expect(rest).toBe('The weather tod');
+  });
+
+  test('returns no chunks for an incomplete sentence', () => {
+    const { chunks, rest } = extractSpeakableChunks('Checking the printer status');
+    expect(chunks).toEqual([]);
+    expect(rest).toBe('Checking the printer status');
+  });
+
+  test('holds short abbreviation-like fragments until more text arrives', () => {
+    const { chunks, rest } = extractSpeakableChunks('Dr. Smith has arrived at the lab. And');
+    expect(chunks).toEqual(['Dr. Smith has arrived at the lab.']);
+    expect(rest).toBe('And');
+  });
+
+  test('handles question and exclamation boundaries', () => {
+    const { chunks } = extractSpeakableChunks('Shall I proceed, sir? Very well then!');
+    expect(chunks).toEqual(['Shall I proceed, sir?', 'Very well then!']);
+  });
+
+  test('does not split decimal numbers', () => {
+    const { chunks, rest } = extractSpeakableChunks('The value of pi is 3.14159 and counting');
+    expect(chunks).toEqual([]);
+    expect(rest).toBe('The value of pi is 3.14159 and counting');
   });
 });
 

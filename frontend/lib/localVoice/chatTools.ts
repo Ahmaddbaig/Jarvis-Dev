@@ -76,6 +76,34 @@ export function buildSystemPrompt(initialPrompt: string): string {
   );
 }
 
+// Below this length a "sentence" is more likely an abbreviation ("Dr.",
+// "e.g.") than a real boundary — hold it until more text arrives.
+const MIN_SPEAKABLE_CHARS = 12;
+const SENTENCE_BOUNDARY = /[.!?…]+["')\]]?(?:\s+|$)/g;
+
+/**
+ * Pull complete, speakable sentences off the front of a streaming text
+ * buffer. Returns the extracted chunks plus the unfinished remainder, so TTS
+ * can start on sentence one while the model is still writing sentence three.
+ */
+export function extractSpeakableChunks(buffer: string): { chunks: string[]; rest: string } {
+  const chunks: string[] = [];
+  let start = 0;
+  SENTENCE_BOUNDARY.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = SENTENCE_BOUNDARY.exec(buffer)) !== null) {
+    const end = match.index + match[0].length;
+    const candidate = buffer.slice(start, end).trim();
+    if (candidate.length >= MIN_SPEAKABLE_CHARS) {
+      chunks.push(candidate);
+      start = end;
+    }
+    // Too short: leave `start` alone so the fragment merges into the next
+    // sentence ("Dr." + " Smith is here.").
+  }
+  return { chunks, rest: buffer.slice(start) };
+}
+
 /**
  * Cap conversation history without corrupting tool-call chains.
  * Keeps the leading system message(s) plus the most recent messages, advancing

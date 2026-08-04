@@ -6,6 +6,7 @@ import { encodeWav, SpeechPlayer } from './audio';
 import {
   buildSystemPrompt,
   capHistory,
+  extractSpeakableChunks,
   parseToolArgs,
   toChatTools,
   ChatMessage,
@@ -85,60 +86,154 @@ export function useLocalConversation(
     emitError('local', message, 'error');
   }, []);
 
-  const speak = useCallback(async (text: string): Promise<void> => {
+  // Sentence-pipelined speech: TTS fetches run in order (Voicebox serves one
+  // inference at a time) while playback of earlier sentences is under way, so
+  // Jarvis starts talking after the FIRST sentence instead of after the full
+  // reply is generated and synthesized.
+  const ttsChainRef = useRef<Promise<void>>(Promise.resolve());
+  const playChainRef = useRef<Promise<void>>(Promise.resolve());
+  // Sentences accepted for synthesis but not yet finished playing — barge-in
+  // must cancel these even during the silent gap between two sentences.
+  const pendingSpeechRef = useRef(0);
+
+  const enqueueSpeak = useCallback((text: string): void => {
+    const trimmed = text.trim();
     const player = playerRef.current;
     const options = optionsRef.current;
-    if (!player || !options || !text.trim()) return;
+    if (!player || !options || !trimmed) return;
 
     const sessionId = sessionIdRef.current;
-    const speakToken = ++speakTokenRef.current;
-
-    const res = await fetch('/api/voice/speak', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, profileId: options.voiceProfileId }),
-    });
-    if (!res.ok) {
-      const data = (await res.json().catch(() => null)) as { error?: string } | null;
-      throw new Error(data?.error ?? `Speech failed (${res.status})`);
-    }
-    const blob = await res.blob();
-
-    // Discard stale audio: the session ended, the player was replaced, or a
-    // newer turn started speaking while this response was in flight.
-    if (
+    const speakToken = speakTokenRef.current;
+    // Stale when the session ended, a barge-in/new turn superseded this
+    // reply, or the player was replaced.
+    const isStale = () =>
       sessionId !== sessionIdRef.current ||
       speakToken !== speakTokenRef.current ||
-      playerRef.current !== player
-    ) {
-      return;
-    }
-    await player.play(blob);
-  }, []);
+      playerRef.current !== player;
 
-  const runToolLoop = useCallback(async (): Promise<string> => {
+    const blobPromise: Promise<Blob | null> = ttsChainRef.current.then(async () => {
+      if (isStale()) return null;
+      const res = await fetch('/api/voice/speak', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: trimmed, profileId: options.voiceProfileId }),
+      });
+      if (!res.ok) {
+        const data = (await res.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(data?.error ?? `Speech failed (${res.status})`);
+      }
+      return res.blob();
+    });
+    ttsChainRef.current = blobPromise.then(
+      () => undefined,
+      () => undefined,
+    );
+
+    pendingSpeechRef.current += 1;
+    playChainRef.current = playChainRef.current
+      .then(async () => {
+        const blob = await blobPromise;
+        if (!blob || isStale()) return;
+        await player.play(blob);
+      })
+      .catch((err) => {
+        reportTurnError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        pendingSpeechRef.current = Math.max(0, pendingSpeechRef.current - 1);
+      });
+  }, [reportTurnError]);
+
+  /**
+   * One chat round trip, reading the route's NDJSON stream. Text deltas are
+   * spoken sentence-by-sentence as they arrive; the final message (with any
+   * tool calls) resolves the promise.
+   */
+  const streamChatRound = useCallback(async (): Promise<ChatMessage> => {
     const options = optionsRef.current;
-    if (!options) return '';
+    if (!options) throw new Error('No active session');
+
+    const res = await fetch('/api/voice/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider: options.provider,
+        model: options.model,
+        messages: historyRef.current,
+        tools: toolsRef.current,
+      }),
+    });
+    if (!res.ok || !res.body) {
+      const data = (await res.json().catch(() => null)) as { error?: string } | null;
+      throw new Error(data?.error ?? `Chat request failed (${res.status})`);
+    }
+
+    let message: ChatMessage | null = null;
+    let sentenceBuffer = '';
+    let spokenText = '';
+    const handleLine = (line: string) => {
+      if (!line) return;
+      let event: { t?: string; text?: string; message?: ChatMessage; error?: string };
+      try {
+        event = JSON.parse(line);
+      } catch {
+        return;
+      }
+      if (event.t === 'd' && event.text) {
+        sentenceBuffer += event.text;
+        const { chunks, rest } = extractSpeakableChunks(sentenceBuffer);
+        sentenceBuffer = rest;
+        for (const chunk of chunks) {
+          enqueueSpeak(chunk);
+          spokenText += (spokenText ? ' ' : '') + chunk;
+        }
+      } else if (event.t === 'm' && event.message) {
+        message = event.message;
+      } else if (event.t === 'e') {
+        throw new Error(event.error ?? 'Chat request failed.');
+      }
+    };
+
+    try {
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+        for (const line of lines) handleLine(line.trim());
+      }
+      if (buffer.trim()) handleLine(buffer.trim());
+    } catch (err) {
+      // Anything already spoken aloud must survive in history, or the next
+      // turn's model has no memory of what the user just heard.
+      if (spokenText) {
+        historyRef.current = [
+          ...historyRef.current,
+          { role: 'assistant', content: `${spokenText} (reply interrupted by an error)` },
+        ];
+      }
+      throw err;
+    }
+
+    if (!message) throw new Error('Chat stream ended without a message.');
+    // The tail of the reply usually lacks trailing punctuation — speak it.
+    if (sentenceBuffer.trim()) enqueueSpeak(sentenceBuffer);
+    return message;
+  }, [enqueueSpeak]);
+
+  /** Runs chat rounds, executing tool calls until the model answers in text. */
+  const runToolLoop = useCallback(async (): Promise<void> => {
+    const options = optionsRef.current;
+    if (!options) return;
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
       historyRef.current = capHistory(historyRef.current, MAX_HISTORY_MESSAGES);
 
-      const res = await fetch('/api/voice/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          provider: options.provider,
-          model: options.model,
-          messages: historyRef.current,
-          tools: toolsRef.current,
-        }),
-      });
-      if (!res.ok) {
-        const data = (await res.json().catch(() => null)) as { error?: string } | null;
-        throw new Error(data?.error ?? `Chat request failed (${res.status})`);
-      }
-
-      const { message } = (await res.json()) as { message: ChatMessage };
+      const message = await streamChatRound();
       const toolCalls: ChatToolCall[] = message.tool_calls ?? [];
 
       if (toolCalls.length === 0) {
@@ -146,7 +241,7 @@ export function useLocalConversation(
           ...historyRef.current,
           { role: 'assistant', content: message.content ?? '' },
         ];
-        return (message.content ?? '').trim();
+        return; // already spoken via the streaming sentence queue
       }
 
       // Record the assistant's tool request, then execute each call with the
@@ -198,8 +293,8 @@ export function useLocalConversation(
       }
     }
 
-    return 'I got stuck in a tool loop, sir. Could you rephrase the request?';
-  }, []);
+    enqueueSpeak('I got stuck in a tool loop, sir. Could you rephrase the request?');
+  }, [streamChatRound, enqueueSpeak]);
 
   const processSpeechSegment = useCallback(async (audio: Float32Array): Promise<void> => {
     const sessionId = sessionIdRef.current;
@@ -218,28 +313,32 @@ export function useLocalConversation(
       if (sessionId !== sessionIdRef.current) return;
       if (!text || text.length < MIN_TRANSCRIPT_CHARS) return;
 
+      // Only a VALIDATED user turn supersedes a reply still being synthesized
+      // or played — a noise blip that transcribes to nothing must not
+      // truncate Jarvis mid-answer.
+      speakTokenRef.current += 1;
       historyRef.current = [...historyRef.current, { role: 'user', content: text }];
-      const reply = await runToolLoop();
-      if (sessionId !== sessionIdRef.current) return;
-
-      // Speaking is interruptible: clear busy before playback so VAD speech
-      // events (barge-in) are accepted while Jarvis talks.
-      busyRef.current = false;
-      if (reply) await speak(reply);
+      // Speech is pipelined inside the loop; playback continues after this
+      // resolves, and busyRef clears below so barge-in speech is accepted
+      // while Jarvis is still talking.
+      await runToolLoop();
     } catch (err) {
       reportTurnError(err instanceof Error ? err.message : String(err));
     } finally {
       if (sessionId === sessionIdRef.current) busyRef.current = false;
     }
-  }, [runToolLoop, speak, reportTurnError]);
+  }, [runToolLoop, reportTurnError]);
 
   const endSession = useCallback(() => {
     sessionIdRef.current += 1;
+    speakTokenRef.current += 1;
     const vad = vadRef.current;
     vadRef.current = null;
     if (vad) void vad.destroy();
     playerRef.current?.destroy();
     playerRef.current = null;
+    ttsChainRef.current = Promise.resolve();
+    playChainRef.current = Promise.resolve();
     historyRef.current = [];
     optionsRef.current = null;
     toolsRef.current = [];
@@ -288,8 +387,13 @@ export function useLocalConversation(
         onnxWASMBasePath: VAD_ASSET_PATH,
         startOnLoad: false,
         onSpeechStart: () => {
-          // Barge-in: user talking over Jarvis stops playback immediately.
-          if (playerRef.current?.isPlaying) playerRef.current.stop();
+          // Barge-in: user talking over Jarvis stops playback immediately
+          // and discards any queued sentences still being synthesized — also
+          // during the silent gap while the next sentence's TTS is in flight.
+          if (playerRef.current?.isPlaying || pendingSpeechRef.current > 0) {
+            speakTokenRef.current += 1;
+            playerRef.current?.stop();
+          }
         },
         onSpeechEnd: (audio: Float32Array) => {
           if (mutedRef.current || busyRef.current) return;
@@ -311,9 +415,7 @@ export function useLocalConversation(
           ...historyRef.current,
           { role: 'assistant', content: options.firstMessage.trim() },
         ];
-        speak(options.firstMessage.trim()).catch((err) => {
-          reportTurnError(err instanceof Error ? err.message : String(err));
-        });
+        enqueueSpeak(options.firstMessage.trim());
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -321,7 +423,7 @@ export function useLocalConversation(
       callbacksRef.current.onError?.(message);
       throw err;
     }
-  }, [endSession, processSpeechSegment, speak, reportTurnError]);
+  }, [endSession, processSpeechSegment, enqueueSpeak, reportTurnError]);
 
   const setMuted = useCallback((muted: boolean) => {
     mutedRef.current = muted;
@@ -329,6 +431,7 @@ export function useLocalConversation(
     if (!vad) return;
     if (muted) {
       void vad.pause();
+      speakTokenRef.current += 1; // discard queued sentences too
       playerRef.current?.stop();
     } else {
       void vad.start();
