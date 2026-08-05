@@ -20,13 +20,13 @@ const domainDeclarations: StaticToolDeclaration[] = [
 ];
 
 const declarationsByOperation = new Map<string, StaticToolDeclaration>();
-const handlerIds = new Set<string>();
+const declarationsByHandler = new Map<string, StaticToolDeclaration>();
 for (const declaration of domainDeclarations) {
   const operation = declaration.policy.operation;
   if (declarationsByOperation.has(operation)) throw new Error(`Duplicate static tool operation: ${operation}`);
-  if (handlerIds.has(declaration.handlerId)) throw new Error(`Duplicate static tool handler: ${declaration.handlerId}`);
+  if (declarationsByHandler.has(declaration.handlerId)) throw new Error(`Duplicate static tool handler: ${declaration.handlerId}`);
   declarationsByOperation.set(operation, declaration);
-  handlerIds.add(declaration.handlerId);
+  declarationsByHandler.set(declaration.handlerId, declaration);
 }
 
 const COMPATIBILITY_ORDER = [
@@ -82,6 +82,10 @@ export const STATIC_TOOL_DEFINITIONS: readonly CapabilityDefinition[] = Object.f
 
 export function resolveStaticToolDeclaration(operation: string): StaticToolDeclaration | undefined {
   return declarationsByOperation.get(operation);
+}
+
+export function resolveStaticToolHandler(handlerId: string): StaticToolDeclaration | undefined {
+  return declarationsByHandler.get(handlerId);
 }
 
 export function parseStaticToolInput(operation: string, input: unknown): unknown {
