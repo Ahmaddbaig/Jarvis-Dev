@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { saveServerSettings, getCachedSetting } from '@/frontend/lib/serverSettings';
+import { saveServerSettings } from '@/frontend/lib/serverSettings';
 import { PageHeader } from '../PageHeader';
 import {
   useDisconnectPrinters,
@@ -71,7 +71,6 @@ function BambuWizard({ onComplete }: { onComplete: () => void }) {
       if (data.status === 'code_sent') {
         setStep('code');
       } else       if (data.status === 'authenticated') {
-        localStorage.setItem('bambu_email', email.trim());
         saveServerSettings({ bambu_email: email.trim() });
         setStep('connecting');
         setTimeout(onComplete, 1500);
@@ -93,8 +92,6 @@ function BambuWizard({ onComplete }: { onComplete: () => void }) {
       });
       const data = await res.json() as { success?: boolean; error?: string; tokenExpiration?: number };
       if (data.success) {
-        localStorage.setItem('bambu_email', email.trim());
-        localStorage.setItem('bambu_token_exp', String(data.tokenExpiration ?? 0));
         saveServerSettings({ bambu_email: email.trim(), bambu_token_exp: String(data.tokenExpiration ?? 0) });
         setStep('connecting');
         setTimeout(onComplete, 1500);

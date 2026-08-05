@@ -36,6 +36,9 @@ export type ServerSettings = {
   // Voicebox voice engine
   jarvis_voicebox_url?: string;    // default http://127.0.0.1:17493
 
+  // Calendar onboarding
+  jarvis_gcal_wizard_skipped?: string;
+
   credentialStatus?: CredentialStatus;
 };
 
@@ -54,6 +57,7 @@ const LEGACY_NON_SECRET_KEYS: readonly StringSettingKey[] = [
   'bambu_token_exp',
   'jarvis_news_settings',
   'jarvis_voicebox_url',
+  'jarvis_gcal_wizard_skipped',
 ];
 
 function localNonSecretImport(serverSettings: ServerSettings): Partial<ServerSettings> {
@@ -102,23 +106,9 @@ export async function fetchServerSettings(signal?: AbortSignal): Promise<ServerS
     });
     if (!importResponse.ok) throw new Error(`Legacy settings import returned HTTP ${importResponse.status}.`);
     data = { ...data, ...localImport };
-    localStorage.setItem('jarvis_settings_migrated_v1', 'true');
   }
   _cache = data;
   _loaded = true;
-  // Back-fill localStorage so the host machine benefits from server settings too
-  if (typeof window !== 'undefined') {
-    const syncKeys: StringSettingKey[] = [
-      'jarvis_ha_url',
-      'jarvis_weather_location', 'jarvis_weather_lat', 'jarvis_weather_lon',
-      'bambu_email', 'bambu_token_exp',
-    ];
-    for (const key of syncKeys) {
-      if (data[key] && !localStorage.getItem(key)) {
-        localStorage.setItem(key, data[key]);
-      }
-    }
-  }
   return data;
 }
 

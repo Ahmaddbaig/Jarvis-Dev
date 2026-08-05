@@ -29,14 +29,34 @@ extraResources:
     to: ai-engine
     filter:
       - "**/*"
+  - from: .build/release-evidence/artifact-manifest.json
+    to: artifact-manifest.json
+  - from: .build/release-evidence/sbom.cdx.json
+    to: sbom.cdx.json
 
 mac:
   category: public.app-category.productivity
   icon: buildfiles/icon.png
+  target:
+    - dmg
+    - zip
+  minimumSystemVersion: "12.0"
+  hardenedRuntime: true
+  notarize: true
+  entitlements: buildfiles/entitlements.mac.plist
+  entitlementsInherit: buildfiles/entitlements.mac.plist
 
 win:
   icon: buildfiles/icon.png
+  target:
+    - nsis
+    - zip
+
+nsis:
+  deleteAppDataOnUninstall: false
 
 linux:
   category: Utility
   icon: buildfiles/icon.png
+  target:
+    - AppImage

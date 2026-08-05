@@ -35,17 +35,16 @@ export default function Home() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [pendingMapCmd, setPendingMapCmd] = useState<Record<string, any> | null>(null);
 
-  // Persist current page so it survives full tab reloads (iOS Safari jettisoning,
-  // Next.js HMR reconnects, etc.)
+  // Keep navigation for this renderer session only. Durable settings belong to Core.
   useEffect(() => {
-    localStorage.setItem('jarvis_current_page', currentPage);
+    sessionStorage.setItem('jarvis_current_page', currentPage);
   }, [currentPage]);
 
   useEffect(() => {
     // Log the reason for this page mount — critical for diagnosing unexpected reloads.
     const nav = (performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined);
     const navType = nav?.type ?? 'unknown'; // 'navigate' | 'reload' | 'back_forward' | 'prerender'
-    const restored = localStorage.getItem('jarvis_current_page');
+    const restored = sessionStorage.getItem('jarvis_current_page');
     console.log(
       `%c[Jarvis Page] MOUNTED — nav type: "${navType}" | restored page: "${restored ?? 'none'}" | timestamp: ${new Date().toLocaleTimeString()}`,
       'background:#1a1a2e;color:#00d4ff;font-weight:bold;padding:2px 6px;border-radius:3px'
@@ -59,7 +58,7 @@ export default function Home() {
 
   useEffect(() => {
     // Restore the last page the user was on after hydration completes.
-    const saved = localStorage.getItem('jarvis_current_page') as JarvisPage | null;
+    const saved = sessionStorage.getItem('jarvis_current_page') as JarvisPage | null;
     if (saved && VALID_PAGES.includes(saved) && saved !== 'home') {
       setCurrentPage(saved);
     }

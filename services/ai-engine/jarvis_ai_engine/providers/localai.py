@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import time
-from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -201,7 +199,10 @@ class LocalAIProvider(AIProvider):
         async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
             response = await client.post(f"{self.config.local_ai_base_url}{path}", json=payload)
             response.raise_for_status()
-            return response.json()
+            result = response.json()
+            if not isinstance(result, dict):
+                raise ValueError("LocalAI returned a non-object JSON response.")
+            return cast(dict[str, Any], result)
 
     async def monitor_idle_unload(self) -> None:
         async def progress(_value: float, message: str) -> None:
@@ -227,7 +228,7 @@ class LocalAIProvider(AIProvider):
             self.process.terminate()
             try:
                 await asyncio.wait_for(self.process.wait(), timeout=8)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 self.process.kill()
                 await self.process.wait()
         for task in self._log_tasks:

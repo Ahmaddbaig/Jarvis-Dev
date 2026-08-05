@@ -6,8 +6,14 @@ import os
 import platform
 import secrets
 import sys
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
+
+try:
+    import resource
+except ImportError:  # pragma: no cover - unavailable on Windows
+    resource = None  # type: ignore[assignment]
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Response, status
 from fastapi.responses import JSONResponse
@@ -28,12 +34,22 @@ def memory_bytes() -> int | None:
     return None
 
 
+def process_peak_rss_bytes() -> int | None:
+    if resource is None:
+        return None
+    try:
+        peak = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+        return peak if sys.platform == "darwin" else peak * 1024
+    except (AttributeError, OSError, ValueError):
+        return None
+
+
 def create_app(config: EngineConfig) -> FastAPI:
     provider = LocalAIProvider(config)
     jobs = JobManager()
 
     @asynccontextmanager
-    async def lifespan(_app: FastAPI):
+    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         idle_monitor = asyncio.create_task(provider.monitor_idle_unload(), name="localai-idle-unload")
         try:
             yield
@@ -61,7 +77,7 @@ def create_app(config: EngineConfig) -> FastAPI:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid service credential.")
 
     @app.exception_handler(Exception)
-    async def safe_error(_request: Any, error: Exception):
+    async def safe_error(_request: Any, error: Exception) -> JSONResponse:
         return JSONResponse(
             status_code=500,
             content={"error": {"code": "ai_engine_error", "message": str(error)[:1_000]}},
@@ -79,6 +95,7 @@ def create_app(config: EngineConfig) -> FastAPI:
                 "platform": platform.system().lower(),
                 "architecture": platform.machine().lower(),
                 "memoryBytes": memory_bytes(),
+                "processPeakRssBytes": process_peak_rss_bytes(),
                 "frozen": bool(getattr(sys, "frozen", False)),
             },
             "packages": {
@@ -149,11 +166,17 @@ def create_app(config: EngineConfig) -> FastAPI:
 
     @app.post("/v1/transcribe", dependencies=[Depends(authorize)])
     async def transcribe(_request: TranscribeRequest) -> Response:
-        raise HTTPException(status_code=501, detail="Transcription remains on the direct LocalAI WebRTC path in this migration.")
+        raise HTTPException(
+            status_code=501,
+            detail="Transcription remains on the direct LocalAI WebRTC path in this migration.",
+        )
 
     @app.post("/v1/speak", dependencies=[Depends(authorize)])
     async def speak(_request: SpeakRequest) -> Response:
-        raise HTTPException(status_code=501, detail="Speech remains on the direct LocalAI WebRTC path in this migration.")
+        raise HTTPException(
+            status_code=501,
+            detail="Speech remains on the direct LocalAI WebRTC path in this migration.",
+        )
 
     @app.post("/v1/vision", dependencies=[Depends(authorize)])
     async def vision(request: VisionRequest) -> dict[str, Any]:

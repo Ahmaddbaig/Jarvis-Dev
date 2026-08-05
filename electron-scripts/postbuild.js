@@ -12,6 +12,14 @@ const forbiddenRootFiles = [
   'jarvis-companions.json',
   'jarvis-server-settings.json',
 ];
+const standaloneAllowlist = new Set([
+  '.next',
+  'node_modules',
+  'package.json',
+  'public',
+  'scripts',
+  'server.js',
+]);
 
 function fail(message) {
   console.error(`[postbuild] ${message}`);
@@ -49,12 +57,24 @@ function removeLocalState() {
   if (leaked.length > 0) fail(`Refusing to package local state: ${leaked.join(', ')}`);
 }
 
+function pruneTracedProjectFiles() {
+  for (const name of fs.readdirSync(standaloneRoot)) {
+    if (!standaloneAllowlist.has(name)) {
+      fs.rmSync(path.join(standaloneRoot, name), { recursive: true, force: true });
+    }
+  }
+  const unexpected = fs.readdirSync(standaloneRoot).filter((name) => !standaloneAllowlist.has(name));
+  if (unexpected.length > 0) fail(`Standalone allowlist failed: ${unexpected.join(', ')}`);
+}
+
 if (!fs.existsSync(serverPath)) {
   fail('Next standalone server is missing. Run `npm run build:next` before postbuild.');
 }
 
 replaceDirectory(path.join(projectRoot, 'public'), path.join(standaloneRoot, 'public'));
 replaceDirectory(path.join(projectRoot, '.next', 'static'), path.join(standaloneRoot, '.next', 'static'));
+
+pruneTracedProjectFiles();
 
 const packagedScripts = path.join(standaloneRoot, 'scripts');
 fs.rmSync(packagedScripts, { recursive: true, force: true });

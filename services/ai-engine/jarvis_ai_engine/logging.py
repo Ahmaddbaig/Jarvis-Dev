@@ -4,7 +4,7 @@ import json
 import logging
 import re
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 _BEARER = re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~-]+")
 _SECRET_FIELD = re.compile(r'(?i)("(?:token|authorization|api[_-]?key)"\s*:\s*")[^"]+')
@@ -19,7 +19,7 @@ def redact(value: object) -> str:
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         payload = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "level": record.levelname.lower(),
             "logger": record.name,
             "message": redact(record.getMessage()),

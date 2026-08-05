@@ -46,6 +46,44 @@ function remoteClientDiagnostics() {
   };
 }
 
+function releaseArtifactDiagnostics() {
+  const manifestPath = process.env.JARVIS_ARTIFACT_MANIFEST_PATH && path.isAbsolute(process.env.JARVIS_ARTIFACT_MANIFEST_PATH)
+    ? process.env.JARVIS_ARTIFACT_MANIFEST_PATH
+    : path.join(process.cwd(), '.build', 'release-evidence', 'artifact-manifest.json');
+  const sbomPath = process.env.JARVIS_SBOM_PATH && path.isAbsolute(process.env.JARVIS_SBOM_PATH)
+    ? process.env.JARVIS_SBOM_PATH
+    : path.join(process.cwd(), '.build', 'release-evidence', 'sbom.cdx.json');
+  const aiEnginePath = process.env.JARVIS_AI_ENGINE_RESOURCE_PATH && path.isAbsolute(process.env.JARVIS_AI_ENGINE_RESOURCE_PATH)
+    ? process.env.JARVIS_AI_ENGINE_RESOURCE_PATH
+    : null;
+  const manifest = readJsonFile(manifestPath);
+  const application = manifest?.application && typeof manifest.application === 'object'
+    ? manifest.application as Record<string, unknown>
+    : null;
+  const source = manifest?.source && typeof manifest.source === 'object'
+    ? manifest.source as Record<string, unknown>
+    : null;
+  return {
+    manifestPresent: fs.existsSync(manifestPath),
+    sbomPresent: fs.existsSync(sbomPath),
+    identity: manifest ? {
+      schemaVersion: manifest.schemaVersion ?? null,
+      appVersion: application?.version ?? null,
+      gitSha: source?.gitSha ?? null,
+      dirty: source?.dirty ?? null,
+      protocols: manifest.protocols ?? null,
+      database: manifest.database ?? null,
+      runtimes: manifest.runtimes ?? null,
+      models: manifest.models ?? null,
+    } : null,
+    resources: {
+      chromeExtension: fs.existsSync(process.env.JARVIS_CHROME_EXTENSION_PATH || path.join(process.cwd(), 'chrome-extension')),
+      aiEngine: aiEnginePath ? fs.existsSync(aiEnginePath) : false,
+      sbom: fs.existsSync(sbomPath),
+    },
+  };
+}
+
 function normalizeWindowsCmdPath(raw: string): string {
   return raw.trim().replace(/^["']+|["']+$/g, '');
 }
@@ -199,5 +237,6 @@ export async function GET() {
     macAccessibility: probeMacAccessibility(),
     python,
     remoteClients: remoteClientDiagnostics(),
+    releaseArtifact: releaseArtifactDiagnostics(),
   });
 }

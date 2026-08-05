@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 ProgressCallback = Callable[[float, str], Awaitable[None]]
@@ -13,7 +12,7 @@ JobWork = Callable[[asyncio.Event, ProgressCallback], Awaitable[dict[str, Any] |
 
 
 def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 @dataclass(slots=True)

@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import Image from 'next/image';
 import { sfx, sfxSlide } from '@/frontend/lib/sfx';
 import { useIsMobile } from '@/frontend/hooks/useIsMobile';
+import { getCachedSetting } from '@/frontend/lib/serverSettings';
 
 type Phase = 'black' | 'scan' | 'assemble' | 'widgets';
 
@@ -39,7 +40,7 @@ export function IntroAnimation({
     update();
     window.addEventListener('resize', update);
     try {
-      const stored = localStorage.getItem('jarvis_settings');
+      const stored = getCachedSetting('jarvis_settings');
       if (stored) {
         const parsed = JSON.parse(stored);
         if (parsed.logo === 'logo2') setLogoSrc('/assets/logo2.png');

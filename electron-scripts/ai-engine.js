@@ -73,6 +73,14 @@ function test() {
   });
 }
 
+function lint() {
+  if (!fs.existsSync(venvPython())) fail('Run npm run ai:setup first.');
+  run(venvPython(), ['-m', 'ruff', 'check', 'jarvis_ai_engine', 'tests', 'entrypoint.py', 'generate_manifest.py'], {
+    cwd: serviceRoot,
+  });
+  run(venvPython(), ['-m', 'mypy', 'jarvis_ai_engine'], { cwd: serviceRoot });
+}
+
 function build() {
   setup();
   const distRoot = path.join(serviceRoot, 'dist');
@@ -82,6 +90,10 @@ function build() {
   run(venvPython(), [
     '-m', 'PyInstaller',
     '--noconfirm', '--clean', '--onedir', '--name', 'jarvis-ai-engine',
+    '--copy-metadata', 'fastapi',
+    '--copy-metadata', 'httpx',
+    '--copy-metadata', 'pydantic',
+    '--copy-metadata', 'uvicorn',
     '--paths', serviceRoot,
     '--add-data', `${path.join(serviceRoot, 'profiles')}${separator}profiles`,
     '--distpath', distRoot,
@@ -110,6 +122,7 @@ function dev() {
 const mode = process.argv[2];
 if (mode === 'setup') setup();
 else if (mode === 'test') test();
+else if (mode === 'lint') lint();
 else if (mode === 'build') build();
 else if (mode === 'dev') dev();
-else fail('Usage: node electron-scripts/ai-engine.js setup|test|build|dev');
+else fail('Usage: node electron-scripts/ai-engine.js setup|test|lint|build|dev');

@@ -4,7 +4,7 @@ Status: implemented and locally verified on 2026-08-05.
 
 ## Runtime decision
 
-Jarvis uses the runtime-provided `node:sqlite` API instead of a third-party native add-on. The lockfile resolves Electron 36.9.5 with embedded Node 22.19.0, and the supported development runtime is Node 22.23.1. Both expose `DatabaseSync` and the SQLite backup API. This avoids a separate native ABI, Electron rebuild, and platform-specific binary in the macOS arm64 and Windows x64 packages.
+Jarvis uses the runtime-provided `node:sqlite` API instead of a third-party native add-on. The lockfile resolves Electron 43.3.0 with embedded Node 24.18.1, while builds use Node 22.23.1. Both expose `DatabaseSync` and the SQLite backup API. This avoids a separate native ABI, Electron rebuild, and platform-specific binary in the macOS arm64 and Windows x64 packages.
 
 `packages/persistence` is runtime-agnostic application infrastructure with no side effects at import time. During the transitional architecture, the local Next.js/Core process is the sole database writer. Electron supplies its user-data directory and app version to that process; the renderer and future Python AI service never open the database.
 

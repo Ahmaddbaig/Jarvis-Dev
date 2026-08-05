@@ -1,5 +1,6 @@
 import { backup, DatabaseSync } from 'node:sqlite';
-import { chmodSync, closeSync, existsSync, mkdirSync, openSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { DATABASE_MIGRATIONS, LATEST_SCHEMA_VERSION } from './migrations';
 import { SettingsRepository } from './repositories/settings';
@@ -36,6 +37,10 @@ export interface DatabaseDiagnostics {
     processedAt: string;
     detail?: string;
   }[];
+}
+
+function sqlString(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
 }
 
 export class UnsupportedSchemaVersionError extends Error {
@@ -225,6 +230,10 @@ export class JarvisDatabase {
       }
     }
 
+    if (currentVersion > 0 && currentVersion < LATEST_SCHEMA_VERSION && this.filePath !== ':memory:') {
+      this.createPreMigrationBackup(currentVersion);
+    }
+
     for (const migration of DATABASE_MIGRATIONS) {
       if (applied.has(migration.id)) continue;
       this.transaction(() => {
@@ -234,6 +243,32 @@ export class JarvisDatabase {
           VALUES (?, ?, ?, ?, ?)
         `).run(migration.id, migration.name, migration.checksum, new Date().toISOString(), this.appVersion);
       });
+    }
+  }
+
+  private createPreMigrationBackup(currentVersion: number): string {
+    const backupDirectory = path.join(path.dirname(this.filePath), 'migration-backups');
+    mkdirSync(backupDirectory, { recursive: true, mode: 0o700 });
+    const stamp = new Date().toISOString().replaceAll(':', '-');
+    const base = path.basename(this.filePath, path.extname(this.filePath));
+    const destination = path.join(backupDirectory, `${base}-schema-v${currentVersion}-${stamp}.sqlite3`);
+    const checksumPath = `${destination}.sha256`;
+    const checksumTemporary = `${checksumPath}.partial`;
+    try {
+      this.connection.exec(`VACUUM INTO ${sqlString(destination)}`);
+      const digest = createHash('sha256').update(readFileSync(destination)).digest('hex');
+      writeFileSync(checksumTemporary, `${digest}  ${path.basename(destination)}\n`, { encoding: 'utf8', mode: 0o600 });
+      renameSync(checksumTemporary, checksumPath);
+      try {
+        chmodSync(destination, 0o600);
+        chmodSync(checksumPath, 0o600);
+      } catch { /* Windows ACLs remain authoritative. */ }
+      return destination;
+    } catch (error) {
+      rmSync(destination, { force: true });
+      rmSync(checksumPath, { force: true });
+      rmSync(checksumTemporary, { force: true });
+      throw error;
     }
   }
 }

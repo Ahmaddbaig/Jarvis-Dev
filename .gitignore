@@ -11,7 +11,7 @@ out/
 # Reproducible desktop build output
 .build/
 dist-electron/
-release/
+/release/
 scripts/dist/
 services/ai-engine/.venv/
 services/ai-engine/dist/

@@ -51,12 +51,22 @@ function errorCode(error: unknown): string | undefined {
 const CHROME_CONTROL_UI_TOKEN = process.env.JARVIS_CHROME_UI_TOKEN || crypto.randomBytes(32).toString('base64url');
 process.env.JARVIS_CHROME_UI_TOKEN = CHROME_CONTROL_UI_TOKEN;
 const isDev = !app.isPackaged;
+const isReleaseSmoke = process.env.JARVIS_RELEASE_SMOKE === '1';
 const APP_ICON_PATH = isDev
     ? path.join(__dirname, '..', 'buildfiles', 'icon.png')
     : path.join(process.resourcesPath, 'buildfiles', 'icon.png');
 process.env.JARVIS_CHROME_EXTENSION_PATH = isDev
     ? path.join(__dirname, '..', 'chrome-extension')
     : path.join(process.resourcesPath, 'chrome-extension');
+process.env.JARVIS_ARTIFACT_MANIFEST_PATH = isDev
+    ? path.join(app.getAppPath(), '.build', 'release-evidence', 'artifact-manifest.json')
+    : path.join(process.resourcesPath, 'artifact-manifest.json');
+process.env.JARVIS_SBOM_PATH = isDev
+    ? path.join(app.getAppPath(), '.build', 'release-evidence', 'sbom.cdx.json')
+    : path.join(process.resourcesPath, 'sbom.cdx.json');
+process.env.JARVIS_AI_ENGINE_RESOURCE_PATH = isDev
+    ? path.join(app.getAppPath(), 'services', 'ai-engine', 'dist', 'jarvis-ai-engine', process.platform === 'win32' ? 'jarvis-ai-engine.exe' : 'jarvis-ai-engine')
+    : path.join(process.resourcesPath, 'ai-engine', process.platform === 'win32' ? 'jarvis-ai-engine.exe' : 'jarvis-ai-engine');
 const PORT = Number.parseInt(process.env.JARVIS_PORT || (isDev ? '3100' : '3000'), 10);
 const HTTPS_PORT = Number.parseInt(process.env.JARVIS_HTTPS_PORT || (isDev ? '3543' : '3443'), 10);
 // Finder/open launches Electron with `/` as its working directory. Resolve the
@@ -101,9 +111,11 @@ function loadDesktopControlToken(): string {
 }
 const DESKTOP_CONTROL_TOKEN = loadDesktopControlToken();
 process.env.JARVIS_DESKTOP_TOKEN = DESKTOP_CONTROL_TOKEN;
-// Keep this editable build separate from the Patreon-installed Jarvis app.
-app.setPath('userData', path.join(app.getPath('appData'), 'Jarvis Dev'));
-app.setName('Jarvis Dev');
+// Keep editable builds separate without changing the production application identity.
+if (isDev) {
+    app.setPath('userData', path.join(app.getPath('appData'), 'Jarvis Dev'));
+    app.setName('Jarvis Dev');
+}
 const CORE_DATA_DIR = process.env.JARVIS_DATA_DIR || (isDev ? app.getAppPath() : app.getPath('userData'));
 process.env.JARVIS_DATA_DIR = CORE_DATA_DIR;
 // Global safety net: ECONNRESET / EPIPE are harmless connection-level errors
@@ -678,7 +690,7 @@ function createWindow(): void {
     });
     mainWindow.loadURL(`http://127.0.0.1:${PORT}`);
     mainWindow.once('ready-to-show', () => {
-        mainWindow?.show();
+        if (!isReleaseSmoke) mainWindow?.show();
         if (isDev) {
             mainWindow?.webContents.openDevTools();
         }
@@ -729,16 +741,16 @@ function setupPermissions(): void {
 }
 app.whenReady().then(async () => {
     // Default BrowserWindow title is "Electron"; menu / Dock name in dev follows the binary unless set here.
-    app.setName('Jarvis Dev');
+    if (isDev) app.setName('Jarvis Dev');
     registerJarvisPdfProtocol();
     setupPermissions();
     setupDesktopModeIpc();
     // Do not hold the entire app startup behind a macOS privacy dialog. The
     // request continues in the background and the UI can open immediately.
-    void requestMediaPermissions();
+    if (!isReleaseSmoke) void requestMediaPermissions();
     // Ask macOS to register Jarvis in Accessibility on first launch. macOS
     // requires the user to flip the switch; this call cannot grant it silently.
-    if (process.platform === 'darwin' && !systemPreferences.isTrustedAccessibilityClient(false)) {
+    if (!isReleaseSmoke && process.platform === 'darwin' && !systemPreferences.isTrustedAccessibilityClient(false)) {
         setTimeout(() => {
             systemPreferences.isTrustedAccessibilityClient(true);
         }, 1000);
@@ -783,6 +795,16 @@ app.whenReady().then(async () => {
         }
     }
     appReady = true;
+    if (isReleaseSmoke) {
+        const stopPath = path.join(CORE_DATA_DIR, 'jarvis-release-smoke-stop');
+        const timer = setInterval(() => {
+            if (!fs.existsSync(stopPath)) return;
+            clearInterval(timer);
+            try { fs.unlinkSync(stopPath); } catch { /* best effort */ }
+            app.quit();
+        }, 100);
+        timer.unref();
+    }
 });
 app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') {

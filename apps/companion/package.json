@@ -8,27 +8,44 @@
     "start": "electron app.cjs",
     "server": "node server.cjs",
     "build": "electron-builder --dir --publish never",
-    "dist": "electron-builder --publish never"
+    "dist": "electron-builder --publish never",
+    "dist:mac": "electron-builder --mac --arm64 --publish never",
+    "dist:win": "electron-builder --win --x64 --publish never",
+    "dist:linux": "electron-builder --linux --x64 --publish never"
   },
   "dependencies": {
     "@jitsi/robotjs": "^0.6.22",
     "screenshot-desktop": "^1.15.4",
     "selfsigned": "^5.5.0",
-    "sharp": "^0.34.5"
+    "sharp": "0.35.3"
   },
   "devDependencies": {
-    "electron": "36.9.5",
-    "electron-builder": "26.0.20"
+    "electron": "43.3.0",
+    "electron-builder": "26.15.3"
   },
   "build": {
     "appId": "com.jarvis.companion",
     "productName": "Jarvis Companion",
     "asar": true,
     "files": ["app.cjs", "server.cjs", "result-ledger.cjs", "remote-protocol.json", "package.json"],
-    "extraResources": [{ "from": "../../buildfiles/icon.png", "to": "icon.png" }],
+    "extraResources": [
+      { "from": "../../buildfiles/icon.png", "to": "icon.png" },
+      { "from": "../../.build/release-evidence/artifact-manifest.json", "to": "artifact-manifest.json" },
+      { "from": "../../.build/release-evidence/sbom.cdx.json", "to": "sbom.cdx.json" }
+    ],
     "directories": { "output": "dist" },
-    "mac": { "category": "public.app-category.utilities", "target": ["dmg", "zip"] },
-    "win": { "target": ["nsis", "zip"] },
+    "mac": {
+      "category": "public.app-category.utilities",
+      "icon": "../../buildfiles/icon.png",
+      "target": ["dmg", "zip"],
+      "minimumSystemVersion": "12.0",
+      "hardenedRuntime": true,
+      "notarize": true,
+      "entitlements": "../../buildfiles/entitlements.mac.plist",
+      "entitlementsInherit": "../../buildfiles/entitlements.mac.plist"
+    },
+    "win": { "target": ["nsis", "zip"], "icon": "../../buildfiles/icon.png" },
+    "nsis": { "deleteAppDataOnUninstall": false },
     "linux": { "category": "Utility", "target": ["AppImage"] }
   }
 }

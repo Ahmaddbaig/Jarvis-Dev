@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "supportedMatrix": [
+    { "platform": "macos", "architecture": "arm64", "minimumVersion": "12.0", "support": "stable" },
+    { "platform": "windows", "architecture": "x64", "minimumVersion": "10", "support": "stable" },
+    { "platform": "linux", "architecture": "x64", "minimumVersion": null, "support": "experimental" }
+  ],
+  "distribution": {
+    "signatureRequired": true,
+    "macNotarizationRequired": true,
+    "sbomRequired": true,
+    "artifactManifestRequired": true
+  },
+  "updates": {
+    "automaticUpdatesEnabled": false,
+    "signatureVerificationRequired": true,
+    "migrationBackupRequired": true,
+    "rollbackCandidateRequired": true,
+    "lastKnownGoodRequired": true,
+    "stagedRolloutRequired": true,
+    "preserveModelDirectories": true
+  },
+  "compatibility": {
+    "legacyMigrationReaders": "retain-through-one-stable-release",
+    "remoteProtocol": 2,
+    "aiEngineProtocol": "jarvis.ai-engine/1",
+    "databaseSchema": 2
+  }
+}

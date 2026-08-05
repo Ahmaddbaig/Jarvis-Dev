@@ -1,10 +1,19 @@
-import { readFile, stat } from 'node:fs/promises';
+import { readFile, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 
 const root = process.cwd();
 const errors = [];
 const readJson = async (relative) => JSON.parse(await readFile(path.join(root, relative), 'utf8'));
+
+async function directorySize(directory) {
+  let size = 0;
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const absolute = path.join(directory, entry.name);
+    size += entry.isDirectory() ? await directorySize(absolute) : (await stat(absolute)).size;
+  }
+  return size;
+}
 
 const protocol = await readJson('packages/contracts/remote-protocol.json');
 const chromeProtocol = await readJson('chrome-extension/remote-protocol.json');
@@ -45,8 +54,22 @@ if (process.argv.includes('--require-built')) {
   for (const relative of [
     path.join('services', 'ai-engine', 'dist', 'jarvis-ai-engine', aiExecutable),
     path.join('dist-electron', 'main.js'),
+    path.join('.next', 'standalone', 'server.js'),
+    path.join('.build', 'release-evidence', 'artifact-manifest.json'),
+    path.join('.build', 'release-evidence', 'sbom.cdx.json'),
   ]) {
     try { await stat(path.join(root, relative)); } catch { errors.push(`Built resource ${relative} is missing.`); }
+  }
+
+  const standalone = path.join(root, '.next', 'standalone');
+  const allowedTopLevel = new Set(['.next', 'node_modules', 'package.json', 'public', 'scripts', 'server.js']);
+  try {
+    const unexpected = (await readdir(standalone)).filter((entry) => !allowedTopLevel.has(entry));
+    if (unexpected.length) errors.push(`Standalone runtime contains unexpected top-level entries: ${unexpected.join(', ')}.`);
+    const size = await directorySize(standalone);
+    if (size > 250 * 1024 * 1024) errors.push(`Standalone runtime is ${(size / 1024 / 1024).toFixed(1)} MiB; limit is 250 MiB.`);
+  } catch {
+    errors.push('Standalone runtime could not be inspected.');
   }
 }
 

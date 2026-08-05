@@ -8,6 +8,7 @@ import { StocksColumn } from './StocksColumn';
 import { TopStories } from './TopStories';
 import { NewsSettingsModal, NewsSettings } from './NewsSettingsModal';
 import { saveServerSettings, getCachedSetting } from '@/frontend/lib/serverSettings';
+import { useServerSettings } from '@/frontend/hooks/queries/useServerSettings';
 import { PageHeader } from '../PageHeader';
 
 const DEFAULT_NEWS_SETTINGS: NewsSettings = {
@@ -31,11 +32,10 @@ function toEmbedUrl(raw: string): string {
   return url;
 }
 
-function loadNewsSettings(): NewsSettings {
-  if (typeof window === 'undefined') return DEFAULT_NEWS_SETTINGS;
+function loadNewsSettings(raw?: string): NewsSettings {
   try {
-    // Check server cache first, then localStorage
-    const s = getCachedSetting('jarvis_news_settings') || localStorage.getItem('jarvis_news_settings');
+    // The cache includes the one-release legacy read fallback.
+    const s = raw || getCachedSetting('jarvis_news_settings');
     if (s) return { ...DEFAULT_NEWS_SETTINGS, ...JSON.parse(s) };
   } catch { /* fall through */ }
   return DEFAULT_NEWS_SETTINGS;
@@ -46,15 +46,16 @@ interface Props {
 }
 
 export function NewsPage({ onNavigateHome }: Props) {
-  const [settings, setSettings] = useState<NewsSettings>(loadNewsSettings);
+  const serverSettingsQuery = useServerSettings();
+  const [settingsOverride, setSettingsOverride] = useState<NewsSettings | null>(null);
+  const settings = settingsOverride ?? loadNewsSettings(serverSettingsQuery.data?.jarvis_news_settings);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   const embedUrl = toEmbedUrl(settings.streamUrl);
 
   const saveSettings = (s: NewsSettings) => {
-    setSettings(s);
+    setSettingsOverride(s);
     const serialised = JSON.stringify(s);
-    localStorage.setItem('jarvis_news_settings', serialised);
     saveServerSettings({ jarvis_news_settings: serialised });
   };
 

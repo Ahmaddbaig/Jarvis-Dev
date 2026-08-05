@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { HomeAssistantWizard } from '../wizards/HomeAssistantWizard';
 import { PageHeader } from '../PageHeader';
@@ -9,11 +9,12 @@ import {
   useHomeAssistantStates,
   type HAEntity,
 } from '@/frontend/hooks/queries/useHomeAssistant';
-import { useServerSettings } from '@/frontend/hooks/queries/useServerSettings';
+import { useSaveServerSettings, useServerSettings } from '@/frontend/hooks/queries/useServerSettings';
 import { useWeather, type WeatherData } from '@/frontend/hooks/queries/useWeather';
 import { geocodeQueryOptions } from '@/frontend/hooks/queries/useWeather';
 import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { queryKeys } from '@/frontend/lib/query/keys';
+import { getCachedSetting } from '@/frontend/lib/serverSettings';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -45,7 +46,7 @@ function isMediaOn(e: HAEntity): boolean {
 
 function loadHAConfig() {
   if (typeof window === 'undefined') return { url: '' };
-  return { url: localStorage.getItem('jarvis_ha_url') ?? '' };
+  return { url: getCachedSetting('jarvis_ha_url') };
 }
 
 // ── Panel Shell ────────────────────────────────────────────────────────────────
@@ -414,15 +415,18 @@ async function geocodeCity(
 
 function WeatherPanel() {
   const queryClient = useQueryClient();
-  const [coords, setCoords] = useState<{ lat: number; lon: number } | null>(() => {
-    if (typeof window === 'undefined') return null;
-    const savedLat = localStorage.getItem('jarvis_weather_lat');
-    const savedLon = localStorage.getItem('jarvis_weather_lon');
+  const serverSettingsQuery = useServerSettings();
+  const saveServerSettings = useSaveServerSettings();
+  const [coordsOverride, setCoords] = useState<{ lat: number; lon: number } | null | undefined>(undefined);
+  const persistedCoords = useMemo(() => {
+    const savedLat = serverSettingsQuery.data?.jarvis_weather_lat || getCachedSetting('jarvis_weather_lat');
+    const savedLon = serverSettingsQuery.data?.jarvis_weather_lon || getCachedSetting('jarvis_weather_lon');
     if (!savedLat || !savedLon) return null;
     const lat = Number(savedLat);
     const lon = Number(savedLon);
     return Number.isFinite(lat) && Number.isFinite(lon) ? { lat, lon } : null;
-  });
+  }, [serverSettingsQuery.data?.jarvis_weather_lat, serverSettingsQuery.data?.jarvis_weather_lon]);
+  const coords = coordsOverride === undefined ? persistedCoords : coordsOverride;
   const [configuring, setConfiguring] = useState(false);
   const [cityInput,   setCityInput]   = useState('');
   const [geoError,    setGeoError]    = useState('');
@@ -434,7 +438,7 @@ function WeatherPanel() {
 
   // On mount: try saved coords first, then geolocation
   useEffect(() => {
-    if (coords) return;
+    if (coords || serverSettingsQuery.isPending) return;
     if (!navigator.geolocation) {
       setLocationUnavailable(true);
       return;
@@ -447,7 +451,7 @@ function WeatherPanel() {
       () => setLocationUnavailable(true),
       { timeout: 8000 }
     );
-  }, [coords]);
+  }, [coords, serverSettingsQuery.isPending]);
 
   const handleCitySubmit = async () => {
     if (!cityInput.trim()) return;
@@ -456,8 +460,11 @@ function WeatherPanel() {
     const result = await geocodeCity(cityInput.trim(), queryClient);
     setGeoLoading(false);
     if (!result) { setGeoError('Location not found'); return; }
-    localStorage.setItem('jarvis_weather_lat', String(result.lat));
-    localStorage.setItem('jarvis_weather_lon', String(result.lon));
+    saveServerSettings.mutate({
+      jarvis_weather_lat: String(result.lat),
+      jarvis_weather_lon: String(result.lon),
+      jarvis_weather_location: result.display,
+    });
     setConfiguring(false);
     setCityInput('');
     setCoords({ lat: result.lat, lon: result.lon });
@@ -467,6 +474,11 @@ function WeatherPanel() {
   const handleUseGeo = () => {
     localStorage.removeItem('jarvis_weather_lat');
     localStorage.removeItem('jarvis_weather_lon');
+    saveServerSettings.mutate({
+      jarvis_weather_lat: '',
+      jarvis_weather_lon: '',
+      jarvis_weather_location: '',
+    });
     setConfiguring(false);
     setCoords(null);
     setLocationUnavailable(false);
@@ -1269,7 +1281,6 @@ export function HomeAssistantPage({ onNavigateHome }: Props) {
     if (serverSettingsQuery.isPending) return;
     const serverSettings = serverSettingsQuery.data ?? {};
     const url = serverSettings.jarvis_ha_url || loadHAConfig().url;
-    if (serverSettings.jarvis_ha_url) localStorage.setItem('jarvis_ha_url', serverSettings.jarvis_ha_url);
     if (url && serverSettings.credentialStatus?.homeAssistantToken) {
       setHaUrl(url);
     } else {

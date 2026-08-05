@@ -14,6 +14,7 @@ import {
   useCreateCalendarEvent,
 } from '@/frontend/hooks/queries/useCalendar';
 import { useLocalTasks, useReplaceLocalTasks } from '@/frontend/hooks/queries/useLocalTasks';
+import { useSaveServerSettings, useServerSettings } from '@/frontend/hooks/queries/useServerSettings';
 import type { LocalTask } from '@jarvis/contracts';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -98,6 +99,8 @@ export function CalendarPage({ onNavigateHome }: Props) {
   });
   const queryClient = useQueryClient();
   const integrationQuery = useCalendarIntegrationStatus();
+  const serverSettingsQuery = useServerSettings();
+  const saveServerSettings = useSaveServerSettings();
   const gcalConfigured = Boolean(integrationQuery.data?.configured && integrationQuery.data?.connected);
   const gcalTools = integrationQuery.data?.tools ?? 0;
   const eventsQuery = useCalendarEvents(calendarRange.timeMin, calendarRange.timeMax, gcalConfigured);
@@ -121,7 +124,6 @@ export function CalendarPage({ onNavigateHome }: Props) {
     const legacy = flattenTasks(legacyTaskSnapshot);
     const finish = () => {
       localStorage.removeItem('jarvis_calendar_tasks');
-      localStorage.setItem('jarvis_calendar_tasks_migrated_v1', 'true');
     };
     if (localTasksQuery.data.length === 0 && legacy.length > 0) {
       void replaceLocalTasks.mutateAsync(legacy).then(finish).catch(() => {
@@ -144,13 +146,13 @@ export function CalendarPage({ onNavigateHome }: Props) {
 
   // Check if Google Calendar MCP is configured on mount
   useEffect(() => {
-    if (integrationQuery.isSuccess && !integrationQuery.data.configured) {
-      const skipped = localStorage.getItem('jarvis_gcal_wizard_skipped');
+    if (integrationQuery.isSuccess && !integrationQuery.data.configured && !serverSettingsQuery.isPending) {
+      const skipped = serverSettingsQuery.data?.jarvis_gcal_wizard_skipped === 'true';
       if (!skipped) {
         setShowWizard(true);
       }
     }
-  }, [integrationQuery.data, integrationQuery.isSuccess]);
+  }, [integrationQuery.data, integrationQuery.isSuccess, serverSettingsQuery.data, serverSettingsQuery.isPending]);
 
   const handleWizardComplete = (connectedServices?: GoogleServiceId[]) => {
     setShowWizard(false);
@@ -162,7 +164,7 @@ export function CalendarPage({ onNavigateHome }: Props) {
 
   const handleWizardSkip = () => {
     setShowWizard(false);
-    localStorage.setItem('jarvis_gcal_wizard_skipped', 'true');
+    saveServerSettings.mutate({ jarvis_gcal_wizard_skipped: 'true' });
   };
 
   const handleWizardBack = () => {

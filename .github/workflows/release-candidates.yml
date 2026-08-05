@@ -1,0 +1,144 @@
+name: Native release candidates
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - develop
+      - refactor
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-release-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+jobs:
+  package:
+    name: Package ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS arm64
+            os: macos-14
+            platform: mac
+            arch: arm64
+          - name: Windows x64
+            os: windows-latest
+            platform: win
+            arch: x64
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Use Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            scripts/computer-use-requirements.txt
+            services/ai-engine/requirements-runtime.txt
+            services/ai-engine/requirements-dev.txt
+
+      - name: Verify runner architecture
+        run: node -e "if (process.arch !== '${{ matrix.arch }}') throw new Error('Expected ${{ matrix.arch }}, received ' + process.arch)"
+
+      - name: Install and verify dependencies
+        run: |
+          npm ci
+          npm run ai:setup
+          npm run release:supply-chain
+          npm audit --audit-level=high
+
+      - name: Run release quality gate
+        run: npm run check
+
+      - name: Build native resources
+        run: npm run build
+        env:
+          JARVIS_BUILD_PYTHON: python
+
+      - name: Smoke-test frozen AI lifecycle and budgets
+        run: npm run ai:smoke
+
+      - name: Smoke-test pruned standalone runtime
+        run: npm run release:smoke
+
+      - name: Verify signing credentials for distribution tags
+        if: github.ref_type == 'tag'
+        run: node scripts/release/verify-signing.mjs --preflight --required --platform=${{ matrix.platform }}
+        env:
+          CSC_LINK: ${{ matrix.platform == 'mac' && secrets.MAC_CSC_LINK || '' }}
+          CSC_KEY_PASSWORD: ${{ matrix.platform == 'mac' && secrets.MAC_CSC_KEY_PASSWORD || '' }}
+          APPLE_ID: ${{ matrix.platform == 'mac' && secrets.APPLE_ID || '' }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ matrix.platform == 'mac' && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ matrix.platform == 'mac' && secrets.APPLE_TEAM_ID || '' }}
+          WIN_CSC_LINK: ${{ matrix.platform == 'win' && secrets.WIN_CSC_LINK || '' }}
+          WIN_CSC_KEY_PASSWORD: ${{ matrix.platform == 'win' && secrets.WIN_CSC_KEY_PASSWORD || '' }}
+
+      - name: Package macOS applications
+        if: matrix.platform == 'mac'
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            npx electron-builder --mac --arm64 --publish never --config.forceCodeSigning=true
+            npx electron-builder --projectDir apps/companion --mac --arm64 --publish never --config.forceCodeSigning=true
+          else
+            CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --mac --arm64 --publish never
+            CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --projectDir apps/companion --mac --arm64 --publish never
+          fi
+        env:
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      - name: Package Windows applications
+        if: matrix.platform == 'win'
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            npx electron-builder --win --x64 --publish never --config.forceCodeSigning=true
+            npx electron-builder --projectDir apps/companion --win --x64 --publish never --config.forceCodeSigning=true
+          else
+            npx electron-builder --win --x64 --publish never
+            npx electron-builder --projectDir apps/companion --win --x64 --publish never
+          fi
+        env:
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+
+      - name: Verify native signatures
+        run: node scripts/release/verify-signing.mjs ${{ github.ref_type == 'tag' && '--required' || '' }} --platform=${{ matrix.platform }}
+
+      - name: Smoke-test packaged desktop lifecycle
+        run: npm run release:desktop-smoke
+
+      - name: Finalize external release evidence
+        run: npm run release:evidence
+
+      - name: Upload candidate and evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: jarvis-${{ matrix.platform }}-${{ github.ref_name }}
+          path: |
+            release/
+            apps/companion/dist/
+            .build/release-evidence/
+          if-no-files-found: error
+          retention-days: 14

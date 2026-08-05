@@ -21,10 +21,13 @@ jobs:
         include:
           - name: Linux x64
             os: ubuntu-latest
+            arch: x64
           - name: macOS arm64
             os: macos-14
+            arch: arm64
           - name: Windows x64
             os: windows-latest
+            arch: x64
 
     steps:
       - name: Check out source
@@ -46,11 +49,20 @@ jobs:
             services/ai-engine/requirements-runtime.txt
             services/ai-engine/requirements-dev.txt
 
+      - name: Verify runner architecture
+        run: node -e "if (process.arch !== '${{ matrix.arch }}') throw new Error('Expected ${{ matrix.arch }}, received ' + process.arch)"
+
       - name: Install Node dependencies
         run: npm ci
 
       - name: Install AI engine dependencies
         run: npm run ai:setup
+
+      - name: Verify lock integrity, licenses, and tracked secrets
+        run: npm run release:supply-chain
+
+      - name: Reject high and critical dependency advisories
+        run: npm audit --audit-level=high
 
       - name: Run quality gate
         run: npm run check
@@ -60,6 +72,15 @@ jobs:
         env:
           JARVIS_BUILD_PYTHON: python
 
+      - name: Smoke-test frozen AI lifecycle and budgets
+        run: npm run ai:smoke
+
+      - name: Smoke-test pruned standalone runtime
+        run: npm run release:smoke
+
+      - name: Finalize release identity and SBOM
+        run: npm run release:evidence
+
       - name: Verify assembled runtime
         shell: bash
         run: |
@@ -67,6 +88,10 @@ jobs:
           test -f .next/standalone/scripts/computer_use.py
           test -f .next/standalone/scripts/dist/computer_use || test -f .next/standalone/scripts/dist/computer_use.exe
           test -f services/ai-engine/dist/jarvis-ai-engine/jarvis-ai-engine || test -f services/ai-engine/dist/jarvis-ai-engine/jarvis-ai-engine.exe
+          test -f .build/release-evidence/artifact-manifest.json
+          test -f .build/release-evidence/sbom.cdx.json
+          test -f .build/release-evidence/ai-smoke.json
+          test -f .build/release-evidence/standalone-smoke.json
           test ! -e .next/standalone/jarvis-server-settings.json
           test ! -e .next/standalone/jarvis-companions.json
           test ! -e .next/standalone/.jarvis-desktop-token
@@ -78,5 +103,6 @@ jobs:
           path: |
             dist-electron/
             .next/standalone/scripts/dist/
+            .build/release-evidence/
           if-no-files-found: error
           retention-days: 7

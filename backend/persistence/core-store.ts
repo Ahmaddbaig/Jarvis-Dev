@@ -18,6 +18,7 @@ const NON_SECRET_SERVER_KEYS = new Set([
   'bambu_token_exp',
   'jarvis_news_settings',
   'jarvis_voicebox_url',
+  'jarvis_gcal_wizard_skipped',
 ]);
 
 const ALL_SERVER_KEYS = new Set([

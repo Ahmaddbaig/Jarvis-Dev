@@ -6,9 +6,9 @@ import json
 import os
 import re
 from collections.abc import Awaitable, Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 ProgressCallback = Callable[[float, str], Awaitable[None]]
 PATH_PATTERN = re.compile(r"(?P<path>[A-Za-z0-9_./@+-]+\.(?:gguf|onnx|bin|json|txt|model|tiktoken))")
@@ -17,9 +17,11 @@ PATH_PATTERN = re.compile(r"(?P<path>[A-Za-z0-9_./@+-]+\.(?:gguf|onnx|bin|json|t
 def load_profile(profiles_root: Path, profile: str) -> dict[str, Any]:
     profile_path = profiles_root / f"{profile}.json"
     payload = json.loads(profile_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"Profile definition {profile_path.name} must be an object.")
     if payload.get("id") != profile:
         raise ValueError(f"Profile definition {profile_path.name} has the wrong id.")
-    return payload
+    return cast(dict[str, Any], payload)
 
 
 def _definition_files(root: Path, definition: dict[str, Any]) -> list[Path]:
@@ -103,7 +105,7 @@ async def build_manifest(
         "profile": profile,
         "profileManifestId": definition["manifestId"],
         "profileTemplateSha256": hashlib.sha256(template_bytes).hexdigest(),
-        "createdAt": datetime.now(timezone.utc).isoformat(),
+        "createdAt": datetime.now(UTC).isoformat(),
         "totalBytes": complete,
         "files": entries,
     }
@@ -135,7 +137,10 @@ async def verify_or_create_manifest(
     if target.is_file():
         try:
             existing = json.loads(target.read_text(encoding="utf-8"))
-            comparable = lambda item: (item["path"], item["sha256"], item["size"])
+
+            def comparable(item: dict[str, Any]) -> tuple[str, str, int]:
+                return item["path"], item["sha256"], item["size"]
+
             if (
                 existing.get("profile") != profile
                 or existing.get("profileManifestId") != candidate["profileManifestId"]

@@ -524,7 +524,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
   // One-time renderer migration. Plaintext is removed only after each value is
   // already present in the OS vault or a vault write succeeds.
   useEffect(() => {
-    if (serverSettingsQuery.isPending || legacyCredentialMigrationStartedRef.current) return;
+    if (!serverSettingsQuery.isSuccess || legacyCredentialMigrationStartedRef.current) return;
     if (window.electron?.isElectron !== true) return;
 
     const configured = serverSettingsQuery.data?.credentialStatus;
@@ -553,11 +553,9 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     void (async () => {
       try {
         if (Object.keys(patch).length > 0) await saveCredentials(patch);
-        delete parsed.apiKey;
-        delete parsed.claudeApiKey;
-        if (Object.keys(parsed).length > 0) {
-          localStorage.setItem('jarvis_settings', JSON.stringify(parsed));
-        }
+        // Non-secret settings were imported by fetchServerSettings before this
+        // credential cleanup runs, so the legacy document can now be removed.
+        localStorage.removeItem('jarvis_settings');
         localStorage.removeItem('jarvis_ha_token');
         localStorage.removeItem('jarvis_ical_url');
       } catch (error) {
@@ -565,7 +563,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
         emitError('app', error instanceof Error ? error.message : String(error));
       }
     })();
-  }, [saveCredentials, serverSettingsQuery.data, serverSettingsQuery.isPending]);
+  }, [saveCredentials, serverSettingsQuery.data, serverSettingsQuery.isSuccess]);
 
   // Install global error interceptors once so all console.error calls,
   // uncaught JS errors, and unhandled rejections stream to TerminalWidget.
@@ -626,11 +624,9 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
             : 'center';
         desktopModeRef.current = false;
         normalPositionBeforeDesktopRef.current = null;
-        setSettings((prev) => {
-          const updated = { ...prev, position: restorePosition };
-          localStorage.setItem('jarvis_settings', JSON.stringify(updated));
-          return updated;
-        });
+        const updated = { ...settings, position: restorePosition };
+        setSettings(updated);
+        saveSettingsToServer({ jarvis_settings: JSON.stringify(updated) });
         if (!window.electron?.isElectron) return;
         void window.electron.setDesktopMode({ enabled: false });
         return;
@@ -639,11 +635,9 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
       const position = requestedPosition ?? desktopPanelPositionRef.current;
       desktopPanelPositionRef.current = position;
       if (!desktopModeRef.current) {
-        setSettings((prev) => {
-          const updated = { ...prev, position };
-          localStorage.setItem('jarvis_settings', JSON.stringify(updated));
-          return updated;
-        });
+        const updated = { ...settings, position };
+        setSettings(updated);
+        saveSettingsToServer({ jarvis_settings: JSON.stringify(updated) });
       }
       if (!window.electron?.isElectron) return;
       void window.electron.moveDesktopPanel(position);
@@ -651,7 +645,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
 
     window.addEventListener('jarvis:desktop-mode', handler);
     return () => window.removeEventListener('jarvis:desktop-mode', handler);
-  }, [settings.logo, settings.position]);
+  }, [saveSettingsToServer, settings]);
 
   // jarvis:self-disconnect — fired by jarvis_disconnect function tool
   useEffect(() => {
@@ -859,7 +853,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     }
   }, [settings.theme, settings.grid]);
 
-  // Load settings — server first (shared across all LAN clients), then localStorage fallback
+  // Load settings from Core, retaining a read-only legacy fallback for migration.
   useEffect(() => {
     if (serverSettingsQuery.isPending) return;
     const serverSettings = serverSettingsQuery.data ?? {};
@@ -923,12 +917,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
             });
             setSettings(nextSettings);
 
-            // Back-fill localStorage so offline / Electron still works
-            if (!localRaw) {
-              localStorage.setItem('jarvis_settings', JSON.stringify(nextSettings));
-            }
-
-            // If localStorage has a usable configuration but the server doesn't,
+            // If the legacy reader has a usable configuration but Core doesn't,
             // push it up now. This self-heals after a race-condition wipe.
             if (!serverHasConfig && localHasConfig && nextSettings.apiMode !== 'local') {
               saveSettingsToServer({ jarvis_settings: JSON.stringify(nextSettings) });
@@ -942,7 +931,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
   // Load dynamic functions (MCP + Skills) on mount — runs before auto-start.
   useEffect(() => {
     const state = dynamicFunctionsQuery.data;
-    if (!state) return;
+    if (!state || !serverSettingsQuery.isSuccess) return;
     dynamicGetFunctionByNameRef.current = createGetFunctionByName(state.allFunctions);
 
     // Seed enabledFunctions with new MCP/Skill tool names
@@ -957,15 +946,11 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
           ...prev,
           enabledFunctions: [...prev.enabledFunctions, ...newTools],
         };
-        const serialised = JSON.stringify(updated);
-        localStorage.setItem('jarvis_settings', serialised);
-        // Do NOT write to server here — settings may not have loaded from the
-        // server yet (race condition) and would overwrite the real API key.
-        // The server file is only updated when the user explicitly saves settings.
+        saveSettingsToServer({ jarvis_settings: JSON.stringify(updated) });
         return updated;
       });
     }
-  }, [dynamicFunctionsQuery.data]);
+  }, [dynamicFunctionsQuery.data, saveSettingsToServer, serverSettingsQuery.isSuccess]);
 
   // Keep elClientToolsRef in sync with dynamic function state
   useEffect(() => {
@@ -1614,7 +1599,6 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
       const serialised = JSON.stringify(safeSettings);
       await saveSettingsToServerAsync({ jarvis_settings: serialised });
       setSettings(safeSettings);
-      localStorage.setItem('jarvis_settings', serialised);
       setIsSettingsOpen(false);
       setRestartTrigger((t) => t + 1);
     } catch (error) {
