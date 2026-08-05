@@ -1,5 +1,7 @@
 # Jarvis V5 — AI Desktop Assistant
 
+Cross-computer setup is documented in [COMPANION_SETUP.md](COMPANION_SETUP.md). Deskflow keyboard/mouse switching is documented in [DESKFLOW_INTEGRATION.md](DESKFLOW_INTEGRATION.md).
+
 Electron + Next.js desktop assistant with voice, HUD widgets, and smart-home integrations.
 
 ## Running in development
@@ -22,7 +24,8 @@ Four engines are selectable in Settings:
   API chat brain → Voicebox TTS with a cloned voice profile. The brain
   provider is a dropdown in Settings: OpenAI (same API key as Realtime,
   default `gpt-4o-mini`) or Claude (own Anthropic API key, default
-  `claude-haiku-4-5`). Voicebox playback defaults to a slower, pitch-preserving
+  `claude-haiku-4-5`). Both providers use the same selected Voicebox profile
+  for spoken and typed-chat replies. Voicebox playback defaults to a slower, pitch-preserving
   `0.80×` speed and can be adjusted in Settings.
 
 The Voicebox engine expects:

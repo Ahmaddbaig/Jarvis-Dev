@@ -20,9 +20,9 @@ import type { JarvisFunction } from '@/frontend/lib/functions';
 
 /**
  * Voicebox voice engine: Silero VAD (in-renderer) → whisper.cpp STT →
- * OpenAI Chat Completions with Jarvis tools → Voicebox TTS (the JARVIS
- * voice). Mirrors the surface of the ElevenLabs useConversation hook so
- * JarvisAssistant can drive either.
+ * Claude or OpenAI chat with Jarvis tools → Voicebox TTS (the JARVIS voice).
+ * Mirrors the surface of the ElevenLabs useConversation hook so
+ * JarvisAssistant can drive either provider through the same voice profile.
  */
 
 const VAD_SAMPLE_RATE = 16_000;
@@ -55,6 +55,8 @@ export interface LocalConversationCallbacks {
   onConnect?: () => void;
   onDisconnect?: () => void;
   onError?: (message: string) => void;
+  onMessage?: (message: { message: string; role: 'user' | 'assistant' }) => void;
+  onModeChange?: (event: { mode: 'speaking' | 'listening' }) => void;
 }
 
 export interface LocalConversation {
@@ -63,6 +65,7 @@ export interface LocalConversation {
   endSession: () => void;
   setMuted: (muted: boolean) => void;
   getOutputVolume: () => number;
+  sendUserMessage: (text: string) => Promise<void>;
   sendContextualUpdate: (text: string) => void;
 }
 
@@ -140,6 +143,7 @@ export function useLocalConversation(
       .then(async () => {
         const blob = await blobPromise;
         if (!blob || isStale()) return;
+        callbacksRef.current.onModeChange?.({ mode: 'speaking' });
         await player.play(blob);
       })
       .catch((err) => {
@@ -148,6 +152,9 @@ export function useLocalConversation(
       .finally(() => {
         pendingSpeechRef.current = Math.max(0, pendingSpeechRef.current - 1);
         lastPlaybackEndRef.current = Date.now();
+        if (pendingSpeechRef.current === 0) {
+          callbacksRef.current.onModeChange?.({ mode: 'listening' });
+        }
       });
   }, [reportTurnError]);
 
@@ -251,10 +258,12 @@ export function useLocalConversation(
       const toolCalls: ChatToolCall[] = message.tool_calls ?? [];
 
       if (toolCalls.length === 0) {
+        const reply = (message.content ?? '').trim();
         historyRef.current = [
           ...historyRef.current,
-          { role: 'assistant', content: message.content ?? '' },
+          { role: 'assistant', content: reply },
         ];
+        if (reply) callbacksRef.current.onMessage?.({ message: reply, role: 'assistant' });
         return; // already spoken via the streaming sentence queue
       }
 
@@ -307,7 +316,10 @@ export function useLocalConversation(
       }
     }
 
-    enqueueSpeak('I got stuck in a tool loop, sir. Could you rephrase the request?');
+    const fallback = 'I got stuck in a tool loop, sir. Could you rephrase the request?';
+    historyRef.current = [...historyRef.current, { role: 'assistant', content: fallback }];
+    callbacksRef.current.onMessage?.({ message: fallback, role: 'assistant' });
+    enqueueSpeak(fallback);
   }, [streamChatRound, enqueueSpeak]);
 
   const processSpeechSegment = useCallback(async (audio: Float32Array): Promise<void> => {
@@ -333,6 +345,7 @@ export function useLocalConversation(
       speakTokenRef.current += 1;
       playerRef.current?.stop();
       historyRef.current = [...historyRef.current, { role: 'user', content: transcript }];
+      callbacksRef.current.onMessage?.({ message: transcript, role: 'user' });
       // Speech is pipelined inside the loop; playback continues after this
       // resolves, and busyRef clears below so barge-in speech is accepted
       // while Jarvis is still talking.
@@ -344,12 +357,41 @@ export function useLocalConversation(
     }
   }, [runToolLoop, reportTurnError]);
 
+  const sendUserMessage = useCallback(async (rawText: string): Promise<void> => {
+    const text = rawText.trim();
+    if (!text) return;
+    if (!optionsRef.current) throw new Error('Start Jarvis before sending a message.');
+    if (busyRef.current) throw new Error('Jarvis is still finishing the previous request.');
+
+    const sessionId = sessionIdRef.current;
+    busyRef.current = true;
+    speakTokenRef.current += 1;
+    playerRef.current?.stop();
+    historyRef.current = [...historyRef.current, { role: 'user', content: text }];
+    callbacksRef.current.onMessage?.({ message: text, role: 'user' });
+    try {
+      // The provider changes only the chat brain. Speech always runs through
+      // /api/voice/speak with the session's selected Voicebox profile, so the
+      // cloned voice stays identical for Claude and OpenAI.
+      await runToolLoop();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      reportTurnError(message);
+      throw err;
+    } finally {
+      if (sessionId === sessionIdRef.current) busyRef.current = false;
+    }
+  }, [runToolLoop, reportTurnError]);
+
   const endSession = useCallback(() => {
     sessionIdRef.current += 1;
     speakTokenRef.current += 1;
     const vad = vadRef.current;
     vadRef.current = null;
     if (vad) void vad.destroy();
+    if (playerRef.current?.isPlaying || pendingSpeechRef.current > 0) {
+      callbacksRef.current.onModeChange?.({ mode: 'listening' });
+    }
     playerRef.current?.destroy();
     playerRef.current = null;
     ttsChainRef.current = Promise.resolve();
@@ -358,6 +400,7 @@ export function useLocalConversation(
     optionsRef.current = null;
     toolsRef.current = [];
     busyRef.current = false;
+    pendingSpeechRef.current = 0;
     setStatus((prev) => {
       if (prev !== 'disconnected') callbacksRef.current.onDisconnect?.();
       return 'disconnected';
@@ -479,5 +522,13 @@ export function useLocalConversation(
     historyRef.current = [...historyRef.current, { role: 'system', content: text.trim() }];
   }, []);
 
-  return { status, startSession, endSession, setMuted, getOutputVolume, sendContextualUpdate };
+  return {
+    status,
+    startSession,
+    endSession,
+    setMuted,
+    getOutputVolume,
+    sendUserMessage,
+    sendContextualUpdate,
+  };
 }

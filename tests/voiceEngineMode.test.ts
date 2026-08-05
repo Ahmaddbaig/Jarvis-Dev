@@ -40,5 +40,17 @@ describe('hasUsableVoiceEngineConfig', () => {
       brainProvider: 'claude',
       apiKey: 'openai-only',
     }, false)).toBe(false);
+    expect(hasUsableVoiceEngineConfig({
+      apiMode: 'voicebox',
+      brainProvider: 'openai',
+      apiKey: 'configured',
+      voiceboxProfileId: 'shared-jarvis-voice',
+    }, false)).toBe(true);
+    expect(hasUsableVoiceEngineConfig({
+      apiMode: 'voicebox',
+      brainProvider: 'openai',
+      claudeApiKey: 'claude-only',
+      voiceboxProfileId: 'shared-jarvis-voice',
+    }, false)).toBe(false);
   });
 });
