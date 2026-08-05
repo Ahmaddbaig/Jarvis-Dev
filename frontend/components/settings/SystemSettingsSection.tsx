@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import type { JarvisSettings } from '@jarvis/contracts';
 import { sfx } from '@/frontend/lib/sfx';
 import { ChromeSettingsSection } from './ChromeSettingsSection';
+import { LanGatewaySettingsSection } from './LanGatewaySettingsSection';
 import { useSystemDiagnostics } from '@/frontend/hooks/queries/useSystemDiagnostics';
 import {
   useCreateRecoveryExport,
@@ -119,6 +120,8 @@ export function SystemSettingsSection({ settings, onChange }: SystemSettingsSect
       )}
 
       <ChromeSettingsSection />
+
+      <LanGatewaySettingsSection />
 
       <div className="space-y-2">
         <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">

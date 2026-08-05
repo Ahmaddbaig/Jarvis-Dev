@@ -12,6 +12,12 @@ declare global {
       setDesktopPanelMousePassthrough?: (passthrough: boolean) => void;
       overlayClick?: () => void;
       getDesktopControlToken?: () => Promise<string>;
+      getLanGatewayInfo?: () => Promise<{
+        available: boolean;
+        url?: string;
+        pairingUrl?: string;
+        port: number;
+      }>;
       getAudioSourceId?: () => Promise<string | null>;
       getMacPermissions?: () => Promise<MacPermissionStatus>;
       requestMacPermission?: (permission: 'accessibility' | 'screen' | 'microphone') => Promise<MacPermissionStatus>;

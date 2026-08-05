@@ -105,8 +105,10 @@ const g = globalThis as typeof globalThis & {
   _bambuLastErrLog?: number;
 };
 
-// On first module load, restore token from disk and auto-connect
-if (!g._bambuInitialized) {
+// Route modules are evaluated during `next build`; persistence and OS-vault
+// access must therefore remain lazy until a real request reaches this manager.
+function ensureInitialized(): void {
+  if (g._bambuInitialized) return;
   g._bambuInitialized   = true;
   g._bambuPrinters      = [];
   g._bambuTelemetry     = {};
@@ -127,24 +129,42 @@ if (!g._bambuInitialized) {
   }
 }
 
-export const getToken      = (): BambuToken | null => g._bambuToken ?? null;
-export const getPrinters   = (): PrinterInfo[]      => g._bambuPrinters ?? [];
-export const getTelemetry  = (): Record<string, Record<string, unknown>> => g._bambuTelemetry ?? {};
-export const isMqttConnected = (): boolean          => g._bambuMqttConnected ?? false;
+export function getToken(): BambuToken | null {
+  ensureInitialized();
+  return g._bambuToken ?? null;
+}
+
+export function getPrinters(): PrinterInfo[] {
+  ensureInitialized();
+  return g._bambuPrinters ?? [];
+}
+
+export function getTelemetry(): Record<string, Record<string, unknown>> {
+  ensureInitialized();
+  return g._bambuTelemetry ?? {};
+}
+
+export function isMqttConnected(): boolean {
+  ensureInitialized();
+  return g._bambuMqttConnected ?? false;
+}
 
 export function setToken(t: BambuToken | null) {
+  ensureInitialized();
   const normalized = t ? parseBambuToken(t) : null;
   saveTokenToVault(normalized);
   g._bambuToken = normalized;
 }
 
 export function isTokenValid(): boolean {
+  ensureInitialized();
   return !!(g._bambuToken?.accessToken && (g._bambuToken.tokenExpiration ?? 0) > Date.now());
 }
 
 // ── Cloud MQTT ────────────────────────────────────────────────────────────────
 
 export async function connectMqtt(token: BambuToken): Promise<void> {
+  ensureInitialized();
   if (g._bambuMqttConnected && g._bambuMqttClient?.connected) return;
   if (g._bambuConnecting) return;
   g._bambuConnecting = true;
@@ -226,6 +246,7 @@ export async function connectMqtt(token: BambuToken): Promise<void> {
 }
 
 export function sendCommand(deviceId: string, command: 'pause' | 'resume' | 'stop'): boolean {
+  ensureInitialized();
   const client = g._bambuMqttClient;
   if (!client?.connected) return false;
   const seq = Date.now().toString();

@@ -69,6 +69,10 @@ export const queryKeys = {
     all: ['chrome'] as const,
     status: () => ['chrome', 'status'] as const,
   },
+  lanGateway: {
+    all: ['lan-gateway'] as const,
+    state: () => ['lan-gateway', 'state'] as const,
+  },
   models: {
     all: ['models'] as const,
     health: (provider: string) => ['models', 'health', provider] as const,

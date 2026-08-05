@@ -7,6 +7,7 @@ import { TasksRepository } from './repositories/tasks';
 import { SecretRefsRepository } from './repositories/secret-refs';
 import { DevicesRepository } from './repositories/devices';
 import { PairingsRepository } from './repositories/pairings';
+import { SecurityAuditRepository } from './repositories/security-audit';
 
 interface AppliedMigrationRow {
   id: number;
@@ -50,6 +51,7 @@ export class JarvisDatabase {
   readonly secretRefs: SecretRefsRepository;
   readonly devices: DevicesRepository;
   readonly pairings: PairingsRepository;
+  readonly securityAudit: SecurityAuditRepository;
   readonly connection: DatabaseSync;
 
   constructor(
@@ -69,6 +71,7 @@ export class JarvisDatabase {
     this.secretRefs = new SecretRefsRepository(this.connection);
     this.devices = new DevicesRepository(this.connection);
     this.pairings = new PairingsRepository(this.connection);
+    this.securityAudit = new SecurityAuditRepository(this.connection);
   }
 
   transaction<T>(operation: () => T): T {
@@ -147,7 +150,7 @@ export class JarvisDatabase {
     const tables = [
       'schema_migrations', 'settings', 'secret_refs', 'devices', 'pairings',
       'capability_grants', 'sessions', 'messages', 'tool_runs', 'approvals',
-      'tasks', 'integration_state', 'model_profiles', 'migration_sources',
+      'tasks', 'integration_state', 'model_profiles', 'migration_sources', 'security_audit',
     ] as const;
     const data = Object.fromEntries(tables.map((table) => [
       table,

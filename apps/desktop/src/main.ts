@@ -17,11 +17,11 @@ import type { ChildProcess } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
-import https from 'node:https';
-import { networkInterfaces } from 'node:os';
 import path from 'node:path';
-import httpProxy from 'http-proxy';
-import selfsigned from 'selfsigned';
+import {
+    startLanGateway,
+    type LanGatewayController,
+} from './lan-gateway';
 
 type DesktopPanelPosition = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
 type DesktopWindowKind = 'visual' | 'hitbox';
@@ -103,6 +103,8 @@ process.env.JARVIS_DESKTOP_TOKEN = DESKTOP_CONTROL_TOKEN;
 // Keep this editable build separate from the Patreon-installed Jarvis app.
 app.setPath('userData', path.join(app.getPath('appData'), 'Jarvis Dev'));
 app.setName('Jarvis Dev');
+const CORE_DATA_DIR = process.env.JARVIS_DATA_DIR || (isDev ? app.getAppPath() : app.getPath('userData'));
+process.env.JARVIS_DATA_DIR = CORE_DATA_DIR;
 // Global safety net: ECONNRESET / EPIPE are harmless connection-level errors
 // that happen when a phone/tablet disconnects mid-request (iOS tab kill, screen
 // lock, navigation). Without this handler they surface as an uncaught exception
@@ -448,6 +450,15 @@ function setupDesktopModeIpc(): void {
         catch { /* Reject non-Jarvis renderer URLs below. */ }
         throw new Error('Desktop control credentials are available only to the local Jarvis renderer.');
     });
+    ipcMain.handle('lan-gateway:info', (event) => {
+        try {
+            const sender = new URL(event.senderFrame?.url || event.sender.getURL());
+            if (sender.protocol === 'http:' && sender.hostname === '127.0.0.1' && Number(sender.port) === PORT)
+                return lanGateway?.info() ?? { available: false, port: HTTPS_PORT };
+        }
+        catch { /* Reject non-Jarvis renderer URLs below. */ }
+        throw new Error('LAN gateway details are available only to the local Jarvis renderer.');
+    });
     ipcMain.handle('desktop-mode:set', (_event, options: DesktopModeOptions) => {
         return setDesktopMode(options);
     });
@@ -534,7 +545,7 @@ function startNextServer(): Promise<void> {
                 HOSTNAME: '127.0.0.1',
                 NODE_ENV: 'production',
                 NEXT_MANUAL_SIG_HANDLE: 'true',
-                JARVIS_DATA_DIR: app.getPath('userData'),
+                JARVIS_DATA_DIR: CORE_DATA_DIR,
                 JARVIS_APP_VERSION: app.getVersion(),
             },
             windowsHide: true,
@@ -613,121 +624,25 @@ async function requestMacPermission(permission: MacPermission): Promise<MacPermi
     }
     return getMacPermissionStatus();
 }
-function getLanIp(): string | null {
-    for (const ifaces of Object.values(networkInterfaces())) {
-        for (const iface of ifaces ?? []) {
-            if (iface.family === 'IPv4' && !iface.internal)
-                return iface.address;
-        }
-    }
-    return null;
-}
-let httpsServer: https.Server | null = null;
+let lanGateway: LanGatewayController | null = null;
 async function startHttpsProxy(): Promise<void> {
     try {
-        const certPath = path.join(app.getPath('userData'), 'jarvis-tls.json');
-        let pems: { private: string; cert: string };
-        // Reuse cached cert so browsers only need to accept it once
-        if (fs.existsSync(certPath)) {
-            pems = JSON.parse(fs.readFileSync(certPath, 'utf-8'));
-        }
-        else {
-            const options = { days: 3650 } as unknown as Parameters<typeof selfsigned.generate>[1];
-            const generated = await selfsigned.generate([{ name: 'commonName', value: 'jarvis.local' }], options);
-            pems = generated;
-            fs.writeFileSync(certPath, JSON.stringify(pems));
-        }
-        const proxy = httpProxy.createProxyServer({
-            target: `http://127.0.0.1:${PORT}`,
-            ws: true,
-            changeOrigin: true,
+        lanGateway = await startLanGateway({
+            internalPort: PORT,
+            httpsPort: HTTPS_PORT,
+            desktopToken: DESKTOP_CONTROL_TOKEN,
+            userDataPath: app.getPath('userData'),
+            onError: (error) => {
+                const code = errorCode(error) ?? '';
+                if (!['ECONNRESET', 'ECONNREFUSED', 'EPIPE'].includes(code))
+                    console.error('[jarvis] LAN gateway error:', error.message);
+            },
         });
-        // Swallow all proxy-level errors (ECONNRESET, ECONNREFUSED, etc.)
-        proxy.on('error', (err, _req, res) => {
-            const code = errorCode(err) ?? '';
-            if (code === 'ECONNRESET' || code === 'ECONNREFUSED' || code === 'EPIPE')
-                return;
-            console.error('[jarvis] Proxy error:', err.message);
-            // Try to send a 502 if the response is still writable
-            try {
-                if (res && 'writeHead' in res && typeof res.writeHead === 'function') {
-                    res.writeHead(502);
-                    res.end();
-                }
-            }
-            catch { /* already sent */ }
-        });
-        httpsServer = https.createServer({ key: pems.private, cert: pems.cert }, (req, res) => {
-            const requestPath = (req.url || '').split('?', 1)[0];
-            if (requestPath === '/api/chrome-control' || requestPath.startsWith('/api/chrome-control/')) {
-                res.writeHead(403, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-                res.end(JSON.stringify({ error: 'Chrome control is available only in the local Jarvis desktop window.' }));
-                return;
-            }
-            // Mouse/keyboard routing is intentionally desktop-local. The LAN UI
-            // remains available, but it must never be able to seize a computer.
-            if (requestPath === '/api/deskflow' || requestPath.startsWith('/api/deskflow/') ||
-                requestPath === '/api/companions' || requestPath.startsWith('/api/companions/') ||
-                requestPath === '/api/computer-use' || requestPath.startsWith('/api/computer-use/')) {
-                res.writeHead(403, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'Computer control is available only in the Jarvis desktop app.' }));
-                return;
-            }
-            proxy.web(req, res);
-        });
-        // Handle socket-level errors on every incoming TLS connection.
-        // When a phone disconnects mid-request (iOS tab kill, screen lock, navigation)
-        // the TLS socket throws ECONNRESET. Without this handler it reaches Node.js as
-        // an uncaught exception and crashes the entire Electron main process.
-        httpsServer.on('connection', (socket) => {
-            socket.on('error', (err) => {
-                if (errorCode(err) === 'ECONNRESET' || errorCode(err) === 'EPIPE')
-                    return;
-                console.error('[jarvis] HTTPS socket error:', err.message);
-            });
-        });
-        httpsServer.on('upgrade', (req, socket, head) => {
-            socket.on('error', (err) => {
-                if (errorCode(err) === 'ECONNRESET' || errorCode(err) === 'EPIPE')
-                    return;
-                console.error('[jarvis] HTTPS upgrade socket error:', err.message);
-            });
-            // Intercept Next.js HMR WebSocket upgrades and silently accept them
-            // without forwarding to the dev server. LAN clients (phones/tablets)
-            // can't establish a real WSS connection over the self-signed cert, so
-            // the HMR socket fails repeatedly → Next.js calls location.reload().
-            // By completing the WebSocket handshake ourselves and keeping the socket
-            // open-but-silent, Next.js thinks it's connected and stops retrying.
-            // No HMR messages are ever sent, so no reloads ever fire.
-            if (req.url && (req.url.includes('webpack-hmr') || req.url.includes('_next/webpack'))) {
-                const key = req.headers['sec-websocket-key'];
-                if (key) {
-                    const accept = crypto
-                        .createHash('sha1')
-                        .update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11')
-                        .digest('base64');
-                    socket.write('HTTP/1.1 101 Switching Protocols\r\n' +
-                        'Upgrade: websocket\r\n' +
-                        'Connection: Upgrade\r\n' +
-                        `Sec-WebSocket-Accept: ${accept}\r\n\r\n`);
-                    // Keep the socket alive but never send any HMR frames.
-                    socket.on('data', () => { });
-                }
-                else {
-                    socket.destroy();
-                }
-                return;
-            }
-            proxy.ws(req, socket, head);
-        });
-        httpsServer.listen(HTTPS_PORT, '0.0.0.0', () => {
-            const ip = getLanIp();
-            if (ip)
-                console.log(`[jarvis] LAN HTTPS: https://${ip}:${HTTPS_PORT}`);
-        });
+        const info = lanGateway.info();
+        if (info.url) console.log(`[jarvis] Paired LAN gateway: ${info.url}`);
     }
     catch (err) {
-        console.error('[jarvis] HTTPS proxy failed to start:', err);
+        console.error('[jarvis] Paired LAN gateway failed to start:', err);
     }
 }
 function createWindow(): void {
@@ -863,5 +778,5 @@ app.on('activate', () => {
 });
 app.on('before-quit', () => {
     nextServer?.kill();
-    httpsServer?.close();
+    lanGateway?.close();
 });

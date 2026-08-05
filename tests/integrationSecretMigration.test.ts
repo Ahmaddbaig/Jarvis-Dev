@@ -46,6 +46,7 @@ describe.sequential('integration secret migrations', () => {
     const { store, credentials } = installTestServices(directory);
 
     const bambu = await import('../backend/bambu/mqtt-manager');
+    bambu.getToken();
     expect(credentials.getSecret(bambu.BAMBU_TOKEN_SECRET)).toContain('synthetic-bambu-access');
     expect(() => statSync(tokenPath)).toThrow();
     expect(store.diagnostics().migrationSources).toEqual(expect.arrayContaining([

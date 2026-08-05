@@ -164,6 +164,25 @@ CREATE INDEX idx_tasks_date ON tasks(scope, due_date);
 PRAGMA user_version = 1;
 `;
 
+const SECURITY_AUDIT_SQL = `
+CREATE TABLE security_audit (
+  id TEXT PRIMARY KEY,
+  occurred_at TEXT NOT NULL,
+  actor_id TEXT,
+  action TEXT NOT NULL,
+  resource TEXT NOT NULL,
+  decision TEXT NOT NULL CHECK (decision IN ('allowed', 'denied', 'issued', 'revoked', 'failed')),
+  reason TEXT NOT NULL,
+  remote_hash TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata_json))
+) STRICT;
+
+CREATE INDEX idx_security_audit_time ON security_audit(occurred_at DESC);
+CREATE INDEX idx_security_audit_actor ON security_audit(actor_id, occurred_at DESC);
+
+PRAGMA user_version = 2;
+`;
+
 function checksum(sql: string): string {
   return createHash('sha256').update(sql.trim()).digest('hex');
 }
@@ -174,6 +193,12 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = [
     name: 'initial-core-schema',
     sql: INITIAL_SCHEMA_SQL,
     checksum: checksum(INITIAL_SCHEMA_SQL),
+  },
+  {
+    id: 2,
+    name: 'security-audit-log',
+    sql: SECURITY_AUDIT_SQL,
+    checksum: checksum(SECURITY_AUDIT_SQL),
   },
 ] as const;
 

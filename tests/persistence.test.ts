@@ -32,7 +32,10 @@ describe('Jarvis SQLite persistence', () => {
     expect(first.diagnostics()).toMatchObject({
       schemaVersion: LATEST_SCHEMA_VERSION,
       integrity: 'ok',
-      migrations: [{ id: 1, name: 'initial-core-schema', appVersion: '1.1.0-test' }],
+      migrations: expect.arrayContaining([
+        { id: 1, name: 'initial-core-schema', appVersion: '1.1.0-test', checksum: expect.any(String), appliedAt: expect.any(String) },
+        { id: 2, name: 'security-audit-log', appVersion: '1.1.0-test', checksum: expect.any(String), appliedAt: expect.any(String) },
+      ]),
     });
     first.close();
 
@@ -92,6 +95,26 @@ describe('Jarvis SQLite persistence', () => {
       id: 'companion:device-1',
       deviceId: 'device-1',
       state: 'paired',
+    }]);
+    database.close();
+  });
+
+  it('appends bounded structured security audit events', () => {
+    const database = new JarvisDatabase(':memory:', 'test');
+    database.securityAudit.append({
+      id: 'audit:synthetic-event',
+      actorId: 'lan-client:synthetic',
+      action: 'lan.request',
+      resource: '/api/tasks',
+      decision: 'allowed',
+      reason: 'SCOPED_REQUEST_ALLOWED',
+      remoteHash: 'a'.repeat(64),
+      metadata: { method: 'PUT' },
+    });
+    expect(database.securityAudit.list(1)).toMatchObject([{
+      actorId: 'lan-client:synthetic',
+      decision: 'allowed',
+      metadata: { method: 'PUT' },
     }]);
     database.close();
   });

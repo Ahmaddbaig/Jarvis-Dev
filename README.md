@@ -6,7 +6,7 @@ Electron + Next.js desktop assistant with voice, HUD widgets, and smart-home int
 
 ## Refactor program
 
-The whole-codebase refactor starts with a behavior-preserving baseline. The current gate status and reproducibility evidence are in [docs/refactor/baseline-2026-08-05.md](docs/refactor/baseline-2026-08-05.md), with the [initial threat model](docs/refactor/threat-model.md), source-validated [API route inventory](docs/refactor/route-inventory.json), [typed Electron build notes](docs/refactor/r02-electron-build.md), [test/CI foundation](docs/refactor/r03-test-ci.md), [shared contract protocol](docs/refactor/r04-contracts.md), [capability policy foundation](docs/refactor/r05-policy.md), [static tool catalog and dispatcher](docs/refactor/r06-tool-catalog.md), [voice-session extraction](docs/refactor/r07-voice-session.md), [UI/settings decomposition](docs/refactor/r08-ui-settings.md), [renderer server-state ownership](docs/refactor/r09-server-state.md), [SQLite persistence/recovery](docs/refactor/r10-sqlite-persistence.md), and [OS-vault credential migration](docs/refactor/r11-os-vault.md). Run `npm run check` for the local quality gate, `npm run refactor:baseline` for the full baseline suite, and `npm run refactor:routes -- --check` to detect unclassified route changes.
+The whole-codebase refactor starts with a behavior-preserving baseline. The current gate status and reproducibility evidence are in [docs/refactor/baseline-2026-08-05.md](docs/refactor/baseline-2026-08-05.md), with the [initial threat model](docs/refactor/threat-model.md), source-validated [API route inventory](docs/refactor/route-inventory.json), [typed Electron build notes](docs/refactor/r02-electron-build.md), [test/CI foundation](docs/refactor/r03-test-ci.md), [shared contract protocol](docs/refactor/r04-contracts.md), [capability policy foundation](docs/refactor/r05-policy.md), [static tool catalog and dispatcher](docs/refactor/r06-tool-catalog.md), [voice-session extraction](docs/refactor/r07-voice-session.md), [UI/settings decomposition](docs/refactor/r08-ui-settings.md), [renderer server-state ownership](docs/refactor/r09-server-state.md), [SQLite persistence/recovery](docs/refactor/r10-sqlite-persistence.md), [OS-vault credential migration](docs/refactor/r11-os-vault.md), and [internal/LAN gateway hardening](docs/refactor/r12-gateway-hardening.md). Run `npm run check` for the local quality gate, `npm run refactor:baseline` for the full baseline suite, and `npm run refactor:routes -- --check` to detect unclassified route changes.
 
 ## Running in development
 
@@ -97,16 +97,16 @@ the user.
 ├── dist-electron/        # Electron main + preload (compiled)
 ├── scripts/              # Python computer-use helper + compiled binary
 ├── public/               # static assets served at /
-└── jarvis-server-settings.json   # SETTINGS + API KEYS (gitignored, created by the
-                                  # Settings UI via POST /api/settings)
+└── jarvis-core.sqlite3           # transactional non-secret state in development
 ```
 
 ### Where settings live
 
-Settings (including API keys) entered in the in-app Settings modal are POSTed to
-`/api/settings` and written to `jarvis-server-settings.json` — next to the code in
-dev, or in the Electron data dir (`JARVIS_DATA_DIR`) in the packaged app. This file
-is gitignored; there is no `.env`.
+Non-secret settings are validated by `/api/settings` and stored transactionally in
+`jarvis-core.sqlite3` under `JARVIS_DATA_DIR`. API keys and integration credentials
+are stored in the operating system credential vault; SQLite contains only opaque
+references and configured-state metadata. A legacy `jarvis-server-settings.json`
+is backed up, imported, and sanitized during migration.
 
 ### Import aliases
 

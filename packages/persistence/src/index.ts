@@ -11,5 +11,11 @@ export { DevicesRepository } from './repositories/devices';
 export type { DeviceRecord, PutDevice } from './repositories/devices';
 export { PairingsRepository } from './repositories/pairings';
 export type { PairingRecord, PairingState, PutPairing } from './repositories/pairings';
+export { SecurityAuditRepository } from './repositories/security-audit';
+export type {
+  AppendSecurityAudit,
+  SecurityAuditDecision,
+  SecurityAuditRecord,
+} from './repositories/security-audit';
 export { TasksRepository } from './repositories/tasks';
 export type { LocalTask } from '@jarvis/contracts';

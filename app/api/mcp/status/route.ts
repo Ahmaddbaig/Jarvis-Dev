@@ -1,10 +1,11 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { McpServerManager } from '@/backend/mcp/server-manager';
+import { lanRequestIdentity } from '@/backend/gateway/trusted-request';
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
     const manager = McpServerManager.getInstance();
-    await manager.initialize();
+    if (!lanRequestIdentity(req)) await manager.initialize();
     const servers = manager.getServerStatus();
     const tools = manager.listTools();
     return NextResponse.json({

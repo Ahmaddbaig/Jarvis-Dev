@@ -4,6 +4,7 @@ export * from './credentials';
 export * from './errors';
 export * from './identifiers';
 export * from './json-value';
+export * from './lan-gateway';
 export * from './policy';
 export * from './protocol';
 export * from './settings';

@@ -7,13 +7,15 @@ const API_ROOT = path.join(ROOT, 'app', 'api');
 const INVENTORY_PATH = path.join(ROOT, 'docs', 'refactor', 'route-inventory.json');
 const METHOD_PATTERN = /export\s+(?:async\s+)?function\s+(GET|POST|PUT|PATCH|DELETE|OPTIONS)\b/g;
 const ALLOWED = {
-  exposure: new Set(['lan-proxied', 'desktop-only', 'loopback-extension']),
+  exposure: new Set(['lan-allowlisted', 'internal-loopback', 'desktop-only', 'loopback-extension']),
   auth: new Set([
     'none',
     'desktop-bearer',
     'chrome-ui-bearer',
     'chrome-extension-bearer',
     'extension-origin+pairing-code',
+    'lan-paired-cookie',
+    'loopback-origin',
   ]),
   risk: new Set(['read-only', 'low', 'consequential', 'dangerous']),
   priority: new Set(['P0', 'P1', 'P2']),
@@ -60,15 +62,24 @@ function validateMetadata(entry, errors) {
   if (entry.exposure === 'desktop-only' && !['desktop-bearer', 'chrome-ui-bearer'].includes(entry.auth)) {
     errors.push(`${entry.route}: desktop-only routes must use a desktop-scoped bearer token`);
   }
-  if (entry.exposure === 'lan-proxied' && entry.auth !== 'none') {
-    errors.push(`${entry.route}: update the inventory validator when LAN authentication is introduced`);
+  if (entry.exposure === 'lan-allowlisted' && entry.auth !== 'lan-paired-cookie') {
+    errors.push(`${entry.route}: LAN allowlisted routes must use paired cookie authentication`);
+  }
+  if (entry.exposure === 'internal-loopback' && !['loopback-origin', 'desktop-bearer'].includes(entry.auth)) {
+    errors.push(`${entry.route}: internal loopback routes need the common origin boundary or desktop bearer`);
+  }
+  if (entry.lanMethods !== undefined) {
+    if (!Array.isArray(entry.lanMethods) || entry.lanMethods.some((method) => !entry.methods.includes(method))) {
+      errors.push(`${entry.route}: lanMethods must be a subset of methods`);
+    }
   }
 }
 
 function renderMarkdown(snapshot, routes) {
   const counts = {
     total: routes.length,
-    lan: routes.filter((entry) => entry.exposure === 'lan-proxied').length,
+    lan: routes.filter((entry) => entry.exposure === 'lan-allowlisted').length,
+    internal: routes.filter((entry) => entry.exposure === 'internal-loopback').length,
     desktop: routes.filter((entry) => entry.exposure === 'desktop-only').length,
     extension: routes.filter((entry) => entry.exposure === 'loopback-extension').length,
     unauthenticated: routes.filter((entry) => entry.auth === 'none').length,
@@ -79,7 +90,7 @@ function renderMarkdown(snapshot, routes) {
     '',
     `Snapshot: \`${snapshot.commit}\` on ${snapshot.date}.`,
     '',
-    `${counts.total} route handlers are tracked: ${counts.lan} are reachable through the current LAN proxy, ${counts.desktop} are desktop-only, ${counts.extension} are loopback extension endpoints, ${counts.unauthenticated} have no route-level authentication, and ${counts.p0} are P0 migration targets.`,
+    `${counts.total} route handlers are tracked: ${counts.lan} have explicit authenticated LAN methods, ${counts.internal} are internal-loopback only, ${counts.desktop} are desktop-only, ${counts.extension} are loopback extension endpoints, ${counts.unauthenticated} have no route-level authentication, and ${counts.p0} are P0 migration targets.`,
     '',
     '| Route | Methods | Exposure | Auth | Secret use | Side effect | Confirmation | Capability | Risk | Priority |',
     '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
