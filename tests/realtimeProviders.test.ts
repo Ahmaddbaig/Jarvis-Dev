@@ -18,7 +18,6 @@ describe('OpenAI realtime adapter', () => {
   it('creates signaling and session-update payloads behind the common interface', async () => {
     const request = vi.fn<RealtimeFetch>(async () => new Response('answer-sdp'));
     const adapter = createOpenAIRealtimeAdapter({
-      apiKey: 'synthetic-openai-key',
       model: 'synthetic-realtime-model',
       voice: 'echo',
       fetch: request,
@@ -30,14 +29,12 @@ describe('OpenAI realtime adapter', () => {
     expect(adapter.requiresCompleteIce).toBe(false);
     expect(request).toHaveBeenCalledOnce();
     const [url, init] = request.mock.calls[0];
-    expect(url).toBe('https://api.openai.com/v1/realtime/calls');
-    expect(init?.headers).toEqual({ Authorization: 'Bearer synthetic-openai-key' });
-    expect(init?.body).toBeInstanceOf(FormData);
-    const form = init?.body as FormData;
-    expect(form.get('sdp')).toBe('offer-sdp');
-    expect(JSON.parse(String(form.get('session')))).toMatchObject({
+    expect(url).toBe('/api/voice/realtime');
+    expect(init?.headers).toEqual({ 'Content-Type': 'application/json' });
+    expect(JSON.parse(String(init?.body))).toMatchObject({
+      sdp: 'offer-sdp',
       model: 'synthetic-realtime-model',
-      audio: { output: { voice: 'echo' } },
+      voice: 'echo',
     });
 
     expect(adapter.createSessionUpdate(context)).toMatchObject({
@@ -50,12 +47,8 @@ describe('OpenAI realtime adapter', () => {
     });
   });
 
-  it('requires an injected credential and redacts failed response bodies', async () => {
-    const missing = createOpenAIRealtimeAdapter({ apiKey: ' ', model: 'model', voice: 'echo' });
-    await expect(missing.prepare()).rejects.toMatchObject({ code: 'AUTH.NOT_CONFIGURED' });
-
+  it('keeps credentials server-side and redacts failed response bodies', async () => {
     const adapter = createOpenAIRealtimeAdapter({
-      apiKey: 'synthetic-key',
       model: 'model',
       voice: 'echo',
       fetch: async () => new Response('SECRET_RESPONSE_BODY', { status: 401 }),

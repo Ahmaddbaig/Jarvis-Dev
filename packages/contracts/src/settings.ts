@@ -49,7 +49,6 @@ export const localAIBaseUrlSchema = z.string().url().max(2_048).superRefine((val
 const jarvisSettingsBaseSchema = z.object({
   schemaVersion: z.literal(JARVIS_SETTINGS_SCHEMA_VERSION).default(JARVIS_SETTINGS_SCHEMA_VERSION),
   apiMode: voiceEngineModeSchema,
-  apiKey: z.string().max(8_192),
   realtimeModel: realtimeModelSchema.optional(),
   localAIProfile: localAIProfileSchema.optional(),
   localAIBaseUrl: localAIBaseUrlSchema.optional(),
@@ -59,7 +58,6 @@ const jarvisSettingsBaseSchema = z.object({
   elevenLabsFirstMessage: optionalBoundedString(8_192),
   brainProvider: z.enum(['openai', 'claude']).optional(),
   chatModel: optionalBoundedString(256),
-  claudeApiKey: optionalBoundedString(8_192),
   voiceboxProfileId: optionalBoundedString(512),
   voicePlaybackRate: z.number().finite().min(0.5).max(2).optional(),
   localFirstMessage: optionalBoundedString(8_192),

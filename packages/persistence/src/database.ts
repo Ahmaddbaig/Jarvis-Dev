@@ -4,6 +4,9 @@ import path from 'node:path';
 import { DATABASE_MIGRATIONS, LATEST_SCHEMA_VERSION } from './migrations';
 import { SettingsRepository } from './repositories/settings';
 import { TasksRepository } from './repositories/tasks';
+import { SecretRefsRepository } from './repositories/secret-refs';
+import { DevicesRepository } from './repositories/devices';
+import { PairingsRepository } from './repositories/pairings';
 
 interface AppliedMigrationRow {
   id: number;
@@ -44,6 +47,9 @@ export class UnsupportedSchemaVersionError extends Error {
 export class JarvisDatabase {
   readonly settings: SettingsRepository;
   readonly tasks: TasksRepository;
+  readonly secretRefs: SecretRefsRepository;
+  readonly devices: DevicesRepository;
+  readonly pairings: PairingsRepository;
   readonly connection: DatabaseSync;
 
   constructor(
@@ -60,6 +66,9 @@ export class JarvisDatabase {
     this.restrictDatabaseFiles();
     this.settings = new SettingsRepository(this.connection);
     this.tasks = new TasksRepository(this.connection);
+    this.secretRefs = new SecretRefsRepository(this.connection);
+    this.devices = new DevicesRepository(this.connection);
+    this.pairings = new PairingsRepository(this.connection);
   }
 
   transaction<T>(operation: () => T): T {

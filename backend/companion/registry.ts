@@ -1,59 +1,208 @@
-import fs from 'fs';
-import path from 'path';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import { migrateLegacyJson } from '@jarvis/persistence';
+import { getCoreStore } from '../persistence/core-store';
+import {
+  getCredentialService,
+  type VaultSecretDefinition,
+} from '../secrets/credential-service';
 import type { CompanionDevice, CompanionRemoteConfig } from './types';
 
-interface CompanionRegistry {
+interface LegacyCompanionRegistry {
   version: 1;
   devices: CompanionDevice[];
 }
+
+interface StoredCompanionDevice {
+  id: string;
+  name: string;
+  address: string;
+  fingerprint: string;
+  platform: string;
+  arch: string;
+  pairedAt: string;
+}
+
+let legacyRegistryChecked = false;
 
 function registryPath(): string {
   const base = process.env.JARVIS_DATA_DIR || process.cwd();
   return path.join(base, 'jarvis-companions.json');
 }
 
-export function readCompanionRegistry(): CompanionRegistry {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(registryPath(), 'utf8')) as Partial<CompanionRegistry>;
-    return {
-      version: 1,
-      devices: Array.isArray(parsed.devices) ? parsed.devices.filter((device) =>
-        device &&
-        typeof device.id === 'string' &&
-        typeof device.name === 'string' &&
-        typeof device.address === 'string' &&
-        typeof device.token === 'string' &&
-        typeof device.fingerprint === 'string'
-      ) : [],
-    };
-  } catch {
-    return { version: 1, devices: [] };
-  }
+export function companionTokenSecret(deviceId: string): VaultSecretDefinition {
+  const digest = crypto.createHash('sha256').update(deviceId, 'utf8').digest('hex');
+  return {
+    id: `credential.companion.${digest}`,
+    integration: 'companion',
+    account: `companion.${digest}.bearer-token`,
+  };
 }
 
-function writeCompanionRegistry(registry: CompanionRegistry): void {
+function parseLegacyDevice(value: unknown): CompanionDevice {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Companion device must be an object.');
+  }
+  const device = value as Partial<CompanionDevice>;
+  for (const key of ['id', 'name', 'address', 'token', 'fingerprint', 'platform', 'arch', 'pairedAt'] as const) {
+    if (typeof device[key] !== 'string' || !device[key]) {
+      throw new Error(`Companion device ${key} is missing.`);
+    }
+  }
+  return device as CompanionDevice;
+}
+
+function storedDevice(device: CompanionDevice): StoredCompanionDevice {
+  return {
+    id: device.id,
+    name: device.name,
+    address: device.address,
+    fingerprint: device.fingerprint,
+    platform: device.platform,
+    arch: device.arch,
+    pairedAt: device.pairedAt,
+  };
+}
+
+function writeSanitizedLegacyRegistry(devices: readonly CompanionDevice[]): void {
   const target = registryPath();
+  if (!fs.existsSync(target)) return;
   const temporary = `${target}.${process.pid}.tmp`;
-  fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(temporary, JSON.stringify(registry, null, 2), { encoding: 'utf8', mode: 0o600 });
+  fs.writeFileSync(temporary, `${JSON.stringify({
+    version: 1,
+    devices: devices.map(storedDevice),
+  }, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
   fs.renameSync(temporary, target);
   try { fs.chmodSync(target, 0o600); } catch { /* Windows has no POSIX file mode */ }
 }
 
+function putMetadata(device: StoredCompanionDevice): void {
+  const store = getCoreStore();
+  store.database.devices.put({
+    id: device.id,
+    kind: 'companion',
+    friendlyName: device.name,
+    platform: device.platform,
+    metadata: { address: device.address, arch: device.arch },
+  });
+  store.database.pairings.put({
+    id: `companion:${device.id}`,
+    deviceId: device.id,
+    certificateFingerprint: device.fingerprint,
+    state: 'paired',
+    pairedAt: device.pairedAt,
+    metadata: { protocol: 1 },
+  });
+}
+
+function migrateLegacyRegistry(): void {
+  if (legacyRegistryChecked) return;
+  const store = getCoreStore();
+  const credentials = getCredentialService();
+  const result = migrateLegacyJson({
+    database: store.database,
+    sourceId: 'jarvis-companions-v1',
+    sourcePath: registryPath(),
+    backupDirectory: path.join(store.dataDirectory, 'migration-backups'),
+    quarantineDirectory: path.join(store.dataDirectory, 'migration-quarantine'),
+    importRecord: (record) => {
+      if (!Array.isArray(record.devices)) throw new Error('Companion registry devices must be an array.');
+      const devices = record.devices.map(parseLegacyDevice);
+      const previous = new Map<string, string | null>();
+      const written: VaultSecretDefinition[] = [];
+      try {
+        for (const device of devices) {
+          const definition = companionTokenSecret(device.id);
+          previous.set(definition.id, credentials.getSecret(definition));
+          credentials.setSecret(definition, device.token, { deviceId: device.id, kind: 'bearer-token' });
+          written.push(definition);
+          putMetadata(storedDevice(device));
+        }
+      } catch (error) {
+        for (const definition of written.reverse()) {
+          const oldValue = previous.get(definition.id);
+          if (oldValue === null || oldValue === undefined) credentials.deleteSecret(definition);
+          else credentials.setSecret(definition, oldValue, { kind: 'bearer-token' });
+        }
+        throw error;
+      }
+    },
+  });
+
+  if (result.state === 'imported') {
+    const devices = readDatabaseRegistry().devices;
+    writeSanitizedLegacyRegistry(devices);
+  }
+  legacyRegistryChecked = true;
+}
+
+function requiredMetadata(metadata: Readonly<Record<string, unknown>>, key: 'address' | 'arch'): string {
+  const value = metadata[key];
+  if (typeof value !== 'string' || !value) throw new Error(`Companion metadata ${key} is missing.`);
+  return value;
+}
+
+function readDatabaseRegistry(): LegacyCompanionRegistry {
+  const store = getCoreStore();
+  const credentials = getCredentialService();
+  const pairings = new Map(
+    store.database.pairings.list('paired')
+      .filter((pairing) => pairing.id.startsWith('companion:'))
+      .map((pairing) => [pairing.deviceId, pairing]),
+  );
+  const devices = store.database.devices.list('companion').flatMap((device): CompanionDevice[] => {
+    const pairing = pairings.get(device.id);
+    if (!pairing?.certificateFingerprint || !pairing.pairedAt || !device.platform) return [];
+    const token = credentials.getSecret(companionTokenSecret(device.id));
+    if (!token) return [];
+    return [{
+      id: device.id,
+      name: device.friendlyName,
+      address: requiredMetadata(device.metadata, 'address'),
+      token,
+      fingerprint: pairing.certificateFingerprint,
+      platform: device.platform,
+      arch: requiredMetadata(device.metadata, 'arch'),
+      pairedAt: pairing.pairedAt,
+    }];
+  });
+  return { version: 1, devices };
+}
+
+export function readCompanionRegistry(): LegacyCompanionRegistry {
+  migrateLegacyRegistry();
+  return readDatabaseRegistry();
+}
+
 export function upsertCompanionDevice(device: CompanionDevice): CompanionDevice {
-  const registry = readCompanionRegistry();
-  registry.devices = registry.devices.filter((candidate) => candidate.id !== device.id && candidate.address !== device.address);
-  registry.devices.push(device);
-  writeCompanionRegistry(registry);
+  migrateLegacyRegistry();
+  const credentials = getCredentialService();
+  const definition = companionTokenSecret(device.id);
+  const previous = credentials.getSecret(definition);
+  credentials.setSecret(definition, device.token, { deviceId: device.id, kind: 'bearer-token' });
+  try {
+    getCoreStore().database.transaction(() => putMetadata(storedDevice(device)));
+  } catch (error) {
+    if (previous === null) credentials.deleteSecret(definition);
+    else credentials.setSecret(definition, previous, { deviceId: device.id, kind: 'bearer-token' });
+    throw error;
+  }
+
+  for (const duplicate of readDatabaseRegistry().devices) {
+    if (duplicate.id !== device.id && duplicate.address === device.address) removeCompanionDevice(duplicate.id);
+  }
   return device;
 }
 
 export function removeCompanionDevice(id: string): boolean {
-  const registry = readCompanionRegistry();
-  const before = registry.devices.length;
-  registry.devices = registry.devices.filter((device) => device.id !== id);
-  if (registry.devices.length !== before) writeCompanionRegistry(registry);
-  return registry.devices.length !== before;
+  migrateLegacyRegistry();
+  const store = getCoreStore();
+  const existed = store.database.devices.get(id)?.kind === 'companion';
+  if (!existed) return false;
+  getCredentialService().deleteSecret(companionTokenSecret(id));
+  store.database.devices.delete(id);
+  return true;
 }
 
 export function resolveCompanionDevice(requestedTarget: string): CompanionDevice | null {

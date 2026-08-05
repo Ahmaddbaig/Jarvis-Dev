@@ -1,14 +1,26 @@
 /**
  * Bambu Lab Cloud MQTT manager — module-level singleton so the connection
  * persists across hot-reloads in Next.js dev and across route invocations.
- * Token is persisted to disk so it survives server restarts.
+ * Tokens are persisted in the operating-system vault so they survive restarts
+ * without appearing in application files or renderer state.
  */
 
 import fs from 'fs';
 import path from 'path';
+import { migrateLegacyJson } from '@jarvis/persistence';
+import { getCoreStore } from '../persistence/core-store';
+import {
+  getCredentialService,
+  type VaultSecretDefinition,
+} from '../secrets/credential-service';
 
 const BAMBU_API  = 'https://api.bambulab.com';
 const TOKEN_PATH = path.join(process.env.JARVIS_DATA_DIR || process.cwd(), '.bambu-token.json');
+export const BAMBU_TOKEN_SECRET: VaultSecretDefinition = {
+  id: 'credential.bambu.session-token',
+  integration: 'bambu',
+  account: 'bambu.session-token',
+};
 
 export interface BambuToken {
   accessToken: string;
@@ -22,27 +34,61 @@ export interface PrinterInfo {
   model?: string;
 }
 
-// ── Disk persistence ──────────────────────────────────────────────────────────
+// ── Vault persistence and legacy migration ───────────────────────────────────
 
-function loadTokenFromDisk(): BambuToken | null {
+export function parseBambuToken(value: unknown): BambuToken {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Bambu token must be an object.');
+  }
+  const candidate = value as Partial<BambuToken>;
+  if (typeof candidate.accessToken !== 'string' || !candidate.accessToken) {
+    throw new Error('Bambu access token is missing.');
+  }
+  if (typeof candidate.refreshToken !== 'string') {
+    throw new Error('Bambu refresh token is invalid.');
+  }
+  if (typeof candidate.tokenExpiration !== 'number' || !Number.isFinite(candidate.tokenExpiration)) {
+    throw new Error('Bambu token expiration is invalid.');
+  }
+  return {
+    accessToken: candidate.accessToken,
+    refreshToken: candidate.refreshToken,
+    tokenExpiration: candidate.tokenExpiration,
+  };
+}
+
+function migrateLegacyToken(): void {
+  const store = getCoreStore();
+  const credentials = getCredentialService();
+  const result = migrateLegacyJson({
+    database: store.database,
+    sourceId: 'bambu-token-v1',
+    sourcePath: TOKEN_PATH,
+    backupDirectory: path.join(store.dataDirectory, 'migration-backups'),
+    quarantineDirectory: path.join(store.dataDirectory, 'migration-quarantine'),
+    importRecord: (record) => {
+      const token = parseBambuToken(record);
+      credentials.setSecret(BAMBU_TOKEN_SECRET, JSON.stringify(token), { kind: 'session-token' });
+    },
+  });
+  if (result.state === 'imported' && fs.existsSync(TOKEN_PATH)) fs.unlinkSync(TOKEN_PATH);
+}
+
+function loadTokenFromVault(): BambuToken | null {
   try {
-    if (fs.existsSync(TOKEN_PATH)) {
-      const raw = fs.readFileSync(TOKEN_PATH, 'utf-8');
-      return JSON.parse(raw) as BambuToken;
-    }
+    migrateLegacyToken();
+    const raw = getCredentialService().getSecret(BAMBU_TOKEN_SECRET);
+    return raw ? parseBambuToken(JSON.parse(raw) as unknown) : null;
   } catch {}
   return null;
 }
 
-function saveTokenToDisk(token: BambuToken | null) {
-  try {
-    if (token) {
-      fs.writeFileSync(TOKEN_PATH, JSON.stringify(token, null, 2));
-    } else if (fs.existsSync(TOKEN_PATH)) {
-      fs.unlinkSync(TOKEN_PATH);
-    }
-  } catch (e) {
-    console.error('[Bambu] Failed to save token to disk:', e);
+function saveTokenToVault(token: BambuToken | null): void {
+  const credentials = getCredentialService();
+  if (token) {
+    credentials.setSecret(BAMBU_TOKEN_SECRET, JSON.stringify(parseBambuToken(token)), { kind: 'session-token' });
+  } else {
+    credentials.deleteSecret(BAMBU_TOKEN_SECRET);
   }
 }
 
@@ -69,12 +115,12 @@ if (!g._bambuInitialized) {
   g._bambuConnecting    = false;
   g._bambuLastErrLog    = 0;
 
-  const diskToken = loadTokenFromDisk();
-  if (diskToken && diskToken.accessToken && diskToken.tokenExpiration > Date.now()) {
-    g._bambuToken = diskToken;
+  const storedToken = loadTokenFromVault();
+  if (storedToken && storedToken.accessToken && storedToken.tokenExpiration > Date.now()) {
+    g._bambuToken = storedToken;
     // Kick off MQTT reconnection in background
     import('./mqtt-manager').then(({ connectMqtt }) => {
-      connectMqtt(diskToken).catch((e) => console.error('[Bambu] Auto-reconnect failed:', e));
+      connectMqtt(storedToken).catch((e) => console.error('[Bambu] Auto-reconnect failed:', e));
     });
   } else {
     g._bambuToken = null;
@@ -87,8 +133,9 @@ export const getTelemetry  = (): Record<string, Record<string, unknown>> => g._b
 export const isMqttConnected = (): boolean          => g._bambuMqttConnected ?? false;
 
 export function setToken(t: BambuToken | null) {
-  g._bambuToken = t;
-  saveTokenToDisk(t);
+  const normalized = t ? parseBambuToken(t) : null;
+  saveTokenToVault(normalized);
+  g._bambuToken = normalized;
 }
 
 export function isTokenValid(): boolean {

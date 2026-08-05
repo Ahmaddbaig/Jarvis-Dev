@@ -1,4 +1,5 @@
 import { getCoreStore } from '@/backend/persistence/core-store';
+import { getCredentialService } from '@/backend/secrets/credential-service';
 
 /** Server-side configuration for the Voicebox voice engine. */
 export const DEFAULT_VOICEBOX_URL = 'http://127.0.0.1:17493';
@@ -23,22 +24,10 @@ export function getVoiceboxUrl(): string {
   }
 }
 
-function readJarvisSettingsField(field: string): string {
-  const raw = readServerSettings().jarvis_settings;
-  if (typeof raw !== 'string' || !raw.trim()) return '';
-  try {
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const value = parsed[field];
-    return typeof value === 'string' ? value.trim() : '';
-  } catch {
-    return '';
-  }
-}
-
 export function getOpenAiApiKey(): string {
-  return readJarvisSettingsField('apiKey');
+  return getCredentialService().get('openaiApiKey') ?? '';
 }
 
 export function getClaudeApiKey(): string {
-  return readJarvisSettingsField('claudeApiKey');
+  return getCredentialService().get('anthropicApiKey') ?? '';
 }

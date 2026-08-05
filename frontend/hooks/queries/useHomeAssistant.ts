@@ -32,17 +32,17 @@ export interface HAServiceInput {
   serviceData?: Record<string, unknown>;
 }
 
-export function useHomeAssistantStates(baseUrl: string, token: string, enabled = true) {
+export function useHomeAssistantStates(baseUrl: string, enabled = true) {
   return useQuery({
     queryKey: queryKeys.homeAssistant.states(baseUrl),
     queryFn: ({ signal }) => fetchJson<HAEntity[]>(
-      `/api/home-assistant?url=${encodeURIComponent(baseUrl)}&token=${encodeURIComponent(token)}&path=/api/states`,
+      '/api/home-assistant?path=/api/states',
       {},
       signal,
     ),
-    enabled: enabled && Boolean(baseUrl && token),
+    enabled: enabled && Boolean(baseUrl),
     staleTime: 4_000,
-    refetchInterval: enabled && baseUrl && token ? 5_000 : false,
+    refetchInterval: enabled && baseUrl ? 5_000 : false,
     refetchIntervalInBackground: false,
   });
 }
@@ -64,7 +64,7 @@ function applyOptimisticService(entity: HAEntity, input: HAServiceInput): HAEnti
   return { ...entity, attributes: { ...entity.attributes, ...serviceData } };
 }
 
-export function useHomeAssistantService(baseUrl: string, token: string) {
+export function useHomeAssistantService(baseUrl: string) {
   const queryClient = useQueryClient();
   const key = queryKeys.homeAssistant.states(baseUrl);
   return useMutation({
@@ -72,8 +72,6 @@ export function useHomeAssistantService(baseUrl: string, token: string) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        url: baseUrl,
-        token,
         domain: input.domain,
         service: input.service,
         serviceData: { entity_id: input.entityId, ...(input.serviceData ?? {}) },

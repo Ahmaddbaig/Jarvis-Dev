@@ -1,7 +1,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { getGoogleService, getGoogleServiceByServerName, type GoogleServiceId } from '@/shared/google-services';
+import { getGoogleService, getGoogleServiceByServerName, type GoogleServiceId } from '../../shared/google-services';
 import {
   GOOGLE_CREDENTIALS_DIR,
   GOOGLE_CREDENTIALS_PATH,
@@ -36,8 +36,9 @@ export function ensureGoogleServiceDirs(serviceId?: GoogleServiceId) {
 
   for (const dir of dirs) {
     if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     }
+    try { fs.chmodSync(dir, 0o700); } catch { /* Windows has no POSIX mode */ }
   }
 }
 

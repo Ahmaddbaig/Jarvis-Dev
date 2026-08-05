@@ -1,9 +1,8 @@
 import { NextResponse } from 'next/server';
 import { GOOGLE_SERVICES } from '@/shared/google-services';
 import { McpServerManager } from '@/backend/mcp/server-manager';
-import { GOOGLE_CREDENTIALS_PATH } from '@/backend/mcp/dynamic-config';
 import { getGoogleServiceRuntime } from '@/backend/mcp/google-service-runtime';
-import fs from 'fs';
+import { googleOAuthClientInfo, googleServiceAuthenticated } from '@/backend/secrets/google-credentials';
 
 export async function GET() {
   try {
@@ -23,14 +22,12 @@ export async function GET() {
         connected: server?.connected ?? false,
         tools: server?.tools?.length ?? 0,
         serverInfo: server?.serverInfo ?? null,
-        authenticated: runtime ? fs.existsSync(runtime.tokenPath) : false,
-        tokenPath: runtime?.tokenPath ?? null,
+        authenticated: runtime ? googleServiceAuthenticated(service.id) : false,
       };
     });
 
     return NextResponse.json({
-      hasCredentials: fs.existsSync(GOOGLE_CREDENTIALS_PATH),
-      credentialsPath: GOOGLE_CREDENTIALS_PATH,
+      hasCredentials: googleOAuthClientInfo() !== null,
       services,
     });
   } catch (err) {

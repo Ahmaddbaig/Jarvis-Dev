@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getCredentialService } from '@/backend/secrets/credential-service';
 import OpenAI from 'openai';
 import { toFile } from 'openai';
 
@@ -68,9 +69,8 @@ async function optimizePromptWithGpt55(params: {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { prompt, apiKey, size, quality, referenceImageBase64, enhancePrompt } = body as {
+    const { prompt, size, quality, referenceImageBase64, enhancePrompt } = body as {
       prompt?: string;
-      apiKey?: string;
       size?: string;
       quality?: string;
       referenceImageBase64?: string;
@@ -80,9 +80,8 @@ export async function POST(req: NextRequest) {
     if (!prompt?.trim()) {
       return NextResponse.json({ error: 'Missing prompt' }, { status: 400 });
     }
-    if (!apiKey) {
-      return NextResponse.json({ error: 'Missing apiKey' }, { status: 400 });
-    }
+    const apiKey = getCredentialService().get('openaiApiKey');
+    if (!apiKey) return NextResponse.json({ error: 'OpenAI is not configured.' }, { status: 401 });
 
     const imageSize = size && SIZES.has(size) ? size : '1024x1024';
     const imageQuality = quality && QUALITIES.has(quality) ? quality : 'auto';

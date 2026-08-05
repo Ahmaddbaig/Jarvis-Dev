@@ -4,32 +4,50 @@ import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import type { JarvisFunction } from '@/frontend/lib/tools/types';
 import { sfx } from '@/frontend/lib/sfx';
-import type { JarvisSettings } from '@jarvis/contracts';
+import type { CredentialKey, CredentialStatus, JarvisSettings } from '@jarvis/contracts';
 import { InterfaceSettingsSection } from './settings/InterfaceSettingsSection';
 import { AbilitiesSettingsSection } from './settings/AbilitiesSettingsSection';
 import { ComputersSettingsSection } from './settings/ComputersSettingsSection';
 import { SystemSettingsSection } from './settings/SystemSettingsSection';
 import { JarvisSettingsSection } from './settings/JarvisSettingsSection';
+import { useDeleteCredentials } from '@/frontend/hooks/queries/useCredentials';
 
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (settings: JarvisSettings) => void;
+  onSave: (settings: JarvisSettingsDraft) => Promise<void>;
   initialSettings: JarvisSettings;
+  credentialStatus?: CredentialStatus;
   dynamicFunctions?: JarvisFunction[];
 }
 
 export type { JarvisSettings } from '@jarvis/contracts';
+export type JarvisSettingsDraft = JarvisSettings & {
+  apiKey?: string;
+  claudeApiKey?: string;
+};
 
 type Tab = 'jarvis' | 'abilities' | 'computers' | 'ui' | 'system';
 
-export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynamicFunctions = [] }: SettingsModalProps) {
-  const [settings, setSettings] = useState<JarvisSettings>(initialSettings);
+export function SettingsModal({ isOpen, onClose, onSave, initialSettings, credentialStatus, dynamicFunctions = [] }: SettingsModalProps) {
+  const [settings, setSettings] = useState<JarvisSettingsDraft>({
+    ...initialSettings,
+    apiKey: '',
+    claudeApiKey: '',
+  });
   const [activeTab, setActiveTab] = useState<Tab>('jarvis');
+  const [saving, setSaving] = useState(false);
+  const deleteCredentials = useDeleteCredentials();
+
+  const deleteCredential = async (key: CredentialKey) => {
+    await deleteCredentials.mutateAsync([key]);
+    if (key === 'openaiApiKey') setSettings((current) => ({ ...current, apiKey: '' }));
+    if (key === 'anthropicApiKey') setSettings((current) => ({ ...current, claudeApiKey: '' }));
+  };
 
   useEffect(() => {
     if (isOpen) {
-      setSettings(initialSettings);
+      setSettings({ ...initialSettings, apiKey: '', claudeApiKey: '' });
       setActiveTab('jarvis');
     }
   }, [isOpen, initialSettings]);
@@ -83,7 +101,12 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
 
           {/* Jarvis Tab */}
           {activeTab === 'jarvis' && (
-            <JarvisSettingsSection settings={settings} onChange={setSettings} />
+            <JarvisSettingsSection
+              settings={settings}
+              credentialStatus={credentialStatus}
+              onChange={setSettings}
+              onDeleteCredential={deleteCredential}
+            />
           )}
 
           {/* Abilities Tab */}
@@ -123,10 +146,15 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
             Cancel
           </button>
           <button
-            onClick={() => { sfx('select_confirm', 0.6); onSave(settings); }}
+            onClick={() => {
+              sfx('select_confirm', 0.6);
+              setSaving(true);
+              void onSave(settings).finally(() => setSaving(false));
+            }}
+            disabled={saving}
             className="px-6 py-2 bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/50 rounded text-cyan-300 uppercase tracking-wider font-bold shadow-[0_0_15px_rgba(34,211,238,0.1)] hover:shadow-[0_0_20px_rgba(34,211,238,0.3)] transition-all"
           >
-            Save Configuration
+            {saving ? 'Saving…' : 'Save Configuration'}
           </button>
         </div>
       </motion.div>

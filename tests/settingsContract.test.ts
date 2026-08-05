@@ -8,7 +8,6 @@ function validSettings() {
   return {
     schemaVersion: 1,
     apiMode: 'local',
-    apiKey: '',
     localAIProfile: 'm5',
     localAIBaseUrl: 'http://127.0.0.1:8080',
     voice: 'echo',

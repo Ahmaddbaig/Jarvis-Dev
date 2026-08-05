@@ -10,9 +10,9 @@ export function TVWidget() {
   const trackRef = useRef<HTMLDivElement>(null);
   const settingsQuery = useServerSettings();
   const url = settingsQuery.data?.jarvis_ha_url || getCachedSetting('jarvis_ha_url');
-  const token = settingsQuery.data?.jarvis_ha_token || getCachedSetting('jarvis_ha_token');
-  const statesQuery = useHomeAssistantStates(url, token);
-  const serviceMutation = useHomeAssistantService(url, token);
+  const configured = settingsQuery.data?.credentialStatus?.homeAssistantToken ?? false;
+  const statesQuery = useHomeAssistantStates(url, configured);
+  const serviceMutation = useHomeAssistantService(url);
   const tv = statesQuery.data?.find((entity) => entity.entity_id.startsWith('media_player.')) ?? null;
 
   useEffect(() => {
@@ -22,7 +22,7 @@ export function TVWidget() {
   }, [tv]);
 
   const callService = async (domain: string, service: string, data: Record<string, unknown> = {}) => {
-    if (!url || !token || !tv) return;
+    if (!url || !configured || !tv) return;
     await serviceMutation.mutateAsync({ domain, service, entityId: tv.entity_id, serviceData: data });
   };
 

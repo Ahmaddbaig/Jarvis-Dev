@@ -3,6 +3,10 @@ export const queryKeys = {
     all: ['settings'] as const,
     current: () => ['settings', 'current'] as const,
   },
+  credentials: {
+    all: ['credentials'] as const,
+    status: () => ['credentials', 'status'] as const,
+  },
   diagnostics: {
     all: ['diagnostics'] as const,
     system: () => ['diagnostics', 'system'] as const,

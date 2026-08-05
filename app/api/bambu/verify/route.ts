@@ -15,15 +15,14 @@ export async function POST(req: NextRequest) {
     });
 
     if (!res.ok) {
-      const txt = await res.text();
-      return NextResponse.json({ error: txt }, { status: 401 });
+      return NextResponse.json({ error: `Bambu verification failed with HTTP ${res.status}.` }, { status: 401 });
     }
 
     const text = await res.text();
     let data: { accessToken?: string; refreshToken?: string; expiresIn?: number; success?: boolean } = {};
-    try { data = JSON.parse(text); } catch { return NextResponse.json({ error: `Invalid response from Bambu: ${text}` }, { status: 500 }); }
+    try { data = JSON.parse(text); } catch { return NextResponse.json({ error: 'Bambu returned an invalid response.' }, { status: 502 }); }
     if (!data.accessToken) {
-      return NextResponse.json({ error: 'No token returned', raw: data }, { status: 401 });
+      return NextResponse.json({ error: 'Bambu did not return an access token.' }, { status: 401 });
     }
 
     const token: BambuToken = {

@@ -25,6 +25,11 @@ jarvis-companions.json.tmp
 jarvis-companions.json.*.tmp
 .jarvis-desktop-token
 .bambu-token.json
+jarvis-core.sqlite3
+jarvis-core.sqlite3-shm
+jarvis-core.sqlite3-wal
+migration-backups/
+migration-quarantine/
 .env
 .env.*
 

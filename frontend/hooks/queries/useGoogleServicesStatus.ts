@@ -14,12 +14,10 @@ export interface GoogleServiceStatus {
   connected: boolean;
   tools: number;
   authenticated: boolean;
-  tokenPath: string | null;
 }
 
 export interface GoogleServicesStatusResponse {
   hasCredentials: boolean;
-  credentialsPath: string;
   services: GoogleServiceStatus[];
   error?: string;
 }

@@ -14,9 +14,9 @@ export function HADeviceWidget({ config }: { config?: Record<string, unknown> })
   const friendlyFilter = config?.name as string | undefined;
   const settingsQuery = useServerSettings();
   const url = settingsQuery.data?.jarvis_ha_url || getCachedSetting('jarvis_ha_url');
-  const token = settingsQuery.data?.jarvis_ha_token || getCachedSetting('jarvis_ha_token');
-  const statesQuery = useHomeAssistantStates(url, token);
-  const serviceMutation = useHomeAssistantService(url, token);
+  const configured = settingsQuery.data?.credentialStatus?.homeAssistantToken ?? false;
+  const statesQuery = useHomeAssistantStates(url, configured);
+  const serviceMutation = useHomeAssistantService(url);
   const all = statesQuery.data ?? [];
   let filtered = all;
   if (entityIds?.length) {

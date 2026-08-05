@@ -1,5 +1,6 @@
 export * from './audit';
 export * from './command';
+export * from './credentials';
 export * from './errors';
 export * from './identifiers';
 export * from './json-value';

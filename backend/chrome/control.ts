@@ -1,6 +1,8 @@
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
+import { migrateLegacyJson } from '@jarvis/persistence';
+import { getCoreStore } from '../persistence/core-store';
 import {
   CHROME_CONTROL_ACTIONS,
   ChromeControlAction,
@@ -52,30 +54,64 @@ function pairingPath(): string {
 }
 
 function readPairing(): PersistedPairing | null {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(pairingPath(), 'utf8')) as Partial<PersistedPairing>;
-    if (
-      typeof parsed.tokenHash !== 'string' || !/^[a-f0-9]{64}$/.test(parsed.tokenHash) ||
-      typeof parsed.extensionId !== 'string' || !/^[a-p]{32}$/.test(parsed.extensionId) ||
-      typeof parsed.extensionName !== 'string' ||
-      typeof parsed.pairedAt !== 'string'
-    ) {
-      return null;
-    }
-    return parsed as PersistedPairing;
-  } catch {
-    return null;
+  const store = getCoreStore();
+  const result = migrateLegacyJson({
+    database: store.database,
+    sourceId: 'jarvis-chrome-control-v1',
+    sourcePath: pairingPath(),
+    backupDirectory: path.join(store.dataDirectory, 'migration-backups'),
+    quarantineDirectory: path.join(store.dataDirectory, 'migration-quarantine'),
+    importRecord: (record) => writePairing(parsePairing(record)),
+  });
+  if (result.state === 'imported' && fs.existsSync(pairingPath())) fs.unlinkSync(pairingPath());
+
+  const device = store.database.devices.list('chrome-extension')[0];
+  if (!device) return null;
+  const pairing = store.database.pairings.get('chrome-extension');
+  if (!pairing || pairing.state !== 'paired' || !pairing.pairedAt) return null;
+  return parsePairing({
+    tokenHash: pairing.metadata.tokenHash,
+    extensionId: device.id,
+    extensionName: device.friendlyName,
+    pairedAt: pairing.pairedAt,
+  });
+}
+
+function parsePairing(value: unknown): PersistedPairing {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Chrome pairing metadata is invalid.');
   }
+  const parsed = value as Partial<PersistedPairing>;
+  if (
+    typeof parsed.tokenHash !== 'string' || !/^[a-f0-9]{64}$/.test(parsed.tokenHash) ||
+    typeof parsed.extensionId !== 'string' || !/^[a-p]{32}$/.test(parsed.extensionId) ||
+    typeof parsed.extensionName !== 'string' ||
+    typeof parsed.pairedAt !== 'string'
+  ) {
+    throw new Error('Chrome pairing metadata is invalid.');
+  }
+  return parsed as PersistedPairing;
 }
 
 function writePairing(pairing: PersistedPairing): void {
-  fs.mkdirSync(dataDirectory(), { recursive: true });
-  fs.writeFileSync(pairingPath(), JSON.stringify(pairing, null, 2), { encoding: 'utf8', mode: 0o600 });
-  try {
-    fs.chmodSync(pairingPath(), 0o600);
-  } catch {
-    // Windows does not implement POSIX modes; the user profile directory remains the boundary.
-  }
+  const validated = parsePairing(pairing);
+  const database = getCoreStore().database;
+  database.transaction(() => {
+    database.devices.put({
+      id: validated.extensionId,
+      kind: 'chrome-extension',
+      friendlyName: validated.extensionName,
+      platform: 'chrome',
+      metadata: {},
+    });
+    database.pairings.put({
+      id: 'chrome-extension',
+      deviceId: validated.extensionId,
+      state: 'paired',
+      pairedAt: validated.pairedAt,
+      metadata: { tokenHash: validated.tokenHash },
+    });
+  });
 }
 
 function getState(): ChromeRuntimeState {
@@ -168,11 +204,9 @@ export function revokeChromePairing(): void {
   state.pairing = null;
   state.pairingCode = null;
   state.lastSeenAt = 0;
-  try {
-    fs.unlinkSync(pairingPath());
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-  }
+  const database = getCoreStore().database;
+  const pairing = database.pairings.get('chrome-extension');
+  if (pairing) database.devices.delete(pairing.deviceId);
 }
 
 export function verifyChromeToken(token: string, extensionId?: string | null): boolean {

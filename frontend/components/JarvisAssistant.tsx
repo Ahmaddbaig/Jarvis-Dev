@@ -4,10 +4,11 @@ import { useEffect, useRef, useState } from 'react';
 import { useConversation } from '@elevenlabs/react';
 import Image from 'next/image';
 import { AnimatePresence, motion } from 'framer-motion';
-import { SettingsModal } from './SettingsModal';
+import { SettingsModal, type JarvisSettingsDraft } from './SettingsModal';
 import {
   jarvisSettingsPatchSchema,
   jarvisSettingsSchema,
+  type CredentialPatch,
   type JarvisSettings,
 } from '@jarvis/contracts';
 import { FUNCTION_REGISTRY, getFunctionByName, JarvisFunction } from '@/frontend/lib/functions';
@@ -22,6 +23,8 @@ import { PhotoWidget, PhotoEntry } from './PhotoWidget';
 import { sfx } from '@/frontend/lib/sfx';
 import { installErrorInterceptors, emitError } from '@/frontend/lib/errorBus';
 import { useSaveServerSettings, useServerSettings } from '@/frontend/hooks/queries/useServerSettings';
+import { useSaveCredentials } from '@/frontend/hooks/queries/useCredentials';
+import { desktopControlFetch } from '@/frontend/lib/desktopControlClient';
 import { useLocalConversation } from '@/frontend/lib/localVoice/useLocalConversation';
 import {
   useVisualizerAudio,
@@ -78,7 +81,6 @@ const DEFAULT_CLAUDE_CHAT_MODEL = 'claude-haiku-4-5';
 const DEFAULT_SETTINGS: JarvisSettings = {
   schemaVersion: 1,
   apiMode: 'openai',
-  apiKey: '',
   localAIProfile: 'm5',
   localAIBaseUrl: DEFAULT_LOCAL_AI_BASE_URL,
   microphoneDeviceId: '',
@@ -87,7 +89,6 @@ const DEFAULT_SETTINGS: JarvisSettings = {
   elevenLabsFirstMessage: '',
   brainProvider: 'openai',
   chatModel: DEFAULT_OPENAI_CHAT_MODEL,
-  claudeApiKey: '',
   voicePlaybackRate: 0.8,
   voice: 'echo',
   initialPrompt: 'You are Jarvis, a helpful AI assistant. You are always helpful, polite, and concise. Subtle British accent. Robotic. Emotionally controlled. Witty and a little bit poking fun at the user.',
@@ -100,6 +101,13 @@ const DEFAULT_SETTINGS: JarvisSettings = {
   shellPathOverride: '',
   pythonPathOverride: '',
 };
+
+function withoutCredentialValues(settings: JarvisSettingsDraft): JarvisSettings {
+  const safe = { ...settings };
+  delete safe.apiKey;
+  delete safe.claudeApiKey;
+  return safe;
+}
 
 type DesktopPanelPosition = Exclude<JarvisSettings['position'], 'center'>;
 
@@ -234,7 +242,8 @@ function isDesktopPanelPosition(value: unknown): value is DesktopPanelPosition {
 export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
   const voiceSession = useJarvisVoice();
   const serverSettingsQuery = useServerSettings();
-  const { mutate: saveSettingsToServer } = useSaveServerSettings();
+  const { mutate: saveSettingsToServer, mutateAsync: saveSettingsToServerAsync } = useSaveServerSettings();
+  const { mutateAsync: saveCredentials } = useSaveCredentials();
   const dynamicFunctionsQuery = useDynamicFunctions();
   const queryClient = useQueryClient();
   const { status, lastError, micMuted } = voiceSession;
@@ -502,6 +511,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
   const [settings, setSettings] = useState<JarvisSettings>(DEFAULT_SETTINGS);
   const [restartTrigger, setRestartTrigger] = useState(0);
   const [mounted, setMounted] = useState(false);
+  const legacyCredentialMigrationStartedRef = useRef(false);
   const desktopModeRef = useRef(false);
   const desktopPanelPositionRef = useRef<DesktopPanelPosition>('bottom-right');
   const normalPositionBeforeDesktopRef = useRef<JarvisSettings['position'] | null>(null);
@@ -510,6 +520,52 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     const timer = window.setTimeout(() => setMounted(true), 0);
     return () => window.clearTimeout(timer);
   }, []);
+
+  // One-time renderer migration. Plaintext is removed only after each value is
+  // already present in the OS vault or a vault write succeeds.
+  useEffect(() => {
+    if (serverSettingsQuery.isPending || legacyCredentialMigrationStartedRef.current) return;
+    if (window.electron?.isElectron !== true) return;
+
+    const configured = serverSettingsQuery.data?.credentialStatus;
+    let parsed: Record<string, unknown> = {};
+    try {
+      const candidate = JSON.parse(localStorage.getItem('jarvis_settings') ?? '{}') as unknown;
+      if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
+        parsed = candidate as Record<string, unknown>;
+      }
+    } catch { /* invalid legacy settings are ignored */ }
+
+    const patch: CredentialPatch = {};
+    const openai = typeof parsed.apiKey === 'string' ? parsed.apiKey.trim() : '';
+    const anthropic = typeof parsed.claudeApiKey === 'string' ? parsed.claudeApiKey.trim() : '';
+    const homeAssistant = localStorage.getItem('jarvis_ha_token')?.trim() ?? '';
+    const ical = localStorage.getItem('jarvis_ical_url')?.trim() ?? '';
+    if (openai && !configured?.openaiApiKey) patch.openaiApiKey = openai;
+    if (anthropic && !configured?.anthropicApiKey) patch.anthropicApiKey = anthropic;
+    if (homeAssistant && !configured?.homeAssistantToken) patch.homeAssistantToken = homeAssistant;
+    if (ical && !configured?.icalFeedUrl) patch.icalFeedUrl = ical;
+
+    const hasLegacyPlaintext = Boolean(openai || anthropic || homeAssistant || ical);
+    if (!hasLegacyPlaintext) return;
+    legacyCredentialMigrationStartedRef.current = true;
+
+    void (async () => {
+      try {
+        if (Object.keys(patch).length > 0) await saveCredentials(patch);
+        delete parsed.apiKey;
+        delete parsed.claudeApiKey;
+        if (Object.keys(parsed).length > 0) {
+          localStorage.setItem('jarvis_settings', JSON.stringify(parsed));
+        }
+        localStorage.removeItem('jarvis_ha_token');
+        localStorage.removeItem('jarvis_ical_url');
+      } catch (error) {
+        legacyCredentialMigrationStartedRef.current = false;
+        emitError('app', error instanceof Error ? error.message : String(error));
+      }
+    })();
+  }, [saveCredentials, serverSettingsQuery.data, serverSettingsQuery.isPending]);
 
   // Install global error interceptors once so all console.error calls,
   // uncaught JS errors, and unhandled rejections stream to TerminalWidget.
@@ -817,7 +873,10 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
 
         const parseConfig = (raw: string | null): Partial<JarvisSettings> | null => {
           try {
-            const parsed = migrateLegacyVoiceboxMode(JSON.parse(raw ?? '{}'));
+            const migrated = migrateLegacyVoiceboxMode(JSON.parse(raw ?? '{}'));
+            const parsed = { ...migrated };
+            delete parsed.apiKey;
+            delete parsed.claudeApiKey;
             const result = jarvisSettingsPatchSchema.safeParse(parsed);
             if (!result.success) {
               console.warn('[Jarvis] Ignored invalid settings source:', result.error.issues);
@@ -832,8 +891,9 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
         const localConfig = parseConfig(localRaw);
         // A 127.0.0.1 LocalAI URL belongs to this Mac, never to every LAN
         // browser that shares server settings.
-        const serverHasConfig = hasUsableVoiceEngineConfig(serverConfig, false);
-        const localHasConfig = hasUsableVoiceEngineConfig(localConfig, localAIAllowedHere);
+        const credentialStatus = serverSettings.credentialStatus;
+        const serverHasConfig = hasUsableVoiceEngineConfig(serverConfig, false, credentialStatus);
+        const localHasConfig = hasUsableVoiceEngineConfig(localConfig, localAIAllowedHere, credentialStatus);
         const localWantsLocal = localConfig?.apiMode === 'local' && localAIAllowedHere;
 
         const selectedConfig = localWantsLocal
@@ -875,12 +935,6 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
             }
           } catch (e) {
             console.error('Failed to parse settings', e);
-          }
-        } else {
-          // Fallback to env var if available
-          const envKey = process.env.NEXT_PUBLIC_OPENAI_API_KEY;
-          if (envKey) {
-            setSettings(prev => ({ ...prev, apiKey: envKey }));
           }
         }
   }, [serverSettingsQuery.data, serverSettingsQuery.isPending, saveSettingsToServer]);
@@ -970,7 +1024,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
       const localAIBaseUrl = normalizeLocalAIBaseUrl(currentSettings.localAIBaseUrl);
 
       // OpenAI needs a paid API key. LocalAI intentionally does not.
-      if (!isLocal && !currentSettings.apiKey) {
+      if (!isLocal && !serverSettingsQuery.data?.credentialStatus?.openaiApiKey) {
         console.warn('No API key found, skipping connection');
         return;
       }
@@ -983,9 +1037,9 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
             profileLabel: localProfile.label,
           })
         : createOpenAIRealtimeAdapter({
-            apiKey: currentSettings.apiKey,
             model: currentSettings.realtimeModel ?? 'gpt-realtime-2',
             voice: currentSettings.voice ?? 'echo',
+            fetch: desktopControlFetch,
           });
       await realtimeProvider.prepare();
 
@@ -1522,13 +1576,16 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     if (!dynamicState.loaded) return;
 
     const mode = settings.apiMode ?? 'openai';
+    const credentialStatus = serverSettingsQuery.data?.credentialStatus;
     const shouldStart =
       mode === 'local' ||
       (mode === 'elevenlabs' && !!settings.elevenLabsAgentId?.trim()) ||
-      (mode === 'openai' && !!settings.apiKey) ||
+      (mode === 'openai' && !!credentialStatus?.openaiApiKey) ||
       // Voicebox engine needs the API key matching its brain provider
       (mode === 'voicebox' &&
-        (settings.brainProvider === 'claude' ? !!settings.claudeApiKey : !!settings.apiKey));
+        (settings.brainProvider === 'claude'
+          ? !!credentialStatus?.anthropicApiKey
+          : !!credentialStatus?.openaiApiKey));
 
     console.log(
       `%c[Jarvis] Auto-start effect fired at ${new Date().toLocaleTimeString()} — restartTrigger=${restartTrigger}, shouldStart=${shouldStart}, mode=${mode}`,
@@ -1543,18 +1600,26 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
       if (startTimer !== null) window.clearTimeout(startTimer);
       disconnect();
     };
-  }, [settings.apiKey, settings.claudeApiKey, settings.brainProvider, settings.apiMode, settings.localAIProfile, settings.localAIBaseUrl, settings.microphoneDeviceId, restartTrigger, dynamicState.loaded]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [settings.brainProvider, settings.apiMode, settings.localAIProfile, settings.localAIBaseUrl, settings.microphoneDeviceId, serverSettingsQuery.data?.credentialStatus, restartTrigger, dynamicState.loaded]); // eslint-disable-line react-hooks/exhaustive-deps
 
 
-  const handleSaveSettings = (newSettings: JarvisSettings) => {
-    setSettings(newSettings);
-    const serialised = JSON.stringify(newSettings);
-    localStorage.setItem('jarvis_settings', serialised);
-    saveSettingsToServer({ jarvis_settings: serialised });
-    setIsSettingsOpen(false);
-    // Increment trigger so the auto-start effect re-runs with the new settings.
-    // This avoids the race where a manual setTimeout races against the effect.
-    setRestartTrigger((t) => t + 1);
+  const handleSaveSettings = async (newSettings: JarvisSettingsDraft) => {
+    try {
+      const credentials: CredentialPatch = {};
+      if (newSettings.apiKey?.trim()) credentials.openaiApiKey = newSettings.apiKey.trim();
+      if (newSettings.claudeApiKey?.trim()) credentials.anthropicApiKey = newSettings.claudeApiKey.trim();
+      if (Object.keys(credentials).length > 0) await saveCredentials(credentials);
+
+      const safeSettings = withoutCredentialValues(newSettings);
+      const serialised = JSON.stringify(safeSettings);
+      await saveSettingsToServerAsync({ jarvis_settings: serialised });
+      setSettings(safeSettings);
+      localStorage.setItem('jarvis_settings', serialised);
+      setIsSettingsOpen(false);
+      setRestartTrigger((t) => t + 1);
+    } catch (error) {
+      emitError('app', error instanceof Error ? error.message : String(error));
+    }
   };
 
   // In compact mode, show as greyed-out whenever the stream is not active.
@@ -1855,7 +1920,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
                   </>
                 ) : status === 'idle' ? (
                   'Click status to activate'
-                ) : !settings.apiKey ? (
+                ) : settings.apiMode === 'openai' && !serverSettingsQuery.data?.credentialStatus?.openaiApiKey ? (
                   'Click logo to configure API Key'
                 ) : null}
               </p>
@@ -1916,6 +1981,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
             onClose={() => setIsSettingsOpen(false)}
             onSave={handleSaveSettings}
             initialSettings={settings}
+            credentialStatus={serverSettingsQuery.data?.credentialStatus}
             dynamicFunctions={dynamicState.mcpFunctions.length > 0 || dynamicState.skillFunctions.length > 0
               ? [...dynamicState.mcpFunctions, ...dynamicState.skillFunctions]
               : []}

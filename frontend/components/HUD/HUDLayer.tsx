@@ -361,9 +361,9 @@ function HAPowerButtonFloater({
   const configLabel = (config?.label as string | undefined) ?? nameFilter;
   const settingsQuery = useServerSettings();
   const haUrl = settingsQuery.data?.jarvis_ha_url || getCachedSetting('jarvis_ha_url');
-  const haToken = settingsQuery.data?.jarvis_ha_token || getCachedSetting('jarvis_ha_token');
-  const statesQuery = useHomeAssistantStates(haUrl, haToken);
-  const serviceMutation = useHomeAssistantService(haUrl, haToken);
+  const configured = settingsQuery.data?.credentialStatus?.homeAssistantToken ?? false;
+  const statesQuery = useHomeAssistantStates(haUrl, configured);
+  const serviceMutation = useHomeAssistantService(haUrl);
   const all = statesQuery.data ?? [];
   let found = entityIds?.length
     ? all.find((candidate) => entityIds.includes(candidate.entity_id))
@@ -392,7 +392,7 @@ function HAPowerButtonFloater({
   const loading = settingsQuery.isPending || statesQuery.isPending;
 
   const toggle = async () => {
-    if (!entity || !haUrl || !haToken) return;
+    if (!entity || !haUrl || !configured) return;
     await serviceMutation.mutateAsync({
       domain: entity.id.split('.')[0],
       service: isOn ? 'turn_off' : 'turn_on',

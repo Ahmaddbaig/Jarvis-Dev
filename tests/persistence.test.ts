@@ -65,6 +65,37 @@ describe('Jarvis SQLite persistence', () => {
     database.close();
   });
 
+  it('round-trips device and pairing metadata without embedding credentials', () => {
+    const database = new JarvisDatabase(':memory:', 'test');
+    database.devices.put({
+      id: 'device-1',
+      kind: 'companion',
+      friendlyName: 'Synthetic PC',
+      platform: 'win32',
+      metadata: { address: 'https://192.168.1.10:45831' },
+    });
+    database.pairings.put({
+      id: 'companion:device-1',
+      deviceId: 'device-1',
+      certificateFingerprint: 'synthetic-fingerprint',
+      state: 'paired',
+      pairedAt: '2026-01-01T00:00:00.000Z',
+      metadata: { protocol: 1 },
+    });
+
+    expect(database.devices.get('device-1')).toMatchObject({
+      kind: 'companion',
+      friendlyName: 'Synthetic PC',
+      metadata: { address: 'https://192.168.1.10:45831' },
+    });
+    expect(database.pairings.list('paired')).toMatchObject([{
+      id: 'companion:device-1',
+      deviceId: 'device-1',
+      state: 'paired',
+    }]);
+    database.close();
+  });
+
   it('blocks opening a database from a newer schema', () => {
     const filePath = path.join(temporaryDirectory(), 'future.sqlite3');
     const raw = new DatabaseSync(filePath);

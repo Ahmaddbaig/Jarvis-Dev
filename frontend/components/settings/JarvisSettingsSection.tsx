@@ -2,12 +2,14 @@
 
 import { useEffect, useState } from 'react';
 import type {
+  CredentialKey,
+  CredentialStatus,
   JarvisLogo,
   JarvisPosition,
-  JarvisSettings,
   JarvisVisualizer,
   RealtimeModel,
 } from '@jarvis/contracts';
+import type { JarvisSettingsDraft } from '../SettingsModal';
 import { sfx } from '@/frontend/lib/sfx';
 import {
   DEFAULT_LOCAL_AI_BASE_URL,
@@ -49,11 +51,13 @@ const POSITIONS: { id: JarvisPosition; label: string; icon: string }[] = [
 ];
 
 interface JarvisSettingsSectionProps {
-  settings: JarvisSettings;
-  onChange: (settings: JarvisSettings) => void;
+  settings: JarvisSettingsDraft;
+  credentialStatus?: CredentialStatus;
+  onChange: (settings: JarvisSettingsDraft) => void;
+  onDeleteCredential: (key: CredentialKey) => Promise<void>;
 }
 
-export function JarvisSettingsSection({ settings, onChange }: JarvisSettingsSectionProps) {
+export function JarvisSettingsSection({ settings, credentialStatus, onChange, onDeleteCredential }: JarvisSettingsSectionProps) {
   const setSettings = onChange;
   const [audioInputs, setAudioInputs] = useState<MediaDeviceInfo[]>([]);
 
@@ -123,11 +127,23 @@ export function JarvisSettingsSection({ settings, onChange }: JarvisSettingsSect
           <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">OpenAI API Key</label>
           <input
             type="password"
-            value={settings.apiKey}
+            value={settings.apiKey ?? ''}
             onChange={(e) => setSettings({ ...settings, apiKey: e.target.value })}
-            placeholder="sk-..."
+            placeholder={credentialStatus?.openaiApiKey ? 'Configured — enter to replace' : 'sk-...'}
             className="w-full bg-cyan-950/20 border border-cyan-500/30 rounded px-3 py-2 text-cyan-100 focus:outline-none focus:border-cyan-400 focus:shadow-[0_0_10px_rgba(34,211,238,0.3)] transition-all font-mono text-sm"
           />
+          {credentialStatus?.openaiApiKey && (
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-[10px] text-green-400">Stored securely in the operating-system vault.</span>
+              <button
+                type="button"
+                onClick={() => void onDeleteCredential('openaiApiKey')}
+                className="text-[10px] uppercase tracking-wider text-red-400/80 hover:text-red-300"
+              >
+                Remove
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -314,9 +330,21 @@ export function JarvisSettingsSection({ settings, onChange }: JarvisSettingsSect
                 type="password"
                 value={settings.claudeApiKey ?? ''}
                 onChange={(e) => setSettings({ ...settings, claudeApiKey: e.target.value })}
-                placeholder="sk-ant-..."
+                placeholder={credentialStatus?.anthropicApiKey ? 'Configured — enter to replace' : 'sk-ant-...'}
                 className="w-full bg-cyan-950/20 border border-cyan-500/30 rounded px-3 py-2 text-cyan-100 focus:outline-none focus:border-cyan-400 focus:shadow-[0_0_10px_rgba(34,211,238,0.3)] transition-all font-mono text-sm"
               />
+              {credentialStatus?.anthropicApiKey && (
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-[10px] text-green-400">Stored securely in the operating-system vault.</span>
+                  <button
+                    type="button"
+                    onClick={() => void onDeleteCredential('anthropicApiKey')}
+                    className="text-[10px] uppercase tracking-wider text-red-400/80 hover:text-red-300"
+                  >
+                    Remove
+                  </button>
+                </div>
+              )}
             </div>
           )}
 

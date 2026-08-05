@@ -36,12 +36,11 @@ describe('Core settings store', () => {
     expect(stored.jarvis_ha_url).toBe('http://homeassistant.local:8123');
     expect(JSON.stringify(stored)).not.toContain('super-secret');
     const visible = store.readServerSettings();
-    expect(visible.jarvis_ha_token).toBe('ha-super-secret');
+    expect(visible.jarvis_ha_token).toBeUndefined();
     expect(JSON.parse(visible.jarvis_settings)).toMatchObject({
       theme: 'midnight',
-      apiKey: 'openai-super-secret',
-      claudeApiKey: 'claude-super-secret',
     });
+    expect(visible.jarvis_settings).not.toContain('super-secret');
     expect(store.diagnostics().migrationSources).toMatchObject([{ state: 'imported' }]);
     store.close();
   });
@@ -62,29 +61,23 @@ describe('Core settings store', () => {
     restarted.close();
   });
 
-  it('updates only the compatibility secret overlay for a mixed settings document', () => {
+  it('rejects credentials at the non-secret settings boundary', () => {
     const directory = temporaryDirectory();
     const store = new CoreStore(directory, 'test');
-    store.writeServerSettings({
+    expect(() => store.writeServerSettings({
       jarvis_settings: JSON.stringify({
         schemaVersion: 1,
         apiMode: 'openai',
         apiKey: 'new-secret',
         theme: 'crimson',
       }),
-    });
-    expect(JSON.stringify(store.database.settings.getAll('server'))).not.toContain('new-secret');
-    expect(JSON.parse(store.readServerSettings().jarvis_settings)).toMatchObject({
-      apiKey: 'new-secret',
-      theme: 'crimson',
-    });
+    })).toThrow(/credential service/);
+    store.writeServerSettings({ jarvis_settings: JSON.stringify({ theme: 'crimson' }) });
+    expect(JSON.parse(store.readServerSettings().jarvis_settings)).toEqual({ theme: 'crimson' });
     store.close();
 
     const restarted = new CoreStore(directory, 'test');
-    expect(JSON.parse(restarted.readServerSettings().jarvis_settings)).toMatchObject({
-      apiKey: 'new-secret',
-      theme: 'crimson',
-    });
+    expect(JSON.parse(restarted.readServerSettings().jarvis_settings)).toEqual({ theme: 'crimson' });
     expect(restarted.diagnostics().migrationSources).toMatchObject([{ state: 'missing' }]);
     restarted.close();
   });

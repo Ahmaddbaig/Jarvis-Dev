@@ -1,12 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getCoreStore } from '@/backend/persistence/core-store';
+import { getCredentialService } from '@/backend/secrets/credential-service';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
-    return NextResponse.json(getCoreStore().readServerSettings(), {
+    return NextResponse.json({
+      ...getCoreStore().readServerSettings(),
+      credentialStatus: getCredentialService().status(),
+    }, {
       headers: { 'Cache-Control': 'no-store' },
     });
   } catch (error) {

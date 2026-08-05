@@ -20,15 +20,9 @@ const NON_SECRET_SERVER_KEYS = new Set([
   'jarvis_voicebox_url',
 ]);
 
-const SECRET_SERVER_KEYS = new Set([
-  'jarvis_ha_token',
-  'jarvis_ical_url',
-]);
-
 const ALL_SERVER_KEYS = new Set([
   'jarvis_settings',
   ...NON_SECRET_SERVER_KEYS,
-  ...SECRET_SERVER_KEYS,
 ]);
 
 type SettingsRecord = Record<string, string>;
@@ -43,26 +37,25 @@ function requireString(key: string, value: unknown): string {
   return value;
 }
 
-function parseSettingsDocument(raw: string): Record<string, unknown> {
+function parseSettingsDocument(raw: string): { safe: Record<string, unknown>; containsSecrets: boolean } {
   const parsed = JSON.parse(raw) as unknown;
   if (!isRecord(parsed)) throw new Error('jarvis_settings must contain a JSON object.');
+  const containsSecrets = (typeof parsed.apiKey === 'string' && parsed.apiKey.length > 0)
+    || (typeof parsed.claudeApiKey === 'string' && parsed.claudeApiKey.length > 0);
   const legacyVoicebox = parsed.apiMode === 'local'
     && parsed.localAIProfile === undefined
     && Boolean(parsed.brainProvider || parsed.chatModel || parsed.claudeApiKey || parsed.voiceboxProfileId)
     ? { ...parsed, apiMode: 'voicebox' }
     : parsed;
-  return jarvisSettingsPatchSchema.parse(legacyVoicebox);
+  const withoutSecrets = { ...legacyVoicebox };
+  delete withoutSecrets.apiKey;
+  delete withoutSecrets.claudeApiKey;
+  return { safe: jarvisSettingsPatchSchema.parse(withoutSecrets), containsSecrets };
 }
 
-function splitSettingsDocument(raw: string): { safe: string; secrets: Record<string, string> } {
+function splitSettingsDocument(raw: string): { safe: string; containsSecrets: boolean } {
   const parsed = parseSettingsDocument(raw);
-  const safe = { ...parsed };
-  delete safe.apiKey;
-  delete safe.claudeApiKey;
-  const secrets: Record<string, string> = {};
-  if (typeof parsed.apiKey === 'string') secrets.apiKey = parsed.apiKey;
-  if (typeof parsed.claudeApiKey === 'string') secrets.claudeApiKey = parsed.claudeApiKey;
-  return { safe: JSON.stringify(safe), secrets };
+  return { safe: JSON.stringify(parsed.safe), containsSecrets: parsed.containsSecrets };
 }
 
 function extractSafeSettings(record: Readonly<Record<string, unknown>>): SettingsRecord {
@@ -74,37 +67,6 @@ function extractSafeSettings(record: Readonly<Record<string, unknown>>): Setting
     safe.jarvis_settings = splitSettingsDocument(requireString('jarvis_settings', record.jarvis_settings)).safe;
   }
   return safe;
-}
-
-function extractSecretOverlay(record: Readonly<Record<string, unknown>>): SettingsRecord {
-  const secrets: SettingsRecord = {};
-  for (const key of SECRET_SERVER_KEYS) {
-    if (typeof record[key] === 'string') secrets[key] = record[key];
-  }
-  if (typeof record.jarvis_settings === 'string') {
-    try {
-      const parsed = JSON.parse(record.jarvis_settings) as unknown;
-      if (isRecord(parsed)) {
-        const documentSecrets: Record<string, string> = {};
-        if (typeof parsed.apiKey === 'string') documentSecrets.apiKey = parsed.apiKey;
-        if (typeof parsed.claudeApiKey === 'string') documentSecrets.claudeApiKey = parsed.claudeApiKey;
-        if (Object.keys(documentSecrets).length > 0) {
-          secrets.jarvis_settings = JSON.stringify(documentSecrets);
-        }
-      }
-    } catch {
-      // The importer already records malformed legacy data for diagnostics.
-    }
-  }
-  return secrets;
-}
-
-function mergeSettingsDocument(safeRaw?: string, secretRaw?: string): string | undefined {
-  if (!safeRaw && !secretRaw) return undefined;
-  const safe = safeRaw ? JSON.parse(safeRaw) as unknown : {};
-  const secrets = secretRaw ? JSON.parse(secretRaw) as unknown : {};
-  if (!isRecord(safe) || !isRecord(secrets)) return safeRaw ?? secretRaw;
-  return JSON.stringify({ ...safe, ...secrets });
 }
 
 export class CoreStore {
@@ -129,14 +91,9 @@ export class CoreStore {
 
   readServerSettings(): SettingsRecord {
     const stored = this.database.settings.getAll(SERVER_SCOPE);
-    const safe = Object.fromEntries(
+    return Object.fromEntries(
       Object.entries(stored).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
     );
-    const legacySecrets = extractSecretOverlay(this.readLegacyRecord(false));
-    const merged: SettingsRecord = { ...safe, ...legacySecrets };
-    const jarvisSettings = mergeSettingsDocument(safe.jarvis_settings, legacySecrets.jarvis_settings);
-    if (jarvisSettings) merged.jarvis_settings = jarvisSettings;
-    return merged;
   }
 
   writeServerSettings(patch: Readonly<Record<string, unknown>>): void {
@@ -144,22 +101,36 @@ export class CoreStore {
     if (unknownKeys.length > 0) throw new Error(`Unsupported settings: ${unknownKeys.join(', ')}.`);
 
     const safePatch: SettingsRecord = {};
-    const secretPatch: SettingsRecord = {};
     for (const [key, value] of Object.entries(patch)) {
       const stringValue = requireString(key, value);
       if (NON_SECRET_SERVER_KEYS.has(key)) safePatch[key] = stringValue;
-      if (SECRET_SERVER_KEYS.has(key)) secretPatch[key] = stringValue;
       if (key === 'jarvis_settings') {
         const split = splitSettingsDocument(stringValue);
-        safePatch.jarvis_settings = split.safe;
-        if (Object.keys(split.secrets).length > 0) {
-          secretPatch.jarvis_settings = JSON.stringify(split.secrets);
+        if (split.containsSecrets) {
+          throw new Error('Credentials must be saved through the desktop credential service.');
         }
+        safePatch.jarvis_settings = split.safe;
       }
     }
 
     this.database.settings.setMany(SERVER_SCOPE, safePatch);
-    if (Object.keys(secretPatch).length > 0) this.writeLegacySecretPatch(secretPatch);
+  }
+
+  removeLegacyCredentialValues(): void {
+    if (!existsSync(this.legacySettingsPath)) return;
+    const existing = this.readLegacyRecord(true);
+    const sanitized = { ...existing };
+    delete sanitized.jarvis_ha_token;
+    delete sanitized.jarvis_ical_url;
+    if (typeof sanitized.jarvis_settings === 'string') {
+      const parsed = JSON.parse(sanitized.jarvis_settings) as unknown;
+      if (!isRecord(parsed)) throw new Error('Legacy Jarvis settings document is malformed.');
+      const safe = { ...parsed };
+      delete safe.apiKey;
+      delete safe.claudeApiKey;
+      sanitized.jarvis_settings = JSON.stringify(safe);
+    }
+    this.writeLegacyRecord(sanitized);
   }
 
   diagnostics(): DatabaseDiagnostics {
@@ -191,26 +162,9 @@ export class CoreStore {
     }
   }
 
-  private writeLegacySecretPatch(patch: SettingsRecord): void {
-    const existing = this.readLegacyRecord(true);
-    const next = { ...existing };
-    for (const [key, value] of Object.entries(patch)) {
-      if (key !== 'jarvis_settings') {
-        next[key] = value;
-        continue;
-      }
-      const existingDocument = typeof existing.jarvis_settings === 'string'
-        ? JSON.parse(existing.jarvis_settings) as unknown
-        : {};
-      const secretDocument = JSON.parse(value) as unknown;
-      if (!isRecord(existingDocument) || !isRecord(secretDocument)) {
-        throw new Error('Legacy Jarvis settings secret document is malformed.');
-      }
-      next.jarvis_settings = JSON.stringify({ ...existingDocument, ...secretDocument });
-    }
-
+  private writeLegacyRecord(record: Readonly<Record<string, unknown>>): void {
     const temporary = `${this.legacySettingsPath}.partial`;
-    writeFileSync(temporary, `${JSON.stringify(next, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+    writeFileSync(temporary, `${JSON.stringify(record, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
     renameSync(temporary, this.legacySettingsPath);
     chmodSync(this.legacySettingsPath, 0o600);
   }

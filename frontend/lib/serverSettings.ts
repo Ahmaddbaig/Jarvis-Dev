@@ -1,11 +1,10 @@
-import { jarvisSettingsPatchSchema } from '@jarvis/contracts';
+import { jarvisSettingsPatchSchema, type CredentialStatus } from '@jarvis/contracts';
 
 /**
  * Shared helper for reading / writing server-side settings.
  *
- * All sensitive keys (OpenAI, ElevenLabs, HA token, etc.) live in a JSON
- * file on the *server* machine so every client that connects — including
- * tablets and phones on the LAN — inherits them automatically.
+ * Non-sensitive settings are stored by the server. Credential values never
+ * cross this boundary; callers receive configured/not-configured flags only.
  *
  * Usage:
  *   const settings = await loadServerSettings();
@@ -21,15 +20,11 @@ export type ServerSettings = {
 
   // Home Assistant
   jarvis_ha_url?: string;
-  jarvis_ha_token?: string;
 
   // Weather
   jarvis_weather_location?: string;
   jarvis_weather_lat?: string;
   jarvis_weather_lon?: string;
-
-  // iCal / Calendar
-  jarvis_ical_url?: string;
 
   // Bambu Lab
   bambu_email?: string;
@@ -40,13 +35,17 @@ export type ServerSettings = {
 
   // Voicebox voice engine
   jarvis_voicebox_url?: string;    // default http://127.0.0.1:17493
+
+  credentialStatus?: CredentialStatus;
 };
 
 // ── In-memory cache so widgets can read settings synchronously after boot ──
 let _cache: ServerSettings = {};
 let _loaded = false;
 
-const LEGACY_NON_SECRET_KEYS: readonly (keyof ServerSettings)[] = [
+type StringSettingKey = Exclude<keyof ServerSettings, 'credentialStatus'>;
+
+const LEGACY_NON_SECRET_KEYS: readonly StringSettingKey[] = [
   'jarvis_ha_url',
   'jarvis_weather_location',
   'jarvis_weather_lat',
@@ -79,7 +78,7 @@ function localNonSecretImport(serverSettings: ServerSettings): Partial<ServerSet
   return patch;
 }
 
-export function getCachedSetting(key: keyof ServerSettings): string {
+export function getCachedSetting(key: StringSettingKey): string {
   const fromCache = _cache[key];
   if (fromCache) return fromCache;
   // Fall back to localStorage (host machine backwards-compat)
@@ -109,10 +108,10 @@ export async function fetchServerSettings(signal?: AbortSignal): Promise<ServerS
   _loaded = true;
   // Back-fill localStorage so the host machine benefits from server settings too
   if (typeof window !== 'undefined') {
-    const syncKeys: (keyof ServerSettings)[] = [
-      'jarvis_ha_url', 'jarvis_ha_token',
+    const syncKeys: StringSettingKey[] = [
+      'jarvis_ha_url',
       'jarvis_weather_location', 'jarvis_weather_lat', 'jarvis_weather_lon',
-      'jarvis_ical_url', 'bambu_email', 'bambu_token_exp',
+      'bambu_email', 'bambu_token_exp',
     ];
     for (const key of syncKeys) {
       if (data[key] && !localStorage.getItem(key)) {
@@ -155,7 +154,7 @@ export async function saveServerSettings(patch: Partial<ServerSettings>): Promis
 /** Read one key — falls back to localStorage for backwards-compat on the host machine. */
 export function getLocalOrServer(
   serverSettings: ServerSettings,
-  key: keyof ServerSettings,
+  key: StringSettingKey,
   localStorageKey?: string,
 ): string {
   const fromServer = serverSettings[key];

@@ -44,8 +44,8 @@ function isMediaOn(e: HAEntity): boolean {
 }
 
 function loadHAConfig() {
-  if (typeof window === 'undefined') return { url: '', token: '' };
-  return { url: localStorage.getItem('jarvis_ha_url') ?? '', token: localStorage.getItem('jarvis_ha_token') ?? '' };
+  if (typeof window === 'undefined') return { url: '' };
+  return { url: localStorage.getItem('jarvis_ha_url') ?? '' };
 }
 
 // ── Panel Shell ────────────────────────────────────────────────────────────────
@@ -1242,14 +1242,14 @@ interface Props { onNavigateHome: () => void; }
 
 export function HomeAssistantPage({ onNavigateHome }: Props) {
   const [haUrl,   setHaUrl]   = useState('');
-  const [haToken, setHaToken] = useState('');
   const [showWizard, setShowWizard] = useState(false);
   const [navView, setNavView]       = useState<NavView>('dashboard');
   const [clock,   setClock]         = useState('');
   const queryClient = useQueryClient();
   const serverSettingsQuery = useServerSettings();
-  const entitiesQuery = useHomeAssistantStates(haUrl, haToken);
-  const serviceMutation = useHomeAssistantService(haUrl, haToken);
+  const configured = serverSettingsQuery.data?.credentialStatus?.homeAssistantToken ?? false;
+  const entitiesQuery = useHomeAssistantStates(haUrl, configured);
+  const serviceMutation = useHomeAssistantService(haUrl);
   const entities = entitiesQuery.data ?? [];
   const loading = entitiesQuery.isFetching;
   const error = entitiesQuery.error instanceof Error ? entitiesQuery.error.message : '';
@@ -1269,12 +1269,9 @@ export function HomeAssistantPage({ onNavigateHome }: Props) {
     if (serverSettingsQuery.isPending) return;
     const serverSettings = serverSettingsQuery.data ?? {};
     const url = serverSettings.jarvis_ha_url || loadHAConfig().url;
-    const token = serverSettings.jarvis_ha_token || loadHAConfig().token;
     if (serverSettings.jarvis_ha_url) localStorage.setItem('jarvis_ha_url', serverSettings.jarvis_ha_url);
-    if (serverSettings.jarvis_ha_token) localStorage.setItem('jarvis_ha_token', serverSettings.jarvis_ha_token);
-    if (url && token) {
+    if (url && serverSettings.credentialStatus?.homeAssistantToken) {
       setHaUrl(url);
-      setHaToken(token);
     } else {
       setShowWizard(true);
     }
@@ -1290,22 +1287,21 @@ export function HomeAssistantPage({ onNavigateHome }: Props) {
     window.addEventListener('jarvis:home-assistant', handler);
     return () => window.removeEventListener('jarvis:home-assistant', handler);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [haUrl, haToken]);
+  }, [haUrl]);
 
   const callService = async (domain: string, service: string, entityId: string, serviceData: Record<string, unknown> = {}) => {
-    if (!haUrl || !haToken) return;
+    if (!haUrl || !configured) return;
     await serviceMutation.mutateAsync({ domain, service, entityId, serviceData });
   };
 
   const handleSetBrightness = useCallback((entity: HAEntity, pct: number) => {
     callService('light', 'turn_on', entity.entity_id, { brightness: Math.round((pct / 100) * 255) });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [haUrl, haToken]);
+  }, [haUrl, configured]);
 
-  const handleWizardComplete = (url: string, token: string) => {
+  const handleWizardComplete = (url: string) => {
     queryClient.removeQueries({ queryKey: queryKeys.homeAssistant.all });
     setHaUrl(url);
-    setHaToken(token);
     setShowWizard(false);
   };
 

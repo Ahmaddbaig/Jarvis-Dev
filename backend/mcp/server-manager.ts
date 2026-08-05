@@ -16,12 +16,19 @@ import fs from 'fs';
 import os from 'os';
 import { GOOGLE_CALENDAR_SERVER_NAME, JARVIS_DATA_DIR } from './dynamic-config';
 import { getGoogleServiceEnvForServerName } from './google-service-runtime';
+import { getGoogleServiceByServerName } from '../../shared/google-services';
+import {
+  googleOAuthClientInfo,
+  materializeGoogleOAuthCredentials,
+  removeMaterializedGoogleOAuthCredentials,
+} from '../secrets/google-credentials';
 
 // Ensure required env vars are set for specific servers regardless of how they
 // were originally registered (e.g. after an app restart with a saved config).
 function applyServerEnvDefaults(name: string, cfg: McpServerConfig): McpServerConfig {
   const serviceEnv = getGoogleServiceEnvForServerName(name);
   if (serviceEnv) {
+    if (googleOAuthClientInfo()) materializeGoogleOAuthCredentials();
     return { ...cfg, env: { ...serviceEnv, ...(cfg.env ?? {}) } };
   }
 
@@ -217,6 +224,8 @@ export class McpServerManager {
       this.processes.delete(name);
       this.servers.delete(name);
       throw err;
+    } finally {
+      if (getGoogleServiceByServerName(name)) removeMaterializedGoogleOAuthCredentials();
     }
   }
 
