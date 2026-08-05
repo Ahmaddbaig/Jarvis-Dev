@@ -30,6 +30,8 @@ import {
 import {
   buildAssistantInstructions,
   buildTranscriptionPrompt,
+  createLocalAIRealtimeAdapter,
+  createOpenAIRealtimeAdapter,
   hasJarvisWakeWord,
   releaseRealtimeTransport,
   useVoiceSessionState,
@@ -38,7 +40,6 @@ import {
 const FFT_BARS = 64;
 // Keep speaker bleed and song vocals below the activation point while still
 // allowing a nearby user speaking clearly to interrupt playback.
-const REALTIME_VAD_THRESHOLD = 0.7;
 const MUSIC_PLAYBACK_RESTORE_FALLBACK_MS = 10_000;
 const MAX_CHAT_MESSAGES = 24;
 const REALTIME_TEXT_DELTA_EVENTS = new Set([
@@ -59,47 +60,6 @@ const REALTIME_TEXT_DONE_EVENTS = new Set([
 const DEFAULT_OPENAI_CHAT_MODEL = 'gpt-4o-mini';
 const DEFAULT_CLAUDE_CHAT_MODEL = 'claude-haiku-4-5';
 
-async function ensureLocalAIReady(baseUrl: string, pipelineModel: string, profileLabel: string): Promise<void> {
-  const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), 5_000);
-
-  try {
-    const readyResponse = await fetch(`${baseUrl}/readyz`, {
-      cache: 'no-store',
-      signal: controller.signal,
-    });
-    if (!readyResponse.ok) {
-      throw new Error(`LocalAI health check returned HTTP ${readyResponse.status}.`);
-    }
-
-    const modelsResponse = await fetch(`${baseUrl}/v1/models`, {
-      cache: 'no-store',
-      signal: controller.signal,
-    });
-    if (!modelsResponse.ok) {
-      throw new Error(`LocalAI model check returned HTTP ${modelsResponse.status}.`);
-    }
-
-    const payload = await modelsResponse.json() as { data?: Array<{ id?: string }> };
-    const installedModels = new Set((payload.data ?? []).map((model) => model.id));
-    if (!installedModels.has(pipelineModel)) {
-      throw new Error(
-        `${profileLabel} is selected but its model is not installed on this Mac. ` +
-        'Run scripts/local-ai/install-macos.zsh for the matching Mac profile; switching profiles never downloads models automatically.'
-      );
-    }
-  } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') {
-      throw new Error(`LocalAI did not respond within 5 seconds at ${baseUrl}. Start Jarvis with RUN-JARVIS-DEV.command.`);
-    }
-    if (error instanceof TypeError) {
-      throw new Error(`Cannot reach LocalAI at ${baseUrl}. Start Jarvis with RUN-JARVIS-DEV.command.`);
-    }
-    throw error;
-  } finally {
-    window.clearTimeout(timeout);
-  }
-}
 const DEFAULT_SETTINGS: JarvisSettings = {
   apiMode: 'openai',
   apiKey: '',
@@ -404,12 +364,15 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     },
     onModeChange: ({ mode }) => {
       if (mode === 'speaking') {
+        voiceSession.speaking();
         void duckMusic();
       } else {
+        voiceSession.listening();
         scheduleMusicRestore(500);
       }
     },
     onInterruption: () => {
+      voiceSession.listening();
       void duckMusic();
     },
   });
@@ -503,8 +466,13 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     },
     onMessage: ({ message, role }) => appendChatMessage(role, message),
     onModeChange: ({ mode }) => {
-      if (mode === 'speaking') void duckMusic();
-      else scheduleMusicRestore(500);
+      if (mode === 'speaking') {
+        voiceSession.speaking();
+        void duckMusic();
+      } else {
+        voiceSession.listening();
+        scheduleMusicRestore(500);
+      }
     },
   });
 
@@ -1111,9 +1079,19 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
         return;
       }
 
-      if (isLocal) {
-        await ensureLocalAIReady(localAIBaseUrl, localProfile.pipelineModel, localProfile.label);
-      }
+      const realtimeProvider = isLocal
+        ? createLocalAIRealtimeAdapter({
+            baseUrl: localAIBaseUrl,
+            pipelineModel: localProfile.pipelineModel,
+            transcriptionModel: localProfile.transcriptionModel,
+            profileLabel: localProfile.label,
+          })
+        : createOpenAIRealtimeAdapter({
+            apiKey: currentSettings.apiKey,
+            model: currentSettings.realtimeModel ?? 'gpt-realtime-2',
+            voice: currentSettings.voice ?? 'echo',
+          });
+      await realtimeProvider.prepare();
 
       console.log(
         `%c[Jarvis] startRealtime() called at ${new Date().toLocaleTimeString()} — model: ${isLocal ? localProfile.pipelineModel : (currentSettings.realtimeModel ?? 'gpt-realtime-2')}`,
@@ -1194,7 +1172,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
 
       // LocalAI uses a single JSON signaling exchange (no trickle-ICE
       // endpoint), so its offer must contain the gathered ICE candidates.
-      if (isLocal && pc.iceGatheringState !== 'complete') {
+      if (realtimeProvider.requiresCompleteIce && pc.iceGatheringState !== 'complete') {
         await new Promise<void>((resolve) => {
           const timeout = window.setTimeout(resolve, 10_000);
           const onStateChange = () => {
@@ -1208,66 +1186,9 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
         });
       }
 
-      let response: Response;
-      if (isLocal) {
-        response = await fetch(`${localAIBaseUrl}/v1/realtime/calls`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            sdp: pc.localDescription?.sdp ?? offer.sdp ?? '',
-            model: localProfile.pipelineModel,
-          }),
-        });
-      } else {
-        const model = currentSettings.realtimeModel ?? 'gpt-realtime-2';
-        const fd = new FormData();
-        fd.set('sdp', offer.sdp ?? '');
-        fd.set('session', JSON.stringify({
-          type: 'realtime',
-          model,
-          audio: {
-            input: {
-              noise_reduction: { type: 'far_field' },
-              transcription: {
-                model: 'gpt-4o-mini-transcribe',
-                language: 'en',
-                prompt: 'The speaker may address an assistant named Jarvis. Spell the wake word as Jarvis.',
-              },
-              turn_detection: {
-                type: 'server_vad',
-                threshold: REALTIME_VAD_THRESHOLD,
-                prefix_padding_ms: 500,
-                silence_duration_ms: 650,
-                create_response: false,
-                interrupt_response: true,
-              },
-            },
-            output: { voice: currentSettings.voice ?? 'echo' },
-          },
-        }));
-
-        response = await fetch('https://api.openai.com/v1/realtime/calls', {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${currentSettings.apiKey}`,
-          },
-          body: fd,
-        });
-      }
-
-      if (!response.ok) {
-        const text = await response.text();
-        throw new Error(`Failed to create realtime session: ${text}`);
-      }
-
-      let answerSdp: string;
-      if (isLocal) {
-        const call = await response.json() as { sdp?: string };
-        if (!call.sdp) throw new Error('LocalAI returned a realtime session without an SDP answer.');
-        answerSdp = call.sdp;
-      } else {
-        answerSdp = await response.text();
-      }
+      const answerSdp = await realtimeProvider.createAnswer(
+        pc.localDescription?.sdp ?? offer.sdp ?? '',
+      );
       const answer = { type: 'answer', sdp: answerSdp } as RTCSessionDescriptionInit;
       await pc.setRemoteDescription(answer);
 
@@ -1286,62 +1207,11 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
           'background:#1a3a1a;color:#81c784;font-weight:bold;padding:2px 6px;border-radius:3px'
         );
 
-        // LocalAI's pipeline owns ASR, TTS, and semantic turn detection. Sending
-        // OpenAI model names here would make it try to load unavailable backends.
-        const sessionConfig = isLocal
-          ? {
-              type: 'session.update',
-              session: {
-                type: 'realtime',
-                instructions: buildAssistantInstructions(currentSettings.initialPrompt, currentSettings.speechVocabulary),
-                tool_choice: 'auto',
-                max_output_tokens: 512,
-                audio: {
-                  input: {
-                    transcription: {
-                      model: localProfile.transcriptionModel,
-                      language: 'en',
-                      prompt: buildTranscriptionPrompt(currentSettings.speechVocabulary),
-                    },
-                    turn_detection: {
-                      type: 'semantic_vad',
-                      eagerness: 'high',
-                      create_response: false,
-                      interrupt_response: true,
-                    },
-                  },
-                  output: { voice: '26' },
-                },
-                ...(enabledTools.length > 0 ? { tools: enabledTools } : { tools: [] }),
-              },
-            }
-          : {
-              type: 'session.update',
-              session: {
-                type: 'realtime',
-                instructions: buildAssistantInstructions(currentSettings.initialPrompt, currentSettings.speechVocabulary),
-                tool_choice: 'auto',
-                audio: {
-                  input: {
-                    noise_reduction: { type: 'far_field' },
-                    transcription: {
-                      model: 'gpt-4o-mini-transcribe',
-                      language: 'en',
-                      prompt: 'The speaker may address an assistant named Jarvis. Spell the wake word as Jarvis.',
-                    },
-                    turn_detection: {
-                      type: 'server_vad',
-                      threshold: REALTIME_VAD_THRESHOLD,
-                      prefix_padding_ms: 500,
-                      silence_duration_ms: 650,
-                      create_response: false,
-                      interrupt_response: true,
-                    },
-                  },
-                },
-                ...(enabledTools.length > 0 ? { tools: enabledTools } : { tools: [] }),
-              },
-            };
+        const sessionConfig = realtimeProvider.createSessionUpdate({
+          instructions: buildAssistantInstructions(currentSettings.initialPrompt, currentSettings.speechVocabulary),
+          transcriptionPrompt: buildTranscriptionPrompt(currentSettings.speechVocabulary),
+          tools: enabledTools,
+        });
 
         dc.send(JSON.stringify(sessionConfig));
         sessionStartTimeRef.current = Date.now();
@@ -1375,8 +1245,8 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
           }
 
           if (data.type === 'error') {
-            const errorSource = isLocal ? 'local-ai' : 'openai';
-            console.error(`${isLocal ? 'LocalAI' : 'OpenAI'} Realtime Error:`, JSON.stringify(data.error));
+            const errorSource = realtimeProvider.engine === 'local' ? 'local-ai' : 'openai';
+            console.error(`${realtimeProvider.label} Realtime Error:`, JSON.stringify(data.error));
             emitError(errorSource, JSON.stringify(data.error));
           }
 
@@ -1413,6 +1283,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
 
             if (musicIsPlaying) await duckMusic();
             appendChatMessage('user', transcript);
+            voiceSession.thinking();
             // Both providers wait for this gate, so background music cannot
             // trigger speech or tools before the wake-word check completes.
             dc.send(JSON.stringify({ type: 'response.create' }));
@@ -1431,9 +1302,18 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
           }
 
           if (
+            data.type === 'output_audio_buffer.started' ||
+            data.type === 'response.output_audio.delta' ||
+            data.type === 'response.audio.delta'
+          ) {
+            voiceSession.speaking();
+          }
+
+          if (
             data.type === 'output_audio_buffer.stopped' ||
             data.type === 'output_audio_buffer.cleared'
           ) {
+            voiceSession.listening();
             scheduleMusicRestore();
           }
 
@@ -1449,6 +1329,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
               )
               .join('');
             completeRealtimeResponse(responseKey, responseText);
+            voiceSession.listening();
             scheduleMusicRestore(500);
           }
 
@@ -1706,11 +1587,13 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
           throw new Error('Start Jarvis before sending a message.');
         }
         appendChatMessage('user', message);
+        voiceSession.thinking();
         elConversation.sendUserMessage(message);
       } else if (mode === 'voicebox') {
         if (voiceboxConversation.status !== 'connected') {
           throw new Error('Start Jarvis before sending a message.');
         }
+        voiceSession.thinking();
         await voiceboxConversation.sendUserMessage(message);
       } else {
         const dataChannel = dataChannelRef.current;
@@ -1718,6 +1601,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
           throw new Error('Start Jarvis before sending a message.');
         }
         appendChatMessage('user', message);
+        voiceSession.thinking();
         dataChannel.send(JSON.stringify({
           type: 'conversation.item.create',
           item: {
