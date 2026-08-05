@@ -10,6 +10,9 @@ out/
 
 # Local settings & secrets (contains API keys)
 jarvis-server-settings.json
+jarvis-companions.json
+jarvis-companions.json.*.tmp
+.jarvis-desktop-token
 .bambu-token.json
 .env
 .env.*

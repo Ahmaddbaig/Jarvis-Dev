@@ -1,5 +1,7 @@
 # Jarvis V5 — AI Desktop Assistant
 
+Cross-computer setup is documented in [COMPANION_SETUP.md](COMPANION_SETUP.md). Deskflow keyboard/mouse switching is documented in [DESKFLOW_INTEGRATION.md](DESKFLOW_INTEGRATION.md).
+
 Electron + Next.js desktop assistant with voice, HUD widgets, and smart-home integrations.
 
 ## Running in development

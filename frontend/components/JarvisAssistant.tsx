@@ -28,6 +28,19 @@ const FFT_BARS = 64;
 // allowing a nearby user speaking clearly to interrupt playback.
 const REALTIME_VAD_THRESHOLD = 0.7;
 const MUSIC_PLAYBACK_RESTORE_FALLBACK_MS = 10_000;
+const MAX_CHAT_MESSAGES = 24;
+const REALTIME_TEXT_DELTA_EVENTS = new Set([
+  'response.output_audio_transcript.delta',
+  'response.audio_transcript.delta',
+  'response.output_text.delta',
+  'response.text.delta',
+]);
+const REALTIME_TEXT_DONE_EVENTS = new Set([
+  'response.output_audio_transcript.done',
+  'response.audio_transcript.done',
+  'response.output_text.done',
+  'response.text.done',
+]);
 const MUSIC_TOOL_ROUTING_INSTRUCTIONS =
   'For any request to play a named artist, song, album, or playlist, always call play_spotify. ' +
   'Keep playback in the installed Spotify desktop application. Never open Spotify Web Player or a Spotify website, and never use open_url, web_search, run_shell_command, or computer_use for a music request. ' +
@@ -153,6 +166,125 @@ const DEFAULT_SETTINGS: JarvisSettings = {
 
 type DesktopPanelPosition = Exclude<JarvisSettings['position'], 'center'>;
 
+type ChatMessage = {
+  id: string;
+  role: 'user' | 'assistant';
+  text: string;
+};
+
+type ChatPanelProps = {
+  messages: ChatMessage[];
+  value: string;
+  online: boolean;
+  sending: boolean;
+  micMuted: boolean;
+  error: string | null;
+  onChange: (value: string) => void;
+  onSend: () => void;
+  onToggleMic: () => void;
+};
+
+function ChatPanel({
+  messages,
+  value,
+  online,
+  sending,
+  micMuted,
+  error,
+  onChange,
+  onSend,
+  onToggleMic,
+}: ChatPanelProps) {
+  const historyRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const history = historyRef.current;
+    if (history) history.scrollTop = history.scrollHeight;
+  }, [messages]);
+
+  return (
+    <section
+      aria-label="Jarvis text chat"
+      className="fixed z-[80] bottom-5 left-1/2 -translate-x-1/2 w-[min(92vw,720px)] pointer-events-auto select-text"
+    >
+      {messages.length > 0 && (
+        <div
+          ref={historyRef}
+          aria-live="polite"
+          className="mb-2 max-h-44 overflow-y-auto rounded-xl border border-cyan-500/30 bg-black/85 px-4 py-3 shadow-[0_0_24px_rgba(var(--accent-rgb),0.16)] backdrop-blur-md"
+        >
+          <div className="space-y-2">
+            {messages.map((message) => (
+              <div
+                key={message.id}
+                className={`flex gap-3 text-sm leading-relaxed ${message.role === 'user' ? 'text-white/85' : 'text-cyan-300'}`}
+              >
+                <span className="w-14 shrink-0 font-mono text-[10px] font-bold uppercase tracking-widest text-cyan-500/70">
+                  {message.role === 'user' ? 'You' : 'Jarvis'}
+                </span>
+                <span className="min-w-0 whitespace-pre-wrap break-words">{message.text}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <form
+        className="flex items-end gap-2 rounded-xl border border-cyan-500/50 bg-black/90 p-2 shadow-[0_0_28px_rgba(var(--accent-rgb),0.2)] backdrop-blur-md"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSend();
+        }}
+      >
+        <button
+          type="button"
+          onClick={onToggleMic}
+          aria-label={micMuted ? 'Turn microphone on' : 'Mute microphone while typing'}
+          aria-pressed={micMuted}
+          className={`h-10 shrink-0 rounded-lg border px-3 font-mono text-[10px] font-bold uppercase tracking-widest transition-colors ${
+            micMuted
+              ? 'border-red-500/60 bg-red-950/50 text-red-300'
+              : 'border-cyan-500/30 bg-cyan-950/20 text-cyan-400 hover:border-cyan-400'
+          }`}
+        >
+          {micMuted ? 'Mic off' : 'Mic on'}
+        </button>
+
+        <textarea
+          value={value}
+          rows={1}
+          maxLength={4000}
+          onChange={(event) => onChange(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && !event.shiftKey) {
+              event.preventDefault();
+              event.currentTarget.form?.requestSubmit();
+            }
+          }}
+          placeholder={online ? 'Type to Jarvis — the response will be spoken aloud' : 'Start Jarvis, then type a message'}
+          aria-label="Message Jarvis"
+          className="min-h-10 max-h-28 flex-1 resize-none bg-transparent px-2 py-2.5 text-sm text-white outline-none placeholder:text-white/35"
+        />
+
+        <button
+          type="submit"
+          disabled={sending || !value.trim()}
+          className="h-10 shrink-0 rounded-lg border border-cyan-400/70 bg-cyan-500/20 px-4 text-xs font-bold uppercase tracking-widest text-cyan-300 transition-colors hover:bg-cyan-500/30 disabled:cursor-not-allowed disabled:opacity-35"
+        >
+          {sending ? 'Sending' : 'Send'}
+        </button>
+      </form>
+
+      <div className="mt-1 flex min-h-4 items-center justify-between px-2 font-mono text-[10px] uppercase tracking-wider">
+        <span className={online ? 'text-emerald-400/70' : 'text-white/35'}>
+          {online ? 'Text link ready · voice reply enabled' : 'Jarvis is offline'}
+        </span>
+        {error && <span className="ml-3 normal-case text-red-400">{error}</span>}
+      </div>
+    </section>
+  );
+}
+
 function isDesktopPanelPosition(value: unknown): value is DesktopPanelPosition {
   return (
     value === 'top-left' ||
@@ -166,6 +298,10 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
   const [status, setStatus] = useState<'idle' | 'listening' | 'active' | 'error'>('idle');
   const [lastError, setLastError] = useState<string | null>(null);
   const [micMuted, setMicMuted] = useState(false);
+  const [chatText, setChatText] = useState('');
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatSending, setChatSending] = useState(false);
+  const [chatError, setChatError] = useState<string | null>(null);
   const [audioLevel, setAudioLevel] = useState(0);
   const [fftData, setFftData] = useState<number[]>(new Array(FFT_BARS).fill(0));
   const statusRef = useRef(status);
@@ -192,6 +328,8 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
   // session auto-reconnects, which prevents the model from navigating the
   // user back to "home" as part of its unsolicited greeting.
   const sessionStartTimeRef = useRef<number>(0);
+  const realtimeResponseTextRef = useRef<Map<string, string>>(new Map());
+  const completedRealtimeResponsesRef = useRef<Set<string>>(new Set());
   const musicDuckRef = useRef<{
     active: boolean;
     previousVolume: number | null;
@@ -203,6 +341,32 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
   });
   const musicDuckRequestRef = useRef<Promise<void> | null>(null);
   const musicRestoreTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function appendChatMessage(role: ChatMessage['role'], rawText: string): void {
+    const text = rawText.trim();
+    if (!text) return;
+
+    setChatMessages((current) => {
+      const previous = current[current.length - 1];
+      if (previous?.role === role && previous.text === text) return current;
+      return [...current, { id: crypto.randomUUID(), role, text }].slice(-MAX_CHAT_MESSAGES);
+    });
+  }
+
+  function realtimeResponseKey(data: Record<string, unknown>): string {
+    const response = data.response as { id?: unknown } | undefined;
+    return String(data.response_id ?? response?.id ?? data.item_id ?? 'current-response');
+  }
+
+  function completeRealtimeResponse(responseKey: string, finalText?: string): void {
+    if (completedRealtimeResponsesRef.current.has(responseKey)) return;
+    const text = (finalText || realtimeResponseTextRef.current.get(responseKey) || '').trim();
+    if (!text) return;
+
+    completedRealtimeResponsesRef.current.add(responseKey);
+    realtimeResponseTextRef.current.delete(responseKey);
+    appendChatMessage('assistant', text);
+  }
 
   // Dynamic function state — starts unloaded; gates auto-start.
   const [dynamicState, setDynamicState] = useState<DynamicFunctionState>({
@@ -243,6 +407,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     clientTools: elClientToolsRef.current,
     onConnect: () => {
       console.log('ElevenLabs connected');
+      setChatError(null);
       setStatus('active');
     },
     onDisconnect: (details?: { reason?: string; code?: number; message?: string }) => {
@@ -265,6 +430,9 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
       setStatus('error');
       setLastError(msg);
       emitError('elevenlabs', msg);
+    },
+    onMessage: ({ message, role }) => {
+      appendChatMessage(role === 'agent' ? 'assistant' : 'user', message);
     },
     onModeChange: ({ mode }) => {
       if (mode === 'speaking') {
@@ -1109,6 +1277,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
       dc.onopen = () => {
         console.log('WebRTC data channel open');
         autoReconnectRef.current = true; // session is live — enable auto-reconnect on drop
+        setChatError(null);
 
         const allFunctions = dynamicState.loaded ? dynamicState.allFunctions : FUNCTION_REGISTRY;
         const enabledTools = allFunctions
@@ -1194,6 +1363,20 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
         try {
           const data = JSON.parse(event.data);
 
+          if (REALTIME_TEXT_DELTA_EVENTS.has(data.type) && typeof data.delta === 'string') {
+            const responseKey = realtimeResponseKey(data);
+            const currentText = realtimeResponseTextRef.current.get(responseKey) ?? '';
+            realtimeResponseTextRef.current.set(responseKey, currentText + data.delta);
+          }
+
+          if (REALTIME_TEXT_DONE_EVENTS.has(data.type)) {
+            const responseKey = realtimeResponseKey(data);
+            const finalText = typeof data.transcript === 'string'
+              ? data.transcript
+              : (typeof data.text === 'string' ? data.text : undefined);
+            completeRealtimeResponse(responseKey, finalText);
+          }
+
           if (data.type === 'error') {
             const errorSource = isLocal ? 'local-ai' : 'openai';
             console.error(`${isLocal ? 'LocalAI' : 'OpenAI'} Realtime Error:`, JSON.stringify(data.error));
@@ -1232,6 +1415,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
             }
 
             if (musicIsPlaying) await duckMusic();
+            appendChatMessage('user', transcript);
             // Both providers wait for this gate, so background music cannot
             // trigger speech or tools before the wake-word check completes.
             dc.send(JSON.stringify({ type: 'response.create' }));
@@ -1257,6 +1441,17 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
           }
 
           if (data.type === 'response.done' && Object.keys(pendingCalls).length === 0) {
+            const responseKey = realtimeResponseKey(data);
+            const responseOutput = Array.isArray(data.response?.output) ? data.response.output : [];
+            const responseText = responseOutput
+              .flatMap((item: { content?: unknown }) => Array.isArray(item.content) ? item.content : [])
+              .map((part: { transcript?: unknown; text?: unknown }) =>
+                typeof part.transcript === 'string'
+                  ? part.transcript
+                  : (typeof part.text === 'string' ? part.text : '')
+              )
+              .join('');
+            completeRealtimeResponse(responseKey, responseText);
             scheduleMusicRestore(500);
           }
 
@@ -1427,6 +1622,8 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
 
   function disconnect() {
     void restoreMusicVolume();
+    realtimeResponseTextRef.current.clear();
+    completedRealtimeResponsesRef.current.clear();
     console.log(
       `%c[Jarvis] disconnect() called at ${new Date().toLocaleTimeString()} — stack: ${new Error().stack?.split('\n')[2]?.trim() ?? 'unknown'}`,
       'background:#2d0a0a;color:#ff6b6b;font-weight:bold;padding:2px 6px;border-radius:3px'
@@ -1491,6 +1688,47 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
       } else {
         autoReconnectRef.current = true;
       }
+    }
+  }
+
+  async function sendTypedChat(): Promise<void> {
+    const message = chatText.trim();
+    if (!message || chatSending) return;
+
+    setChatSending(true);
+    setChatError(null);
+
+    try {
+      if ((settings.apiMode ?? 'openai') === 'elevenlabs') {
+        if (elConversation.status !== 'connected') {
+          throw new Error('Start Jarvis before sending a message.');
+        }
+        appendChatMessage('user', message);
+        elConversation.sendUserMessage(message);
+      } else {
+        const dataChannel = dataChannelRef.current;
+        if (!dataChannel || dataChannel.readyState !== 'open') {
+          throw new Error('Start Jarvis before sending a message.');
+        }
+        appendChatMessage('user', message);
+        dataChannel.send(JSON.stringify({
+          type: 'conversation.item.create',
+          item: {
+            type: 'message',
+            role: 'user',
+            content: [{ type: 'input_text', text: message }],
+          },
+        }));
+        dataChannel.send(JSON.stringify({ type: 'response.create' }));
+      }
+
+      setChatText('');
+      void duckMusic();
+    } catch (error) {
+      const messageText = error instanceof Error ? error.message : String(error);
+      setChatError(messageText);
+    } finally {
+      setChatSending(false);
     }
   }
 
@@ -1570,6 +1808,9 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
   const ring2Scale = 1 + visualAudioLevel * 0.05;
   const logoScale = 1;
   const glowIntensity = 0;
+  const chatOnline = (settings.apiMode ?? 'openai') === 'elevenlabs'
+    ? elConversation.status === 'connected'
+    : dataChannelRef.current?.readyState === 'open' && status === 'active';
 
   const gridSize = ({ small: '20px 20px', medium: '40px 40px', large: '80px 80px', off: undefined } as Record<string, string | undefined>)[settings.grid ?? 'off'];
 
@@ -1871,6 +2112,20 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
         {/* Hidden Audio Element */}
         <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />
       </div>
+
+      {!compact && !isSettingsOpen && (
+        <ChatPanel
+          messages={chatMessages}
+          value={chatText}
+          online={chatOnline}
+          sending={chatSending}
+          micMuted={micMuted}
+          error={chatError}
+          onChange={setChatText}
+          onSend={() => void sendTypedChat()}
+          onToggleMic={() => setMicrophoneMuted(!micMutedRef.current)}
+        />
+      )}
 
       {/* X-Ray Widget */}
       <XrayWidget />
