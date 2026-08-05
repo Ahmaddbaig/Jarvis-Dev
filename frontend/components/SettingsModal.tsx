@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { FUNCTION_REGISTRY, JarvisFunction } from '@/frontend/lib/functions';
 import { sfx } from '@/frontend/lib/sfx';
+import { chromeControlFetch } from '@/frontend/lib/chromeControlClient';
 import { desktopControlFetch } from '@/frontend/lib/desktopControlClient';
 import {
   DEFAULT_LOCAL_AI_BASE_URL,
@@ -18,6 +19,16 @@ interface SettingsModalProps {
   onSave: (settings: JarvisSettings) => void;
   initialSettings: JarvisSettings;
   dynamicFunctions?: JarvisFunction[];
+}
+
+interface ChromeControlStatus {
+  paired: boolean;
+  connected: boolean;
+  extensionName?: string;
+  pairedAt?: string;
+  lastSeen?: string;
+  extensionPath: string;
+  supportedEndpoints: string[];
 }
 
 export type JarvisTheme = 'arc-reactor' | 'midnight' | 'crimson' | 'matrix';
@@ -136,6 +147,10 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
   const [macPermissions, setMacPermissions] = useState<MacPermissionStatus | null>(null);
   const [permissionBusy, setPermissionBusy] = useState<string | null>(null);
   const [isMacElectron, setIsMacElectron] = useState(false);
+  const [chromeStatus, setChromeStatus] = useState<ChromeControlStatus | null>(null);
+  const [chromePairing, setChromePairing] = useState<{ code: string; expiresAt: string } | null>(null);
+  const [chromeBusy, setChromeBusy] = useState(false);
+  const [chromeError, setChromeError] = useState<string | null>(null);
   const [companions, setCompanions] = useState<CompanionView[]>([]);
   const [companionAddress, setCompanionAddress] = useState('');
   const [companionCode, setCompanionCode] = useState('');
@@ -157,6 +172,9 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
       setActiveTab('jarvis');
       setDiagOutput(null);
       setDiagError(null);
+      setChromePairing(null);
+      setChromeError(null);
+      void refreshChromeStatus();
     }
   }, [isOpen, initialSettings]);
 
@@ -234,6 +252,57 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
       setDiagError(e instanceof Error ? e.message : String(e));
     } finally {
       setDiagLoading(false);
+    }
+  }
+
+  async function refreshChromeStatus() {
+    try {
+      const response = await chromeControlFetch('/api/chrome-control');
+      if (!response.ok) throw new Error(`Chrome status returned HTTP ${response.status}.`);
+      setChromeStatus(await response.json() as ChromeControlStatus);
+      setChromeError(null);
+    } catch (error) {
+      setChromeError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function createChromePairing() {
+    setChromeBusy(true);
+    setChromeError(null);
+    try {
+      const response = await chromeControlFetch('/api/chrome-control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ operation: 'create_pairing' }),
+      });
+      const data = await response.json() as { code?: string; expiresAt?: string; error?: string };
+      if (!response.ok || !data.code || !data.expiresAt) throw new Error(data.error || 'Jarvis could not generate a pairing code.');
+      setChromePairing({ code: data.code, expiresAt: data.expiresAt });
+      await refreshChromeStatus();
+    } catch (error) {
+      setChromeError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setChromeBusy(false);
+    }
+  }
+
+  async function revokeChromePairing() {
+    if (!window.confirm('Revoke the paired Jarvis Chrome extension? Chrome control will stop immediately.')) return;
+    setChromeBusy(true);
+    setChromeError(null);
+    try {
+      const response = await chromeControlFetch('/api/chrome-control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ operation: 'revoke_pairing' }),
+      });
+      if (!response.ok) throw new Error(`Chrome revoke returned HTTP ${response.status}.`);
+      setChromePairing(null);
+      await refreshChromeStatus();
+    } catch (error) {
+      setChromeError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setChromeBusy(false);
     }
   }
 
@@ -1100,6 +1169,84 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
                   )}
                 </div>
               )}
+
+              <div className="space-y-3 border border-cyan-500/25 bg-cyan-950/15 rounded p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h3 className="text-xs font-bold text-cyan-400 uppercase tracking-widest">Chrome Control Extension</h3>
+                    <p className="text-[10px] text-cyan-700 mt-1 leading-relaxed">
+                      Pair the local extension, then approve each website from Chrome before Jarvis may read or control it.
+                    </p>
+                  </div>
+                  <span className={`text-[10px] uppercase tracking-wider ${chromeStatus?.connected ? 'text-emerald-400' : chromeStatus?.paired ? 'text-amber-400' : 'text-cyan-700'}`}>
+                    {chromeStatus?.connected ? 'Connected' : chromeStatus?.paired ? 'Paired / Offline' : 'Not paired'}
+                  </span>
+                </div>
+
+                <ol className="list-decimal pl-4 text-[10px] text-cyan-600 leading-relaxed space-y-1">
+                  <li>Open <span className="text-cyan-300 font-mono">chrome://extensions</span> and turn on Developer mode.</li>
+                  <li>Select Load unpacked and choose the extension folder shown below.</li>
+                  <li>Generate a code here, open the JARVIS extension, and enter the code.</li>
+                  <li>Enable Chrome Use under Abilities and approve websites from the extension popup.</li>
+                </ol>
+
+                {chromeStatus?.extensionPath && (
+                  <div className="space-y-2">
+                    <p className="text-[10px] text-cyan-300 font-mono break-all border border-cyan-500/15 bg-black/30 rounded p-2">
+                      {chromeStatus.extensionPath}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => void navigator.clipboard.writeText(chromeStatus.extensionPath)}
+                      className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest rounded border border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/10"
+                    >
+                      Copy extension path
+                    </button>
+                  </div>
+                )}
+
+                {chromePairing && (
+                  <div className="border border-amber-400/30 bg-amber-500/5 rounded p-3 text-center">
+                    <p className="text-[10px] text-amber-300 uppercase tracking-widest">Pairing code</p>
+                    <p className="text-2xl text-amber-200 font-mono tracking-[0.3em] ml-[0.3em] mt-1">{chromePairing.code}</p>
+                    <p className="text-[9px] text-amber-500/70 mt-1">Expires {new Date(chromePairing.expiresAt).toLocaleTimeString()}</p>
+                  </div>
+                )}
+
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void createChromePairing()}
+                    disabled={chromeBusy}
+                    className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest rounded border border-cyan-500/40 bg-cyan-500/10 text-cyan-300 hover:bg-cyan-500/20 disabled:opacity-50"
+                  >
+                    {chromeBusy ? 'Working…' : 'Generate pairing code'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void refreshChromeStatus()}
+                    disabled={chromeBusy}
+                    className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest rounded border border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/10 disabled:opacity-50"
+                  >
+                    Refresh status
+                  </button>
+                  {chromeStatus?.paired && (
+                    <button
+                      type="button"
+                      onClick={() => void revokeChromePairing()}
+                      disabled={chromeBusy}
+                      className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest rounded border border-red-500/30 text-red-400 hover:bg-red-500/10 disabled:opacity-50"
+                    >
+                      Revoke
+                    </button>
+                  )}
+                </div>
+
+                {chromeStatus?.lastSeen && (
+                  <p className="text-[9px] text-cyan-800">Last extension contact: {new Date(chromeStatus.lastSeen).toLocaleString()}</p>
+                )}
+                {chromeError && <p className="text-[10px] text-red-400 font-mono">{chromeError}</p>}
+              </div>
 
               <div className="space-y-2">
                 <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">

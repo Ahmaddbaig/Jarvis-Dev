@@ -51,6 +51,12 @@ see [LOCAL_AI_INSTALL.md](LOCAL_AI_INSTALL.md). Install only the profile matchin
 the Mac that will run Jarvis. For a complete M2/8 GB walkthrough, see
 [localllm.md](localllm.md).
 
+To let Jarvis search, read, and operate user-approved websites in an existing
+Google Chrome profile, install the paired local extension described in
+[CHROME_USE.md](CHROME_USE.md). Chrome access is disabled until the extension is
+paired, the **Chrome Use** ability is enabled, and each website is approved by
+the user.
+
 ## Project layout
 
 ```

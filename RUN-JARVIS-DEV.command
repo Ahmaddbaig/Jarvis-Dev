@@ -119,8 +119,9 @@ echo "Starting Jarvis Dev from the editable source code..."
 echo "Close this Terminal window or press Control-C to stop it."
 
 next_binary="$PWD/node_modules/next/dist/bin/next"
+jarvis_chrome_ui_token="$(/usr/bin/openssl rand -hex 32)"
 
-ELECTRON_RUN_AS_NODE=1 "$electron_binary" "$next_binary" dev --webpack -H 127.0.0.1 -p 3100 &
+JARVIS_CHROME_UI_TOKEN="$jarvis_chrome_ui_token" ELECTRON_RUN_AS_NODE=1 "$electron_binary" "$next_binary" dev --webpack -H 127.0.0.1 -p 3100 &
 jarvis_next_pid=$!
 
 for jarvis_check in {1..60}; do
@@ -137,6 +138,7 @@ done
 open -n -a "$electron_app" \
   --env JARVIS_PORT=3100 \
   --env JARVIS_HTTPS_PORT=3543 \
+  --env JARVIS_CHROME_UI_TOKEN="$jarvis_chrome_ui_token" \
   --env JARVIS_PROJECT_DIR="$PWD" \
   --args "$PWD"
 

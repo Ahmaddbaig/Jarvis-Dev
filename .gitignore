@@ -13,6 +13,7 @@ public/vad/
 
 # Local settings & secrets (contains API keys)
 jarvis-server-settings.json
+jarvis-chrome-control.json
 jarvis-companions.json
 jarvis-companions.json.tmp
 jarvis-companions.json.*.tmp

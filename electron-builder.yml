@@ -1,0 +1,5 @@
+extraResources:
+  - from: chrome-extension
+    to: chrome-extension
+    filter:
+      - "**/*"

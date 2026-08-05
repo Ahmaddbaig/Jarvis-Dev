@@ -16,6 +16,7 @@ declare global {
       getMacPermissions?: () => Promise<MacPermissionStatus>;
       requestMacPermission?: (permission: 'accessibility' | 'screen' | 'microphone') => Promise<MacPermissionStatus>;
       revealMacPermissionApp?: () => Promise<MacPermissionStatus>;
+      getChromeControlToken?: () => Promise<string>;
       onDesktopOverlayClick?: (callback: () => void) => () => void;
       onDesktopPanelMuted?: (callback: (muted: boolean) => void) => () => void;
     };

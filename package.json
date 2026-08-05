@@ -9,8 +9,8 @@
   },
   "scripts": {
     "dev": "ELECTRON_RUN_AS_NODE=1 ./node_modules/electron/dist/Electron.app/Contents/MacOS/Electron ./node_modules/next/dist/bin/next dev --webpack -H 127.0.0.1 -p 3100",
-    "dev:desktop": "concurrently -k -n \"NEXT,ELECTRON\" -c \"cyan,green\" \"ELECTRON_RUN_AS_NODE=1 ./node_modules/electron/dist/Electron.app/Contents/MacOS/Electron ./node_modules/next/dist/bin/next dev --webpack -H 127.0.0.1 -p 3100\" \"wait-on http://127.0.0.1:3100 && JARVIS_PORT=3100 JARVIS_HTTPS_PORT=3543 electron .\"",
-    "serve": "next build && next start -H 0.0.0.0 -p 3000",
+    "dev:desktop": "JARVIS_CHROME_UI_TOKEN=$(/usr/bin/openssl rand -hex 32) concurrently -k -n \"NEXT,ELECTRON\" -c \"cyan,green\" \"ELECTRON_RUN_AS_NODE=1 ./node_modules/electron/dist/Electron.app/Contents/MacOS/Electron ./node_modules/next/dist/bin/next dev --webpack -H 127.0.0.1 -p 3100\" \"wait-on http://127.0.0.1:3100 && JARVIS_PORT=3100 JARVIS_HTTPS_PORT=3543 electron .\"",
+    "serve": "next build && next start -H 127.0.0.1 -p 3000",
     "build:next": "next build",
     "build:electron": "tsc -p tsconfig.electron.json",
     "build:python": "node electron-scripts/build-python.js",

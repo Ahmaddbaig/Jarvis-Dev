@@ -18,6 +18,7 @@ electron_1.contextBridge.exposeInMainWorld('electron', {
     getMacPermissions: () => electron_1.ipcRenderer.invoke('macos-permissions:get'),
     requestMacPermission: (permission) => electron_1.ipcRenderer.invoke('macos-permissions:request', permission),
     revealMacPermissionApp: () => electron_1.ipcRenderer.invoke('macos-permissions:reveal-app'),
+    getChromeControlToken: () => electron_1.ipcRenderer.invoke('chrome-control:get-ui-token'),
     onDesktopOverlayClick: (callback) => {
         electron_1.ipcRenderer.on('desktop-mode:overlay-click', callback);
         return () => electron_1.ipcRenderer.removeAllListeners('desktop-mode:overlay-click');
