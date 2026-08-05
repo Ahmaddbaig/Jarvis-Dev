@@ -1,43 +1,94 @@
 import type { CapabilityDefinition } from '@jarvis/contracts';
 import { CapabilityCatalog } from '../policy/catalog';
+import type { StaticToolDeclaration } from './declaration';
+import { BROWSER_TOOLS } from './domains/browser';
+import { COMPUTER_TOOLS } from './domains/computer';
+import { INFORMATION_TOOLS } from './domains/information';
+import { MEDIA_TOOLS } from './domains/media';
+import { PRESENTATION_TOOLS } from './domains/presentation';
+import { SMART_ENVIRONMENT_TOOLS } from './domains/smart-environment';
+import { SYSTEM_TOOLS } from './domains/system';
 
-const definitions = [
-  { operation: 'get_date', capability: 'information.date.read', risk: 'read-public', ability: 'information', confirmation: 'never' },
-  { operation: 'get_time', capability: 'information.time.read', risk: 'read-public', ability: 'information', confirmation: 'never' },
-  { operation: 'get_location', capability: 'device.location.read', risk: 'read-private', ability: 'device', confirmation: 'when-model' },
-  { operation: 'get_battery_level', capability: 'device.battery.read', risk: 'read-private', ability: 'device', confirmation: 'never' },
-  { operation: 'computer_use', capability: 'computer.local.control', risk: 'local-privileged', ability: 'computer-use', confirmation: 'always' },
-  { operation: 'companion_control', capability: 'computer.remote.control', risk: 'remote-control', ability: 'companions', confirmation: 'always' },
-  { operation: 'deskflow_control', capability: 'computer.remote.switch', risk: 'remote-control', ability: 'deskflow', confirmation: 'always' },
-  { operation: 'xray', capability: 'camera.private.capture', risk: 'read-private', ability: 'xray', confirmation: 'when-model' },
-  { operation: 'image_generation', capability: 'provider.image.generate', risk: 'external-side-effect', ability: 'image-generation', confirmation: 'always' },
-  { operation: '3d_printing', capability: 'printer.job.create', risk: 'external-side-effect', ability: 'printers', confirmation: 'always' },
-  { operation: 'run_shell_command', capability: 'shell.command.execute', risk: 'local-privileged', ability: 'shell', confirmation: 'always' },
-  { operation: 'web_search', capability: 'search.public.read', risk: 'read-public', ability: 'web-search', confirmation: 'never' },
-  { operation: 'chrome_control', capability: 'browser.site.control', risk: 'external-side-effect', ability: 'chrome', confirmation: 'always' },
-  { operation: 'take_photo', capability: 'camera.private.capture', risk: 'read-private', ability: 'camera', confirmation: 'when-model' },
-  { operation: 'play_spotify', capability: 'media.playback.control', risk: 'local-reversible', ability: 'music', confirmation: 'never' },
-  { operation: 'control_music', capability: 'media.playback.control', risk: 'local-reversible', ability: 'music', confirmation: 'never' },
-  { operation: 'get_now_playing', capability: 'media.playback.read', risk: 'read-private', ability: 'music', confirmation: 'never' },
-  { operation: 'show_hud_text', capability: 'ui.hud.control', risk: 'local-reversible', ability: 'interface', confirmation: 'never' },
-  { operation: 'control_hud', capability: 'ui.hud.control', risk: 'local-reversible', ability: 'interface', confirmation: 'never' },
-  { operation: 'open_url', capability: 'url.external.open', risk: 'local-reversible', ability: 'open-url', confirmation: 'when-model' },
-  { operation: 'open_pdf', capability: 'file.pdf.read', risk: 'read-private', ability: 'files', confirmation: 'when-model' },
-  { operation: 'find_datasheet', capability: 'search.datasheet.read', risk: 'read-public', ability: 'datasheets', confirmation: 'never' },
-  { operation: 'desktop_mode', capability: 'ui.desktop-mode.control', risk: 'local-reversible', ability: 'interface', confirmation: 'never' },
-  { operation: 'jarvis_disconnect', capability: 'voice.session.control', risk: 'local-reversible', ability: 'voice', confirmation: 'never' },
-  { operation: 'navigate_to_page', capability: 'ui.navigation.control', risk: 'local-reversible', ability: 'interface', confirmation: 'never' },
-  { operation: 'map_command', capability: 'maps.ui.control', risk: 'local-reversible', ability: 'maps', confirmation: 'never' },
-  { operation: 'calendar_command', capability: 'calendar.event.manage', risk: 'external-side-effect', ability: 'calendar', confirmation: 'always' },
-  { operation: 'home_assistant_command', capability: 'home.device.control', risk: 'external-side-effect', ability: 'home-assistant', confirmation: 'always' },
-  { operation: 'printer_command', capability: 'printer.device.control', risk: 'external-side-effect', ability: 'printers', confirmation: 'always' },
-  { operation: 'add_home_widget', capability: 'ui.home-widget.control', risk: 'local-reversible', ability: 'interface', confirmation: 'never' },
-  { operation: 'fullscreen', capability: 'ui.fullscreen.control', risk: 'local-reversible', ability: 'interface', confirmation: 'never' },
-] satisfies readonly CapabilityDefinition[];
+const domainDeclarations: StaticToolDeclaration[] = [
+  ...INFORMATION_TOOLS,
+  ...COMPUTER_TOOLS,
+  ...MEDIA_TOOLS,
+  ...SMART_ENVIRONMENT_TOOLS,
+  ...SYSTEM_TOOLS,
+  ...BROWSER_TOOLS,
+  ...PRESENTATION_TOOLS,
+];
 
+const declarationsByOperation = new Map<string, StaticToolDeclaration>();
+const handlerIds = new Set<string>();
+for (const declaration of domainDeclarations) {
+  const operation = declaration.policy.operation;
+  if (declarationsByOperation.has(operation)) throw new Error(`Duplicate static tool operation: ${operation}`);
+  if (handlerIds.has(declaration.handlerId)) throw new Error(`Duplicate static tool handler: ${declaration.handlerId}`);
+  declarationsByOperation.set(operation, declaration);
+  handlerIds.add(declaration.handlerId);
+}
+
+const COMPATIBILITY_ORDER = [
+  'get_date',
+  'get_time',
+  'get_location',
+  'get_battery_level',
+  'computer_use',
+  'companion_control',
+  'deskflow_control',
+  'xray',
+  'image_generation',
+  '3d_printing',
+  'run_shell_command',
+  'web_search',
+  'chrome_control',
+  'take_photo',
+  'play_spotify',
+  'control_music',
+  'get_now_playing',
+  'show_hud_text',
+  'control_hud',
+  'open_url',
+  'open_pdf',
+  'find_datasheet',
+  'desktop_mode',
+  'jarvis_disconnect',
+  'navigate_to_page',
+  'map_command',
+  'calendar_command',
+  'home_assistant_command',
+  'printer_command',
+  'add_home_widget',
+  'fullscreen',
+] as const;
+
+const declarations = COMPATIBILITY_ORDER.map((operation) => {
+  const declaration = declarationsByOperation.get(operation);
+  if (!declaration) throw new Error(`Static tool compatibility order references unknown operation: ${operation}`);
+  return declaration;
+});
+if (declarations.length !== domainDeclarations.length) {
+  const unordered = domainDeclarations
+    .map((declaration) => declaration.policy.operation)
+    .filter((operation) => !COMPATIBILITY_ORDER.includes(operation as typeof COMPATIBILITY_ORDER[number]));
+  throw new Error(`Static tools missing from compatibility order: ${unordered.join(', ')}`);
+}
+
+export const STATIC_TOOL_DECLARATIONS: readonly StaticToolDeclaration[] = Object.freeze(declarations);
 export const STATIC_TOOL_DEFINITIONS: readonly CapabilityDefinition[] = Object.freeze(
-  definitions.map((definition) => Object.freeze(definition)),
+  declarations.map((declaration) => declaration.policy),
 );
+
+export function resolveStaticToolDeclaration(operation: string): StaticToolDeclaration | undefined {
+  return declarationsByOperation.get(operation);
+}
+
+export function parseStaticToolInput(operation: string, input: unknown): unknown {
+  const declaration = resolveStaticToolDeclaration(operation);
+  if (!declaration) throw new Error(`Unknown static tool operation: ${operation}`);
+  return declaration.inputSchema.parse(input);
+}
 
 export function createStaticToolCatalog(): CapabilityCatalog {
   return new CapabilityCatalog(STATIC_TOOL_DEFINITIONS);

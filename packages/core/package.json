@@ -9,6 +9,7 @@
     "./tool-catalog": "./src/tools/static-catalog.ts"
   },
   "dependencies": {
-    "@jarvis/contracts": "0.1.0"
+    "@jarvis/contracts": "0.1.0",
+    "zod": "4.4.3"
   }
 }
