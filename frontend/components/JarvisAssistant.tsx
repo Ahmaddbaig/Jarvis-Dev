@@ -27,6 +27,7 @@ import {
   hasUsableVoiceEngineConfig,
   migrateLegacyVoiceboxMode,
 } from '@/frontend/lib/voiceEngineMode';
+import { useVoiceSessionState } from '@/frontend/lib/voiceSession';
 
 const FFT_BARS = 64;
 // Keep speaker bleed and song vocals below the activation point while still
@@ -315,9 +316,8 @@ function isDesktopPanelPosition(value: unknown): value is DesktopPanelPosition {
 }
 
 export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
-  const [status, setStatus] = useState<'idle' | 'listening' | 'active' | 'error'>('idle');
-  const [lastError, setLastError] = useState<string | null>(null);
-  const [micMuted, setMicMuted] = useState(false);
+  const voiceSession = useVoiceSessionState();
+  const { status, lastError, micMuted } = voiceSession;
   const [chatText, setChatText] = useState('');
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatSending, setChatSending] = useState(false);
@@ -428,18 +428,17 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     onConnect: () => {
       console.log('ElevenLabs connected');
       setChatError(null);
-      setStatus('active');
+      voiceSession.connected();
     },
     onDisconnect: (details?: { reason?: string; code?: number; message?: string }) => {
       void restoreMusicVolume();
       const reason = details?.message ?? details?.reason ?? (details?.code != null ? `code ${details.code}` : null);
       console.log('ElevenLabs disconnected', details ?? '');
       if (reason && statusRef.current !== 'idle') {
-        setStatus('error');
-        setLastError(`Disconnected: ${reason}`);
+        voiceSession.fail(`Disconnected: ${reason}`);
         emitError('elevenlabs', `Disconnected: ${reason}`);
       } else if (statusRef.current !== 'idle') {
-        setStatus('idle');
+        voiceSession.disconnected();
       }
     },
     onError: (error) => {
@@ -447,8 +446,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
       const e = error as any;
       const msg = e instanceof Error ? e.message : (typeof e === 'string' ? e : JSON.stringify(e));
       console.error('ElevenLabs error:', error);
-      setStatus('error');
-      setLastError(msg);
+      voiceSession.fail(msg);
       emitError('elevenlabs', msg);
     },
     onMessage: ({ message, role }) => {
@@ -544,14 +542,13 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
 
   // Voicebox voice engine — Claude or OpenAI brain + one shared Voicebox voice
   const voiceboxConversation = useLocalConversation({
-    onConnect: () => setStatus('active'),
+    onConnect: voiceSession.connected,
     onDisconnect: () => {
       void restoreMusicVolume();
-      if (statusRef.current !== 'idle') setStatus('idle');
+      if (statusRef.current !== 'idle') voiceSession.disconnected();
     },
     onError: (message) => {
-      setStatus('error');
-      setLastError(message);
+      voiceSession.fail(message);
       emitError('voicebox', message);
     },
     onMessage: ({ message, role }) => appendChatMessage(role, message),
@@ -1174,8 +1171,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
       );
 
       disconnect(); // Ensure clean slate
-      setStatus('listening');
-      setLastError(null);
+      voiceSession.starting();
       
       // Get microphone access
       const microphoneId = currentSettings.microphoneDeviceId?.trim();
@@ -1221,7 +1217,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
         console.log(`%c[Jarvis] WebRTC connectionState → "${state}" at ${new Date().toLocaleTimeString()}`, 'color:#ffa726');
         if (state === 'failed' || state === 'closed') {
           autoReconnectRef.current = false;
-          setStatus('idle');
+          voiceSession.disconnected();
         }
       };
 
@@ -1399,7 +1395,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
 
         dc.send(JSON.stringify(sessionConfig));
         sessionStartTimeRef.current = Date.now();
-        setStatus('active');
+        voiceSession.connected();
 
         // Inject any photos already on the HUD into the fresh session
         if (photosRef.current.length > 0) {
@@ -1602,13 +1598,12 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
 
       dc.onerror = () => {
         console.error("Data channel error");
-        setStatus('error');
+        voiceSession.fail();
       };
 
     } catch (error) {
       console.error('Error starting realtime:', error);
-      setStatus('error');
-      setLastError(error instanceof Error ? error.message : String(error));
+      voiceSession.fail(error instanceof Error ? error.message : String(error));
     }
   }
 
@@ -1632,15 +1627,14 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
         localAudioStreamRef.current.getTracks().forEach(t => t.stop());
         localAudioStreamRef.current = null;
       }
-      setStatus('listening');
-      setLastError(null);
+      voiceSession.starting();
 
       await navigator.mediaDevices.getUserMedia({ audio: true });
 
       const agentId = currentSettings.elevenLabsAgentId?.trim();
       if (!agentId) {
         console.warn('No ElevenLabs Agent ID configured — add one in Settings.');
-        setStatus('idle');
+        voiceSession.disconnected();
         return;
       }
 
@@ -1658,8 +1652,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
       });
     } catch (error) {
       console.error('Error starting ElevenLabs session:', error);
-      setStatus('error');
-      setLastError(error instanceof Error ? error.message : String(error));
+      voiceSession.fail(error instanceof Error ? error.message : String(error));
     }
   }
 
@@ -1682,8 +1675,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
         localAudioStreamRef.current.getTracks().forEach(t => t.stop());
         localAudioStreamRef.current = null;
       }
-      setStatus('listening');
-      setLastError(null);
+      voiceSession.starting();
 
       const provider = currentSettings.brainProvider ?? 'openai';
       await voiceboxConversation.startSession({
@@ -1753,12 +1745,12 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     try { elConversation.endSession(); } catch { /* no active session */ }
     // Voicebox cleanup (VAD, playback, history)
     try { voiceboxConversation.endSession(); } catch { /* no active session */ }
-    setStatus('idle');
+    voiceSession.disconnected();
   }
 
   function setMicrophoneMuted(muted: boolean) {
     micMutedRef.current = muted;
-    setMicMuted(muted);
+    voiceSession.setMicrophoneMuted(muted);
 
     localAudioStreamRef.current?.getAudioTracks().forEach((track) => {
       track.enabled = !muted;
