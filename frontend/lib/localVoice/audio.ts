@@ -36,6 +36,12 @@ export function encodeWav(samples: Float32Array, sampleRate: number): Blob {
   return new Blob([buffer], { type: 'audio/wav' });
 }
 
+// The cloned voice reads fast; Chromium time-stretches with pitch preserved,
+// so this slows delivery without deepening the voice. Playback is otherwise a
+// direct, uncompressed path — no WebRTC loopback, no re-encoding — because
+// the Opus loopback experiment audibly glitched the voice.
+const PLAYBACK_RATE = 0.85;
+
 /** Plays TTS blobs through an <audio> element wired to an AnalyserNode. */
 export class SpeechPlayer {
   private audioEl: HTMLAudioElement | null = null;
@@ -74,6 +80,7 @@ export class SpeechPlayer {
     const url = URL.createObjectURL(blob);
     this.currentUrl = url;
     audio.src = url;
+    audio.playbackRate = PLAYBACK_RATE;
 
     if (this.context?.state === 'suspended') {
       await this.context.resume().catch(() => undefined);

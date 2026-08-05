@@ -330,7 +330,7 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
                           brainProvider: provider,
                           // Reset to the provider's default model so a GPT model
                           // is never sent to the Claude API or vice versa.
-                          chatModel: provider === 'claude' ? 'claude-opus-5' : 'gpt-4o-mini',
+                          chatModel: provider === 'claude' ? 'claude-haiku-4-5' : 'gpt-4o-mini',
                         });
                       }}
                       className="w-full bg-cyan-950/20 border border-cyan-500/30 rounded px-3 py-2 text-cyan-100 focus:outline-none focus:border-cyan-400 focus:shadow-[0_0_10px_rgba(34,211,238,0.3)] transition-all font-mono text-sm"
@@ -362,7 +362,7 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
                         ? ['claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5']
                         : ['gpt-4o-mini', 'gpt-4.1-mini', 'gpt-4o']
                       ).map((model) => {
-                        const fallback = brainProvider === 'claude' ? 'claude-opus-5' : 'gpt-4o-mini';
+                        const fallback = brainProvider === 'claude' ? 'claude-haiku-4-5' : 'gpt-4o-mini';
                         const active = (settings.chatModel ?? fallback) === model;
                         return (
                           <button
@@ -381,9 +381,9 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
                     </div>
                     <input
                       type="text"
-                      value={settings.chatModel ?? (brainProvider === 'claude' ? 'claude-opus-5' : 'gpt-4o-mini')}
+                      value={settings.chatModel ?? (brainProvider === 'claude' ? 'claude-haiku-4-5' : 'gpt-4o-mini')}
                       onChange={(e) => setSettings({ ...settings, chatModel: e.target.value })}
-                      placeholder={brainProvider === 'claude' ? 'claude-opus-5' : 'gpt-4o-mini'}
+                      placeholder={brainProvider === 'claude' ? 'claude-haiku-4-5' : 'gpt-4o-mini'}
                       className="w-full bg-cyan-950/20 border border-cyan-500/30 rounded px-3 py-2 text-cyan-100 focus:outline-none focus:border-cyan-400 focus:shadow-[0_0_10px_rgba(34,211,238,0.3)] transition-all font-mono text-sm"
                     />
                     <p className="text-xs text-cyan-700">

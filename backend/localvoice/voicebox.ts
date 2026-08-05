@@ -8,7 +8,7 @@ import { getVoiceboxUrl } from './config';
 const DEFAULT_PROFILE_NAME = 'Jarvis';
 const DEFAULT_PRESET_ENGINE = 'kokoro';
 const DEFAULT_PRESET_VOICE_ID = 'bm_george';
-const GENERATION_POLL_INTERVAL_MS = 120;
+const GENERATION_POLL_INTERVAL_MS = 60;
 // Generous: the first generation after idle cold-loads the TTS engine into
 // MLX, which can take over a minute on a memory-pressured machine.
 const GENERATION_TIMEOUT_MS = 120_000;
@@ -111,6 +111,19 @@ export async function warmUpProfileEngine(
   return { engine, wasLoaded: false };
 }
 
+// Cloned-voice engines re-render timbre per generation; a pinned seed keeps
+// the voice consistent across the chunks of one reply instead of drifting
+// "robotic" between sentences.
+const GENERATION_SEED = 1337;
+// Style hint for engines that support instruct conditioning (ignored by the
+// rest): counteracts the rushed, flat delivery of unconditioned generations.
+// Engine-side chunking bounds: keep each internal generation short enough
+// that delivery stays natural, with a small crossfade at the joins.
+const MAX_ENGINE_CHUNK_CHARS = 140;
+const CHUNK_CROSSFADE_MS = 40;
+const DELIVERY_INSTRUCT =
+  'Perform the line with warmth and character: a composed British butler with dry wit. Unhurried pace, expressive natural intonation, gentle emphasis on the important words, brief pauses at commas. Never monotone, never rushed.';
+
 /** Submit a generation, wait for it to finish, and return the audio bytes. */
 export async function generateSpeech(
   text: string,
@@ -124,6 +137,12 @@ export async function generateSpeech(
       profile_id: profile.id,
       language: 'en',
       engine: profile.default_engine ?? DEFAULT_PRESET_ENGINE,
+      seed: GENERATION_SEED,
+      instruct: DELIVERY_INSTRUCT,
+      // Let Voicebox split anything longer internally and crossfade the
+      // joins — the engine's delivery degrades on long single inputs.
+      max_chunk_chars: MAX_ENGINE_CHUNK_CHARS,
+      crossfade_ms: CHUNK_CROSSFADE_MS,
     }),
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });

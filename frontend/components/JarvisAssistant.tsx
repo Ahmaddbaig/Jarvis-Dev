@@ -45,8 +45,10 @@ function hasJarvisWakeWord(transcript: string): boolean {
 }
 
 // Brain for the Voicebox engine — per-provider defaults, swappable in Settings.
+// Haiku is the default Claude brain: spoken replies need sub-second first
+// tokens, and the reasoning-tier models think for seconds before speaking.
 const DEFAULT_OPENAI_CHAT_MODEL = 'gpt-4o-mini';
-const DEFAULT_CLAUDE_CHAT_MODEL = 'claude-opus-5';
+const DEFAULT_CLAUDE_CHAT_MODEL = 'claude-haiku-4-5';
 const DEFAULT_SETTINGS: JarvisSettings = {
   apiMode: 'openai',
   apiKey: '',

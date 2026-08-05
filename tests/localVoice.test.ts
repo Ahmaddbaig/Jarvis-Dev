@@ -3,6 +3,8 @@ import {
   buildSystemPrompt,
   capHistory,
   extractSpeakableChunks,
+  isNoiseTranscript,
+  SentenceCoalescer,
   parseToolArgs,
   toChatTools,
   ChatMessage,
@@ -147,5 +149,75 @@ describe('encodeWav', () => {
     expect(ascii(8, 4)).toBe('WAVE');
     // 44-byte header + 2 bytes per 16-bit sample
     expect(bytes.length).toBe(44 + samples.length * 2);
+  });
+});
+
+describe('isNoiseTranscript', () => {
+  test('flags classic whisper hallucinations on noise', () => {
+    expect(isNoiseTranscript('you')).toBe(true);
+    expect(isNoiseTranscript(' Thank you. ')).toBe(true);
+    expect(isNoiseTranscript('Thanks for watching!')).toBe(true);
+  });
+
+  test('flags bracketed and parenthesized sound annotations', () => {
+    expect(isNoiseTranscript('[BLANK_AUDIO]')).toBe(true);
+    expect(isNoiseTranscript('(wind blowing)')).toBe(true);
+    expect(isNoiseTranscript('*music*')).toBe(true);
+  });
+
+  test('keeps genuine short user turns', () => {
+    expect(isNoiseTranscript('yes')).toBe(false);
+    expect(isNoiseTranscript('no')).toBe(false);
+    expect(isNoiseTranscript('stop')).toBe(false);
+    expect(isNoiseTranscript('what time is it?')).toBe(false);
+  });
+
+  test('flags empty and punctuation-only transcripts', () => {
+    expect(isNoiseTranscript('')).toBe(true);
+    expect(isNoiseTranscript(' ... ')).toBe(true);
+  });
+});
+
+describe('SentenceCoalescer', () => {
+  test('flushes the first sentence immediately for fast time-to-voice', () => {
+    // Arrange
+    const coalescer = new SentenceCoalescer();
+
+    // Act + Assert
+    expect(coalescer.push('Good evening, sir.')).toBe('Good evening, sir.');
+  });
+
+  test('batches later sentences until they reach the minimum size', () => {
+    // Arrange
+    const coalescer = new SentenceCoalescer();
+    coalescer.push('First sentence spoken right away.');
+    const filler =
+      'This deliberately verbose filler sentence keeps adding characters so the running batch crosses the coalescing threshold.';
+
+    // Act
+    const second = coalescer.push('A short one.');
+    const third = coalescer.push(filler);
+
+    // Assert
+    expect(second).toBeNull();
+    expect(third).toBe(`A short one. ${filler}`);
+  });
+
+  test('flush drains the batch and appends the unterminated tail', () => {
+    // Arrange
+    const coalescer = new SentenceCoalescer();
+    coalescer.push('First.........');
+    coalescer.push('Second sentence.');
+
+    // Act
+    const drained = coalescer.flush('and a trailing fragment');
+
+    // Assert
+    expect(drained).toBe('Second sentence. and a trailing fragment');
+    expect(coalescer.flush()).toBeNull();
+  });
+
+  test('flush returns null when nothing is pending', () => {
+    expect(new SentenceCoalescer().flush('')).toBeNull();
   });
 });

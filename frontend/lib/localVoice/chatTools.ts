@@ -72,6 +72,7 @@ export function buildSystemPrompt(initialPrompt: string): string {
   return (
     initialPrompt +
     '\n\nYour replies are spoken aloud by a text-to-speech engine: answer in 1-3 short sentences of plain prose. Never use markdown, lists, code blocks, or emoji.' +
+    '\n\nWrite lines that sound alive when performed, not read: vary your rhythm, open with a brief reaction when it fits ("Ah.", "Very good, sir."), and shape pauses with commas and ellipses. Dry, understated wit over enthusiasm — one wry aside lands better than three exclamation points.' +
     '\n\nDo not call navigate_to_page as part of a greeting or on your own initiative — only call it when the user explicitly asks to go to a different page.'
   );
 }
@@ -102,6 +103,80 @@ export function extractSpeakableChunks(buffer: string): { chunks: string[]; rest
     // sentence ("Dr." + " Smith is here.").
   }
   return { chunks, rest: buffer.slice(start) };
+}
+
+// whisper.cpp reliably hallucinates short stock phrases ("you", "Thanks for
+// watching!") or sound annotations ("[BLANK_AUDIO]", "(wind blowing)") on
+// noise-only segments. Treating those as user turns cuts Jarvis off mid-reply
+// and burns a chat round on garbage. Trade-off: a genuine bare "thanks" is
+// ignored too — real usage is almost always longer ("thanks Jarvis").
+const NOISE_TRANSCRIPTS = new Set([
+  'you',
+  'bye',
+  'uh',
+  'um',
+  'hmm',
+  'huh',
+  'ah',
+  'oh',
+  'thank you',
+  'thanks',
+  'thank you for watching',
+  'thanks for watching',
+  'please subscribe',
+  'subscribe',
+]);
+
+/** True when a transcript is a known whisper noise hallucination, not speech. */
+export function isNoiseTranscript(text: string): boolean {
+  const stripped = text
+    .replace(/\[[^\]]*\]|\([^)]*\)|\*[^*]*\*/g, '')
+    .replace(/[.,!?'"…‘’“”-]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+  if (!stripped) return true;
+  return NOISE_TRANSCRIPTS.has(stripped);
+}
+
+// Later sentences are grouped into batches of at least this many characters.
+// Balance: the pinned generation seed keeps timbre consistent across chunks,
+// but the cloned engine's delivery degrades (turns robotic) on long inputs —
+// so batches stay modest instead of maximal.
+const COALESCE_MIN_CHARS = 110;
+
+/**
+ * Batches streamed sentences for TTS: the first sentence flushes immediately
+ * (fast time-to-voice), later ones coalesce into larger chunks so
+ * per-sentence generation gaps don't perforate the reply with silence.
+ */
+export class SentenceCoalescer {
+  private batch = '';
+  private firstFlushed = false;
+
+  /** Add a completed sentence; returns text ready to synthesize, if any. */
+  push(sentence: string): string | null {
+    const trimmed = sentence.trim();
+    if (!trimmed) return null;
+    if (!this.firstFlushed) {
+      this.firstFlushed = true;
+      return trimmed;
+    }
+    this.batch = this.batch ? `${this.batch} ${trimmed}` : trimmed;
+    if (this.batch.length >= COALESCE_MIN_CHARS) {
+      const out = this.batch;
+      this.batch = '';
+      return out;
+    }
+    return null;
+  }
+
+  /** Drain whatever is buffered, appending the stream's unterminated tail. */
+  flush(tail = ''): string | null {
+    const combined = [this.batch, tail.trim()].filter(Boolean).join(' ');
+    this.batch = '';
+    return combined || null;
+  }
 }
 
 /**

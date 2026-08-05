@@ -15,7 +15,13 @@ import path from 'path';
 
 const TRANSCRIBE_TIMEOUT_MS = 30_000;
 const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
-const MODEL_PATH = path.join(os.homedir(), '.cache', 'whisper-cpp', 'ggml-base.en.bin');
+const MODEL_DIR = path.join(os.homedir(), '.cache', 'whisper-cpp');
+// tiny.en first — ~3-4x faster than base.en on short voice commands with a
+// small accuracy cost; base.en is the fallback when tiny isn't downloaded.
+const MODEL_CANDIDATES = [
+  path.join(MODEL_DIR, 'ggml-tiny.en.bin'),
+  path.join(MODEL_DIR, 'ggml-base.en.bin'),
+];
 // Electron-launched servers often lack /opt/homebrew/bin in PATH.
 const WHISPER_CANDIDATES = [
   '/opt/homebrew/bin/whisper-cli',
@@ -23,11 +29,14 @@ const WHISPER_CANDIDATES = [
   'whisper-cli',
 ];
 
-function runWhisper(binary: string, wavPath: string): Promise<string> {
+function runWhisper(binary: string, modelPath: string, wavPath: string): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(
       binary,
-      ['-m', MODEL_PATH, '-f', wavPath, '-nt', '-np'],
+      // -bs 1 (greedy, no beam search) and -nf (no temperature-fallback
+      // retries) roughly halve decode time on short voice commands with
+      // negligible accuracy cost.
+      ['-m', modelPath, '-f', wavPath, '-nt', '-np', '-bs', '1', '-nf'],
       { timeout: TRANSCRIBE_TIMEOUT_MS },
       (err, stdout) => {
         if (err) reject(err);
@@ -37,11 +46,23 @@ function runWhisper(binary: string, wavPath: string): Promise<string> {
   });
 }
 
-async function transcribeFile(wavPath: string): Promise<string> {
+async function resolveModelPath(): Promise<string | null> {
+  for (const candidate of MODEL_CANDIDATES) {
+    try {
+      await fs.access(candidate);
+      return candidate;
+    } catch {
+      // try the next size down the list
+    }
+  }
+  return null;
+}
+
+async function transcribeFile(modelPath: string, wavPath: string): Promise<string> {
   let lastError: unknown = new Error('whisper-cli not found');
   for (const binary of WHISPER_CANDIDATES) {
     try {
-      return await runWhisper(binary, wavPath);
+      return await runWhisper(binary, modelPath, wavPath);
     } catch (err) {
       lastError = err;
       const isMissingBinary = (err as NodeJS.ErrnoException)?.code === 'ENOENT';
@@ -68,11 +89,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'audio file too large' }, { status: 413 });
   }
 
-  try {
-    await fs.access(MODEL_PATH);
-  } catch {
+  const modelPath = await resolveModelPath();
+  if (!modelPath) {
     return NextResponse.json(
-      { error: `Whisper model missing — download it: curl -L -o ${MODEL_PATH} https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin` },
+      { error: `Whisper model missing — download it: curl -L -o ${MODEL_CANDIDATES[0]} https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin` },
       { status: 502 },
     );
   }
@@ -80,7 +100,7 @@ export async function POST(req: NextRequest) {
   const wavPath = path.join(os.tmpdir(), `jarvis-stt-${process.pid}-${Date.now()}.wav`);
   try {
     await fs.writeFile(wavPath, Buffer.from(await audio.arrayBuffer()));
-    const text = await transcribeFile(wavPath);
+    const text = await transcribeFile(modelPath, wavPath);
     return NextResponse.json({ text, duration: null });
   } catch (err) {
     const isMissingBinary = (err as NodeJS.ErrnoException)?.code === 'ENOENT';

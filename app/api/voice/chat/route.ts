@@ -185,6 +185,19 @@ function toClaudeRequest(messages: ChatMessage[], tools: ChatTool[]) {
     input_schema: t.function.parameters as Anthropic.Tool.InputSchema,
   }));
 
+  // Prompt-cache breakpoint on the newest history block: each round then
+  // reads the whole prior conversation from cache instead of re-processing
+  // ~24 tool schemas + system + history, which directly cuts time-to-first-
+  // token on every turn after the first.
+  const lastMessage = claudeMessages[claudeMessages.length - 1];
+  if (lastMessage) {
+    const blocks = lastMessage.content as Anthropic.ContentBlockParam[];
+    const lastBlock = blocks[blocks.length - 1];
+    if (lastBlock && (lastBlock.type === 'text' || lastBlock.type === 'tool_result')) {
+      lastBlock.cache_control = { type: 'ephemeral' };
+    }
+  }
+
   return { system, claudeMessages, claudeTools };
 }
 
@@ -242,7 +255,19 @@ async function streamClaude(
       // effort errors on models without support (e.g. Haiku 4.5) — only send
       // it where it applies.
       ...(model.includes('haiku') ? {} : { output_config: { effort: CLAUDE_EFFORT } }),
-      ...(system ? { system } : {}),
+      // Cache breakpoint on the system block also covers the tools (tools
+      // render before system), so the fixed prefix is cached across turns.
+      ...(system
+        ? {
+            system: [
+              {
+                type: 'text' as const,
+                text: system,
+                cache_control: { type: 'ephemeral' as const },
+              },
+            ],
+          }
+        : {}),
       ...(claudeTools.length > 0 ? { tools: claudeTools } : {}),
       messages: claudeMessages,
     });

@@ -7,11 +7,13 @@ import {
   buildSystemPrompt,
   capHistory,
   extractSpeakableChunks,
+  isNoiseTranscript,
   parseToolArgs,
   toChatTools,
   ChatMessage,
   ChatTool,
   ChatToolCall,
+  SentenceCoalescer,
 } from './chatTools';
 import { emitError } from '@/frontend/lib/errorBus';
 import type { JarvisFunction } from '@/frontend/lib/functions';
@@ -92,9 +94,11 @@ export function useLocalConversation(
   // reply is generated and synthesized.
   const ttsChainRef = useRef<Promise<void>>(Promise.resolve());
   const playChainRef = useRef<Promise<void>>(Promise.resolve());
-  // Sentences accepted for synthesis but not yet finished playing — barge-in
-  // must cancel these even during the silent gap between two sentences.
+  // Sentences accepted for synthesis but not yet finished playing.
   const pendingSpeechRef = useRef(0);
+  // When the last synthesized chunk finished playing — mic segments that end
+  // inside a short tail after playback are echo of Jarvis, not the user.
+  const lastPlaybackEndRef = useRef(0);
 
   const enqueueSpeak = useCallback((text: string): void => {
     const trimmed = text.trim();
@@ -141,6 +145,7 @@ export function useLocalConversation(
       })
       .finally(() => {
         pendingSpeechRef.current = Math.max(0, pendingSpeechRef.current - 1);
+        lastPlaybackEndRef.current = Date.now();
       });
   }, [reportTurnError]);
 
@@ -171,6 +176,9 @@ export function useLocalConversation(
     let message: ChatMessage | null = null;
     let sentenceBuffer = '';
     let spokenText = '';
+    // First sentence goes to TTS immediately; later ones are batched so
+    // per-sentence generation gaps don't chop the reply into fragments.
+    const coalescer = new SentenceCoalescer();
     const handleLine = (line: string) => {
       if (!line) return;
       let event: { t?: string; text?: string; message?: ChatMessage; error?: string };
@@ -184,8 +192,11 @@ export function useLocalConversation(
         const { chunks, rest } = extractSpeakableChunks(sentenceBuffer);
         sentenceBuffer = rest;
         for (const chunk of chunks) {
-          enqueueSpeak(chunk);
-          spokenText += (spokenText ? ' ' : '') + chunk;
+          const speakable = coalescer.push(chunk);
+          if (speakable) {
+            enqueueSpeak(speakable);
+            spokenText += (spokenText ? ' ' : '') + speakable;
+          }
         }
       } else if (event.t === 'm' && event.message) {
         message = event.message;
@@ -220,8 +231,9 @@ export function useLocalConversation(
     }
 
     if (!message) throw new Error('Chat stream ended without a message.');
-    // The tail of the reply usually lacks trailing punctuation — speak it.
-    if (sentenceBuffer.trim()) enqueueSpeak(sentenceBuffer);
+    // Drain the batch plus the tail of the reply (usually unpunctuated).
+    const finalChunk = coalescer.flush(sentenceBuffer);
+    if (finalChunk) enqueueSpeak(finalChunk);
     return message;
   }, [enqueueSpeak]);
 
@@ -311,13 +323,14 @@ export function useLocalConversation(
       }
       const { text } = (await res.json()) as { text: string };
       if (sessionId !== sessionIdRef.current) return;
-      if (!text || text.length < MIN_TRANSCRIPT_CHARS) return;
+      const transcript = (text ?? '').trim();
+      // Noise blips and whisper hallucinations must not become user turns.
+      if (transcript.length < MIN_TRANSCRIPT_CHARS || isNoiseTranscript(transcript)) return;
 
-      // Only a VALIDATED user turn supersedes a reply still being synthesized
-      // or played — a noise blip that transcribes to nothing must not
-      // truncate Jarvis mid-answer.
+      // A validated user turn supersedes anything still queued or playing.
       speakTokenRef.current += 1;
-      historyRef.current = [...historyRef.current, { role: 'user', content: text }];
+      playerRef.current?.stop();
+      historyRef.current = [...historyRef.current, { role: 'user', content: transcript }];
       // Speech is pipelined inside the loop; playback continues after this
       // resolves, and busyRef clears below so barge-in speech is accepted
       // while Jarvis is still talking.
@@ -399,17 +412,21 @@ export function useLocalConversation(
         baseAssetPath: VAD_ASSET_PATH,
         onnxWASMBasePath: VAD_ASSET_PATH,
         startOnLoad: false,
-        onSpeechStart: () => {
-          // Barge-in: user talking over Jarvis stops playback immediately
-          // and discards any queued sentences still being synthesized — also
-          // during the silent gap while the next sentence's TTS is in flight.
-          if (playerRef.current?.isPlaying || pendingSpeechRef.current > 0) {
-            speakTokenRef.current += 1;
-            playerRef.current?.stop();
-          }
-        },
         onSpeechEnd: (audio: Float32Array) => {
           if (mutedRef.current || busyRef.current) return;
+          // The mic inevitably hears Jarvis through the speakers. While he
+          // is talking — or within a short tail after he stops — segments
+          // are his own echo, not the user: drop them unheard. This trades
+          // voice barge-in for glitch-free, cutout-free playback; the mute
+          // button still interrupts instantly.
+          const ECHO_TAIL_MS = 350;
+          if (
+            playerRef.current?.isPlaying ||
+            pendingSpeechRef.current > 0 ||
+            Date.now() - lastPlaybackEndRef.current < ECHO_TAIL_MS
+          ) {
+            return;
+          }
           void processSpeechSegment(audio);
         },
       });
