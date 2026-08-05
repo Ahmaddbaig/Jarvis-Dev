@@ -35,6 +35,8 @@ export interface JarvisSettings {
   claudeApiKey?: string;
   /** Voicebox voice profile id; empty = auto-created "Jarvis" preset voice. */
   voiceboxProfileId?: string;
+  /** Pitch-preserving Voicebox playback rate. */
+  voicePlaybackRate?: number;
   localFirstMessage?: string;
   voice: 'alloy' | 'ash' | 'ballad' | 'coral' | 'echo' | 'sage' | 'shimmer' | 'verse' | 'marin' | 'cedar';
   initialPrompt: string;
@@ -421,6 +423,25 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
                         Clone your own in the Voicebox app and it will appear here.
                       </p>
                     )}
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">Speaking Speed</label>
+                      <span className="text-xs font-mono text-cyan-300">
+                        {(settings.voicePlaybackRate ?? 0.8).toFixed(2)}×
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0.7"
+                      max="1"
+                      step="0.05"
+                      value={settings.voicePlaybackRate ?? 0.8}
+                      onChange={(e) => setSettings({ ...settings, voicePlaybackRate: Number(e.target.value) })}
+                      className="w-full accent-cyan-400"
+                    />
+                    <p className="text-xs text-cyan-700">Slows the cloned voice while preserving its pitch. Default: 0.80×.</p>
                   </div>
 
                   <div className="space-y-2">

@@ -44,6 +44,8 @@ export interface LocalSessionOptions {
   initialPrompt: string;
   firstMessage?: string;
   voiceProfileId?: string;
+  /** Pitch-preserving playback speed for Voicebox speech. */
+  playbackRate?: number;
   enabledFunctionNames: string[];
   /** Read at call time so dynamically loaded MCP/skill tools are included. */
   getFunctions: () => JarvisFunction[];
@@ -405,7 +407,7 @@ export function useLocalConversation(
       historyRef.current = [
         { role: 'system', content: buildSystemPrompt(options.initialPrompt) },
       ];
-      playerRef.current = new SpeechPlayer();
+      playerRef.current = new SpeechPlayer(options.playbackRate);
 
       const vad = await MicVAD.new({
         model: 'v5',

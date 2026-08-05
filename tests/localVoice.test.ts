@@ -9,7 +9,11 @@ import {
   toChatTools,
   ChatMessage,
 } from '../frontend/lib/localVoice/chatTools';
-import { encodeWav } from '../frontend/lib/localVoice/audio';
+import {
+  DEFAULT_VOICE_PLAYBACK_RATE,
+  encodeWav,
+  normalizePlaybackRate,
+} from '../frontend/lib/localVoice/audio';
 
 describe('toChatTools', () => {
   const tools = [
@@ -149,6 +153,19 @@ describe('encodeWav', () => {
     expect(ascii(8, 4)).toBe('WAVE');
     // 44-byte header + 2 bytes per 16-bit sample
     expect(bytes.length).toBe(44 + samples.length * 2);
+  });
+});
+
+describe('normalizePlaybackRate', () => {
+  test('defaults to the slower Jarvis delivery speed', () => {
+    expect(normalizePlaybackRate(undefined)).toBe(DEFAULT_VOICE_PLAYBACK_RATE);
+    expect(DEFAULT_VOICE_PLAYBACK_RATE).toBe(0.8);
+  });
+
+  test('accepts configured speeds and clamps unsafe values', () => {
+    expect(normalizePlaybackRate(0.9)).toBe(0.9);
+    expect(normalizePlaybackRate(0.1)).toBe(0.7);
+    expect(normalizePlaybackRate(2)).toBe(1);
   });
 });
 

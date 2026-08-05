@@ -20,16 +20,24 @@ Three engines are selectable in Settings:
   API chat brain → Voicebox TTS with a cloned voice profile. The brain
   provider is a dropdown in Settings: OpenAI (same API key as Realtime,
   default `gpt-4o-mini`) or Claude (own Anthropic API key, default
-  `claude-opus-5`).
+  `claude-haiku-4-5`). Voicebox playback defaults to a slower, pitch-preserving
+  `0.80×` speed and can be adjusted in Settings.
 
 The Voicebox engine expects:
 
 ```bash
 brew install whisper-cpp
-curl -L -o ~/.cache/whisper-cpp/ggml-base.en.bin \
-  https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin
+curl -L -o ~/.cache/whisper-cpp/ggml-tiny.en.bin \
+  https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin
 # plus the Voicebox app running on http://127.0.0.1:17493
 ```
+
+## Map services
+
+The map uses CartoDB tiles, OpenStreetMap Nominatim geocoding, and OSRM routing
+without API keys. Geocoding is cached and rate-limited by Jarvis. To use
+self-hosted providers, set `JARVIS_NOMINATIM_URL` and `JARVIS_OSRM_URL` before
+starting the app.
 
 ## Project layout
 

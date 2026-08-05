@@ -57,6 +57,7 @@ const DEFAULT_SETTINGS: JarvisSettings = {
   brainProvider: 'openai',
   chatModel: DEFAULT_OPENAI_CHAT_MODEL,
   claudeApiKey: '',
+  voicePlaybackRate: 0.8,
   voice: 'echo',
   initialPrompt: 'You are Jarvis, a helpful AI assistant. You are always helpful, polite, and concise. Subtle British accent. Robotic. Emotionally controlled. Witty and a little bit poking fun at the user.',
   enabledFunctions: ['desktop_mode', 'navigate_to_page', 'jarvis_disconnect', 'play_spotify'],
@@ -604,11 +605,20 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
         const serverRaw   = serverSettings.jarvis_settings;
         const localRaw    = localStorage.getItem('jarvis_settings');
 
-        const parseKey = (raw: string | null): string => {
-          try { return (JSON.parse(raw ?? '{}') as Partial<JarvisSettings>).apiKey ?? ''; } catch { return ''; }
+        const hasCredential = (raw: string | null): boolean => {
+          try {
+            const parsed = JSON.parse(raw ?? '{}') as Partial<JarvisSettings>;
+            return Boolean(
+              parsed.apiKey?.trim()
+              || parsed.claudeApiKey?.trim()
+              || parsed.elevenLabsAgentId?.trim(),
+            );
+          } catch {
+            return false;
+          }
         };
-        const serverHasKey = !!parseKey(serverRaw ?? null).trim();
-        const localHasKey  = !!parseKey(localRaw).trim();
+        const serverHasKey = hasCredential(serverRaw ?? null);
+        const localHasKey = hasCredential(localRaw);
 
         // Choose the source that actually has credentials
         const raw = (serverHasKey ? serverRaw : null) ?? (localHasKey ? localRaw : null) ?? serverRaw ?? localRaw;
@@ -1279,6 +1289,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
         initialPrompt: currentSettings.initialPrompt + '\n\n' + MUSIC_TOOL_ROUTING_INSTRUCTIONS,
         firstMessage: currentSettings.localFirstMessage?.trim() || undefined,
         voiceProfileId: currentSettings.voiceboxProfileId?.trim() || undefined,
+        playbackRate: currentSettings.voicePlaybackRate,
         enabledFunctionNames: currentSettings.enabledFunctions,
         getFunctions: () => (dynamicState.loaded ? dynamicState.allFunctions : FUNCTION_REGISTRY),
       });

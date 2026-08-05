@@ -10,6 +10,8 @@ public/vad/
 
 # Local settings & secrets (contains API keys)
 jarvis-server-settings.json
+jarvis-companions.json
+jarvis-companions.json.tmp
 .bambu-token.json
 .env
 .env.*

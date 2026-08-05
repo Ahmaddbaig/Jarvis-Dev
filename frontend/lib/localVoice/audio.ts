@@ -40,7 +40,12 @@ export function encodeWav(samples: Float32Array, sampleRate: number): Blob {
 // so this slows delivery without deepening the voice. Playback is otherwise a
 // direct, uncompressed path — no WebRTC loopback, no re-encoding — because
 // the Opus loopback experiment audibly glitched the voice.
-const PLAYBACK_RATE = 0.85;
+export const DEFAULT_VOICE_PLAYBACK_RATE = 0.8;
+
+export function normalizePlaybackRate(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return DEFAULT_VOICE_PLAYBACK_RATE;
+  return Math.max(0.7, Math.min(1, value));
+}
 
 /** Plays TTS blobs through an <audio> element wired to an AnalyserNode. */
 export class SpeechPlayer {
@@ -50,6 +55,11 @@ export class SpeechPlayer {
   private timeDomain: Uint8Array<ArrayBuffer> | null = null;
   private currentUrl: string | null = null;
   private destroyed = false;
+  private readonly playbackRate: number;
+
+  constructor(playbackRate = DEFAULT_VOICE_PLAYBACK_RATE) {
+    this.playbackRate = normalizePlaybackRate(playbackRate);
+  }
 
   private ensureGraph(): HTMLAudioElement | null {
     if (this.destroyed) return null;
@@ -80,7 +90,8 @@ export class SpeechPlayer {
     const url = URL.createObjectURL(blob);
     this.currentUrl = url;
     audio.src = url;
-    audio.playbackRate = PLAYBACK_RATE;
+    audio.preservesPitch = true;
+    audio.playbackRate = this.playbackRate;
 
     if (this.context?.state === 'suspended') {
       await this.context.resume().catch(() => undefined);
