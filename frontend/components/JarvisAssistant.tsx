@@ -19,6 +19,10 @@ import { installErrorInterceptors, emitError } from '@/frontend/lib/errorBus';
 import { loadServerSettings, saveServerSettings } from '@/frontend/lib/serverSettings';
 import { useLocalConversation } from '@/frontend/lib/localVoice/useLocalConversation';
 import {
+  useVisualizerAudio,
+  VISUALIZER_FFT_BARS,
+} from '@/frontend/hooks/useVisualizerAudio';
+import {
   DEFAULT_LOCAL_AI_BASE_URL,
   getLocalAIProfile,
   normalizeLocalAIBaseUrl,
@@ -40,7 +44,6 @@ import {
   useVoiceSessionState,
 } from '@/frontend/lib/voiceSession';
 
-const FFT_BARS = 64;
 // Keep speaker bleed and song vocals below the activation point while still
 // allowing a nearby user speaking clearly to interrupt playback.
 const MUSIC_PLAYBACK_RESTORE_FALLBACK_MS = 10_000;
@@ -225,15 +228,10 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatSending, setChatSending] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
-  const [audioLevel, setAudioLevel] = useState(0);
-  const [fftData, setFftData] = useState<number[]>(new Array(FFT_BARS).fill(0));
   const statusRef = useRef(status);
   const micMutedRef = useRef(false);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
   const localAudioStreamRef = useRef<MediaStream | null>(null);
-  const analyserRef = useRef<AnalyserNode | null>(null);
-  const animationFrameRef = useRef<number | null>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
   const remoteStreamRef = useRef<MediaStream | null>(null);
   const [ring1Rotation, setRing1Rotation] = useState(0);
   const [ring2Rotation, setRing2Rotation] = useState(0);
@@ -241,7 +239,6 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
   const lastTimeRef = useRef<number>(Date.now());
   const dataChannelRef = useRef<RTCDataChannel | null>(null);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
-  const elPollRef = useRef<number | null>(null);
   // When true, an unexpected WebRTC drop will schedule an auto-reconnect.
   // Set false during intentional disconnect so we don't loop.
   const autoReconnectRef = useRef(false);
@@ -934,141 +931,16 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     };
   }, []);
 
-  // Audio level monitoring with FFT
-  useEffect(() => {
-    if (status !== 'active') {
-      const resetTimer = window.setTimeout(() => {
-        setAudioLevel(0);
-        setFftData(new Array(FFT_BARS).fill(0));
-      }, 0);
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current);
-        animationFrameRef.current = null;
-      }
-      if (audioContextRef.current) {
-        audioContextRef.current.close();
-        audioContextRef.current = null;
-      }
-      return () => window.clearTimeout(resetTimer);
-    }
-
-    const checkStream = setInterval(() => {
-      if (remoteStreamRef.current && statusRef.current === 'active') {
-        clearInterval(checkStream);
-        setupAudioAnalyzer();
-      }
-    }, 100);
-
-    function setupAudioAnalyzer() {
-      if (!remoteStreamRef.current) return;
-
-      try {
-        const audioContext = new AudioContext();
-        audioContextRef.current = audioContext;
-        
-        const source = audioContext.createMediaStreamSource(remoteStreamRef.current);
-        const analyser = audioContext.createAnalyser();
-        analyser.fftSize = 512;
-        analyser.smoothingTimeConstant = 0.5;
-        
-        source.connect(analyser);
-        analyserRef.current = analyser;
-
-        const dataArray = new Uint8Array(analyser.frequencyBinCount);
-
-        const updateLevel = () => {
-          if (analyserRef.current && statusRef.current === 'active') {
-            analyserRef.current.getByteFrequencyData(dataArray);
-            
-            let sum = 0;
-            for (let i = 0; i < dataArray.length; i++) {
-              sum += dataArray[i];
-            }
-            const average = sum / dataArray.length;
-            
-            let normalizedVolume = Math.min(average / 128, 1);
-            normalizedVolume = Math.pow(normalizedVolume, 0.6) * 1.5;
-            setAudioLevel(Math.min(normalizedVolume, 1));
-            
-            const barData: number[] = [];
-            const usefulBins = Math.floor(dataArray.length / 2);
-            const samplesPerBar = usefulBins / FFT_BARS;
-            
-            for (let i = 0; i < FFT_BARS; i++) {
-              let barSum = 0;
-              const startIdx = Math.floor(i * samplesPerBar);
-              const endIdx = Math.floor((i + 1) * samplesPerBar);
-              
-              for (let j = startIdx; j < endIdx; j++) {
-                barSum += dataArray[j];
-              }
-              const normalized = (barSum / (endIdx - startIdx)) / 255;
-              const scaled = Math.pow(normalized, 0.5) * 1.8;
-              barData.push(Math.min(scaled, 1));
-            }
-            setFftData(barData);
-            
-            animationFrameRef.current = requestAnimationFrame(updateLevel);
-          }
-        };
-
-        updateLevel();
-      } catch (error) {
-        console.error('Failed to setup audio analyzer:', error);
-      }
-    }
-
-    return () => {
-      clearInterval(checkStream);
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current);
-        animationFrameRef.current = null;
-      }
-      if (audioContextRef.current) {
-        audioContextRef.current.close();
-        audioContextRef.current = null;
-      }
-    };
-  }, [status]);
-
-  // ElevenLabs / local-engine audio level polling (simulates FFT from output volume)
   const isPolledEngineActive =
     elConversation.status === 'connected' || voiceboxConversation.status === 'connected';
-  useEffect(() => {
-    if (status !== 'active' || !isPolledEngineActive) {
-      if (elPollRef.current) {
-        cancelAnimationFrame(elPollRef.current);
-        elPollRef.current = null;
-      }
-      return;
-    }
-
-    const poll = () => {
-      const vol = voiceboxConversation.status === 'connected'
-        ? voiceboxConversation.getOutputVolume()
-        : elConversation.getOutputVolume();
-      setAudioLevel(vol);
-
-      const t = Date.now() / 250;
-      const fakeFft = Array.from({ length: FFT_BARS }, (_, i) => {
-        const wave = Math.abs(Math.sin(t + i * 0.35)) * vol;
-        const noise = Math.random() * 0.12 * vol;
-        return Math.min(1, wave + noise);
-      });
-      setFftData(fakeFft);
-
-      elPollRef.current = requestAnimationFrame(poll);
-    };
-
-    poll();
-
-    return () => {
-      if (elPollRef.current) {
-        cancelAnimationFrame(elPollRef.current);
-        elPollRef.current = null;
-      }
-    };
-  }, [status, isPolledEngineActive]); // eslint-disable-line react-hooks/exhaustive-deps
+  const { audioLevel, fftData } = useVisualizerAudio({
+    status,
+    remoteStreamRef,
+    polledEngineActive: isPolledEngineActive,
+    getPolledOutputVolume: () => voiceboxConversation.status === 'connected'
+      ? voiceboxConversation.getOutputVolume()
+      : elConversation.getOutputVolume(),
+  });
 
   async function startRealtime(currentSettings = settings) {
     try {
@@ -1682,7 +1554,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
   const isCompactMuted = compact && status !== 'active' && status !== 'listening';
   const visualStatus = isCompactMuted ? 'idle' : status;
   const visualAudioLevel = isCompactMuted ? 0 : audioLevel;
-  const visualFftData = isCompactMuted ? new Array(FFT_BARS).fill(0) : fftData;
+  const visualFftData = isCompactMuted ? new Array(VISUALIZER_FFT_BARS).fill(0) : fftData;
   const ring1Scale = 1 + visualAudioLevel * 0.08;
   const ring2Scale = 1 + visualAudioLevel * 0.05;
   const logoScale = 1;
@@ -1798,7 +1670,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
               <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                 <svg className="w-2/3 h-2/3" viewBox="0 0 400 400" style={{ overflow: 'visible' }}>
                   {mounted && visualFftData.map((value, index) => {
-                    const angle = (index / FFT_BARS) * Math.PI * 2;
+                    const angle = (index / VISUALIZER_FFT_BARS) * Math.PI * 2;
                     const radius = 180;
                     const centerX = 200;
                     const centerY = 200;
