@@ -3,8 +3,18 @@ import { chromeControlFetch } from './chromeControlClient';
 import { desktopControlFetch } from './desktopControlClient';
 import { attachStaticToolPolicies } from './tools/compatibility';
 import type { JarvisFunction, LegacyJarvisFunction } from './tools/types';
+import { fetchLocalTasks, groupLocalTasks } from './localTasks';
 
 export type { JarvisFunction } from './tools/types';
+
+function readCachedJarvisSettings(): Record<string, unknown> {
+  try {
+    const raw = getCachedSetting('jarvis_settings');
+    return raw ? JSON.parse(raw) as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
 
 /** Paths from Settings → System — sent with shell / computer-use API calls. */
 export function readToolkitOverrides(): {
@@ -13,9 +23,7 @@ export function readToolkitOverrides(): {
 } {
   if (typeof window === 'undefined') return {};
   try {
-    const raw = localStorage.getItem('jarvis_settings');
-    if (!raw) return {};
-    const s = JSON.parse(raw) as Record<string, unknown>;
+    const s = readCachedJarvisSettings();
     const shell =
       typeof s.shellPathOverride === 'string' && s.shellPathOverride.trim()
         ? s.shellPathOverride.trim()
@@ -246,8 +254,7 @@ const LEGACY_FUNCTION_REGISTRY: LegacyJarvisFunction[] = [
       const platformHint = target ? '' : `[Platform: ${platform}] `;
       const enrichedTask = platformHint + task;
 
-      const stored = localStorage.getItem('jarvis_settings');
-      const apiKey = stored ? JSON.parse(stored).apiKey : '';
+      const apiKey = readCachedJarvisSettings().apiKey;
       if (!apiKey) return { error: 'No API key found in settings.' };
 
       try {
@@ -496,8 +503,7 @@ const LEGACY_FUNCTION_REGISTRY: LegacyJarvisFunction[] = [
         // Show scanning widget with the captured camera image underneath
         dispatch({ state: 'scanning', capturedBase64: imageBase64 });
 
-        const stored = localStorage.getItem('jarvis_settings');
-        const apiKey = stored ? JSON.parse(stored).apiKey : '';
+        const apiKey = readCachedJarvisSettings().apiKey;
         if (!apiKey) {
           dispatch({ state: 'error', error: 'No API key found in settings.' });
           return { error: 'No API key.' };
@@ -576,8 +582,7 @@ const LEGACY_FUNCTION_REGISTRY: LegacyJarvisFunction[] = [
       const prompt = String(args.prompt ?? '').trim();
       if (!prompt) return { error: 'No prompt provided.' };
 
-      const stored = localStorage.getItem('jarvis_settings');
-      const apiKey = stored ? JSON.parse(stored).apiKey : '';
+      const apiKey = readCachedJarvisSettings().apiKey;
       if (!apiKey) return { error: 'No API key found in settings.' };
 
       const moduleId =
@@ -720,8 +725,7 @@ const LEGACY_FUNCTION_REGISTRY: LegacyJarvisFunction[] = [
       const description = args.description as string;
       if (!description) return { error: 'No print description provided.' };
 
-      const stored = localStorage.getItem('jarvis_settings');
-      const apiKey = stored ? JSON.parse(stored).apiKey : '';
+      const apiKey = readCachedJarvisSettings().apiKey;
       if (!apiKey) return { error: 'No API key found in settings.' };
 
       const task = `${description}. Open Bambu Studio, go to the online models tab. Find a model matching the user's description. Pick a relevant one. Load the model. Check the available printers using the device tab at the top. Find one not in use. Set the printer. Slice the file, and send it to the correct printer. If you get stuck with an incompatible printer error, then select the drop down and choose the printer you selected. Do not ask follow-up questions unless the file is missing or there are zero available printers. Make reasonable choices and complete the print job. If there are multiple idle printers, choose the first idle one. Stop only after the print job has been successfully sent, or if the file cannot be found, no printer is available, or Bambu Studio blocks the job with an error that cannot be resolved.`;
@@ -1531,8 +1535,7 @@ const LEGACY_FUNCTION_REGISTRY: LegacyJarvisFunction[] = [
 
       if (page === 'calendar') {
         try {
-          const localTasksRaw = typeof window !== 'undefined' ? localStorage.getItem('jarvis_calendar_tasks') : null;
-          const localTasks = localTasksRaw ? JSON.parse(localTasksRaw) as Record<string, { text: string; time?: string; done: boolean }[]> : {};
+          const localTasks = groupLocalTasks(await fetchLocalTasks());
 
           // Collect upcoming 7 days of local tasks
           const upcoming: string[] = [];
@@ -1788,13 +1791,16 @@ const LEGACY_FUNCTION_REGISTRY: LegacyJarvisFunction[] = [
 
       // Navigate to calendar page
       window.dispatchEvent(new CustomEvent('jarvis:navigate', { detail: { page: 'calendar' } }));
+      const localTasksPromise = fetchLocalTasks()
+        .then(groupLocalTasks)
+        .catch((): ReturnType<typeof groupLocalTasks> => ({}));
 
       // Helper: build a combined schedule for a date key
       const getScheduleForKey = async (dateKey: string): Promise<string> => {
         const lines: string[] = [];
         // Local tasks
         try {
-          const store = JSON.parse(localStorage.getItem('jarvis_calendar_tasks') ?? '{}') as Record<string, { text: string; time?: string; done: boolean }[]>;
+          const store = await localTasksPromise;
           const tasks = (store[dateKey] ?? []);
           for (const t of tasks) lines.push(`${t.time ? t.time + ' — ' : ''}${t.text}${t.done ? ' (done)' : ''}`);
         } catch { /* ignore */ }

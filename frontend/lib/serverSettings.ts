@@ -1,3 +1,5 @@
+import { jarvisSettingsPatchSchema } from '@jarvis/contracts';
+
 /**
  * Shared helper for reading / writing server-side settings.
  *
@@ -44,6 +46,39 @@ export type ServerSettings = {
 let _cache: ServerSettings = {};
 let _loaded = false;
 
+const LEGACY_NON_SECRET_KEYS: readonly (keyof ServerSettings)[] = [
+  'jarvis_ha_url',
+  'jarvis_weather_location',
+  'jarvis_weather_lat',
+  'jarvis_weather_lon',
+  'bambu_email',
+  'bambu_token_exp',
+  'jarvis_news_settings',
+  'jarvis_voicebox_url',
+];
+
+function localNonSecretImport(serverSettings: ServerSettings): Partial<ServerSettings> {
+  if (typeof window === 'undefined') return {};
+  const patch: Partial<ServerSettings> = {};
+  for (const key of LEGACY_NON_SECRET_KEYS) {
+    const value = localStorage.getItem(key);
+    if (!serverSettings[key] && value) patch[key] = value;
+  }
+  if (!serverSettings.jarvis_settings) {
+    try {
+      const parsed = JSON.parse(localStorage.getItem('jarvis_settings') ?? '') as unknown;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        const safe = { ...(parsed as Record<string, unknown>) };
+        delete safe.apiKey;
+        delete safe.claudeApiKey;
+        const validated = jarvisSettingsPatchSchema.safeParse(safe);
+        if (validated.success) patch.jarvis_settings = JSON.stringify(validated.data);
+      }
+    } catch { /* no valid local settings to import */ }
+  }
+  return patch;
+}
+
 export function getCachedSetting(key: keyof ServerSettings): string {
   const fromCache = _cache[key];
   if (fromCache) return fromCache;
@@ -57,7 +92,19 @@ export function getCachedSetting(key: keyof ServerSettings): string {
 export async function fetchServerSettings(signal?: AbortSignal): Promise<ServerSettings> {
   const response = await fetch('/api/settings', { cache: 'no-store', signal });
   if (!response.ok) throw new Error(`Settings returned HTTP ${response.status}.`);
-  const data = (await response.json()) as ServerSettings;
+  let data = (await response.json()) as ServerSettings;
+  const localImport = localNonSecretImport(data);
+  if (Object.keys(localImport).length > 0) {
+    const importResponse = await fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(localImport),
+      signal,
+    });
+    if (!importResponse.ok) throw new Error(`Legacy settings import returned HTTP ${importResponse.status}.`);
+    data = { ...data, ...localImport };
+    localStorage.setItem('jarvis_settings_migrated_v1', 'true');
+  }
   _cache = data;
   _loaded = true;
   // Back-fill localStorage so the host machine benefits from server settings too

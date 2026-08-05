@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { ICalEvent } from '@/app/api/ical/route';
 import { GoogleCalendarWizard } from '../wizards/GoogleCalendarWizard';
@@ -13,6 +13,8 @@ import {
   useCalendarIntegrationStatus,
   useCreateCalendarEvent,
 } from '@/frontend/hooks/queries/useCalendar';
+import { useLocalTasks, useReplaceLocalTasks } from '@/frontend/hooks/queries/useLocalTasks';
+import type { LocalTask } from '@jarvis/contracts';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -48,7 +50,16 @@ function loadTasks(): TaskStore {
   if (typeof window === 'undefined') return {};
   try { return JSON.parse(localStorage.getItem('jarvis_calendar_tasks') ?? '{}'); } catch { return {}; }
 }
-function saveTasks(s: TaskStore) { localStorage.setItem('jarvis_calendar_tasks', JSON.stringify(s)); }
+
+function flattenTasks(store: TaskStore): LocalTask[] {
+  return Object.entries(store).flatMap(([date, tasks]) => tasks.map((task) => ({ ...task, date })));
+}
+
+function groupTasks(tasks: readonly LocalTask[]): TaskStore {
+  const grouped: TaskStore = {};
+  for (const { date, ...task } of tasks) (grouped[date] ??= []).push(task);
+  return grouped;
+}
 
 function formatEventTime(ev: ICalEvent): string {
   if (ev.allDay) return 'All day';
@@ -74,7 +85,6 @@ export function CalendarPage({ onNavigateHome }: Props) {
   const [viewYear,  setViewYear]  = useState(today.getFullYear());
   const [viewMonth, setViewMonth] = useState(today.getMonth());
   const [selectedKey, setSelectedKey] = useState(todayKey());
-  const [tasks,   setTasks]   = useState<TaskStore>(loadTasks);
   const [newTask, setNewTask] = useState('');
   const [newTime, setNewTime] = useState('');
   // Google Calendar MCP wizard state
@@ -92,10 +102,39 @@ export function CalendarPage({ onNavigateHome }: Props) {
   const gcalTools = integrationQuery.data?.tools ?? 0;
   const eventsQuery = useCalendarEvents(calendarRange.timeMin, calendarRange.timeMax, gcalConfigured);
   const createEventMutation = useCreateCalendarEvent(calendarRange.timeMin, calendarRange.timeMax);
+  const localTasksQuery = useLocalTasks();
+  const replaceLocalTasks = useReplaceLocalTasks();
+  const [legacyTaskSnapshot] = useState<TaskStore>(loadTasks);
+  const legacyMigrationStarted = useRef(false);
+  const tasks = useMemo(
+    () => groupTasks(localTasksQuery.data ?? flattenTasks(legacyTaskSnapshot)),
+    [legacyTaskSnapshot, localTasksQuery.data],
+  );
   const gcalEvents = groupByDate(eventsQuery.data ?? []);
   const gcalEventsLoading = eventsQuery.isFetching;
   const gcalEventsError = eventsQuery.error instanceof Error ? eventsQuery.error.message : '';
   const { refetch: refetchCalendarEvents } = eventsQuery;
+
+  useEffect(() => {
+    if (!localTasksQuery.isSuccess || legacyMigrationStarted.current) return;
+    legacyMigrationStarted.current = true;
+    const legacy = flattenTasks(legacyTaskSnapshot);
+    const finish = () => {
+      localStorage.removeItem('jarvis_calendar_tasks');
+      localStorage.setItem('jarvis_calendar_tasks_migrated_v1', 'true');
+    };
+    if (localTasksQuery.data.length === 0 && legacy.length > 0) {
+      void replaceLocalTasks.mutateAsync(legacy).then(finish).catch(() => {
+        legacyMigrationStarted.current = false;
+      });
+    } else {
+      finish();
+    }
+  }, [legacyTaskSnapshot, localTasksQuery.data, localTasksQuery.isSuccess, replaceLocalTasks]);
+
+  const updateTasks = useCallback((update: (current: TaskStore) => TaskStore) => {
+    replaceLocalTasks.mutate(flattenTasks(update(tasks)));
+  }, [replaceLocalTasks, tasks]);
 
   // ── Fetch MCP events (Google Calendar via OAuth MCP server) ───────────────
 
@@ -140,7 +179,7 @@ export function CalendarPage({ onNavigateHome }: Props) {
       if (type === 'add_task') {
         const key = date ?? todayKey();
         const task: Task = { id: Date.now().toString(), text: text ?? '', done: false, time: time ?? undefined };
-        setTasks((prev) => { const next = { ...prev, [key]: [...(prev[key] ?? []), task] }; saveTasks(next); return next; });
+        updateTasks((prev) => ({ ...prev, [key]: [...(prev[key] ?? []), task] }));
         if (date) {
           const [y, m] = date.split('-').map(Number);
           setViewYear(y); setViewMonth(m - 1); setSelectedKey(date);
@@ -148,16 +187,16 @@ export function CalendarPage({ onNavigateHome }: Props) {
       }
       if (type === 'complete_task') {
         const key = date ?? selectedKey;
-        setTasks((prev) => {
-          const next = { ...prev, [key]: (prev[key] ?? []).map((t) =>
+        updateTasks((prev) => ({
+          ...prev,
+          [key]: (prev[key] ?? []).map((t) =>
             t.id === taskId || t.text.toLowerCase().includes((text ?? '').toLowerCase())
-              ? { ...t, done: true } : t) };
-          saveTasks(next); return next;
-        });
+              ? { ...t, done: true } : t),
+        }));
       }
       if (type === 'clear_tasks') {
         const key = date ?? todayKey();
-        setTasks((prev) => { const next = { ...prev, [key]: [] }; saveTasks(next); return next; });
+        updateTasks((prev) => ({ ...prev, [key]: [] }));
       }
       if (type === 'go_to_date' && date) {
         const [y, m] = date.split('-').map(Number);
@@ -193,7 +232,7 @@ export function CalendarPage({ onNavigateHome }: Props) {
     };
     window.addEventListener('jarvis:calendar', handler);
     return () => window.removeEventListener('jarvis:calendar', handler);
-  }, [calendarRange.timeMax, calendarRange.timeMin, fetchMcpEvents, queryClient, selectedKey]);
+  }, [calendarRange.timeMax, calendarRange.timeMin, fetchMcpEvents, queryClient, selectedKey, updateTasks]);
 
   // ── Local task helpers ─────────────────────────────────────────────────────
 
@@ -220,20 +259,20 @@ export function CalendarPage({ onNavigateHome }: Props) {
 
     // Local fallback
     const task: Task = { id: Date.now().toString(), text, done: false, time: newTime.trim() || undefined };
-    setTasks((prev) => { const next = { ...prev, [selectedKey]: [...(prev[selectedKey] ?? []), task] }; saveTasks(next); return next; });
+    updateTasks((prev) => ({ ...prev, [selectedKey]: [...(prev[selectedKey] ?? []), task] }));
     setNewTask(''); setNewTime('');
-  }, [createEventMutation, gcalConfigured, newTask, newTime, selectedKey]);
+  }, [createEventMutation, gcalConfigured, newTask, newTime, selectedKey, updateTasks]);
 
   const toggleTask = useCallback((key: string, id: string) => {
-    setTasks((prev) => {
-      const next = { ...prev, [key]: (prev[key] ?? []).map((t) => t.id === id ? { ...t, done: !t.done } : t) };
-      saveTasks(next); return next;
-    });
-  }, []);
+    updateTasks((prev) => ({
+      ...prev,
+      [key]: (prev[key] ?? []).map((t) => t.id === id ? { ...t, done: !t.done } : t),
+    }));
+  }, [updateTasks]);
 
   const deleteTask = useCallback((key: string, id: string) => {
-    setTasks((prev) => { const next = { ...prev, [key]: (prev[key] ?? []).filter((t) => t.id !== id) }; saveTasks(next); return next; });
-  }, []);
+    updateTasks((prev) => ({ ...prev, [key]: (prev[key] ?? []).filter((t) => t.id !== id) }));
+  }, [updateTasks]);
 
   const prevMonth = () => { if (viewMonth === 0) { setViewMonth(11); setViewYear(y => y - 1); } else setViewMonth(m => m - 1); };
   const nextMonth = () => { if (viewMonth === 11) { setViewMonth(0); setViewYear(y => y + 1); } else setViewMonth(m => m + 1); };

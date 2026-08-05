@@ -1550,18 +1550,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     setSettings(newSettings);
     const serialised = JSON.stringify(newSettings);
     localStorage.setItem('jarvis_settings', serialised);
-    // Local mode is valid without a credential. Other modes still require one,
-    // so a race-triggered blank save cannot overwrite a good server config.
-    const hasShareableConfig =
-      (newSettings.apiMode === 'openai'      && !!newSettings.apiKey?.trim()) ||
-      (newSettings.apiMode === 'elevenlabs'  && !!newSettings.elevenLabsAgentId?.trim()) ||
-      (newSettings.apiMode === 'voicebox' &&
-        (newSettings.brainProvider === 'claude'
-          ? !!newSettings.claudeApiKey?.trim()
-          : !!newSettings.apiKey?.trim()));
-    if (hasShareableConfig) {
-      saveSettingsToServer({ jarvis_settings: serialised });
-    }
+    saveSettingsToServer({ jarvis_settings: serialised });
     setIsSettingsOpen(false);
     // Increment trigger so the auto-start effect re-runs with the new settings.
     // This avoids the race where a manual setTimeout races against the effect.

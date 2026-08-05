@@ -6,6 +6,7 @@ export const queryKeys = {
   diagnostics: {
     all: ['diagnostics'] as const,
     system: () => ['diagnostics', 'system'] as const,
+    storage: () => ['diagnostics', 'storage'] as const,
   },
   weather: {
     all: ['weather'] as const,
@@ -36,6 +37,7 @@ export const queryKeys = {
     all: ['calendar'] as const,
     events: (timeMin: string, timeMax: string) => ['calendar', 'events', { timeMin, timeMax }] as const,
     integrationStatus: () => ['calendar', 'integration-status'] as const,
+    tasks: () => ['calendar', 'tasks'] as const,
   },
   integrations: {
     all: ['integrations'] as const,

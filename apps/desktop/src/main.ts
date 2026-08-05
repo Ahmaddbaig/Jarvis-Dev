@@ -535,6 +535,7 @@ function startNextServer(): Promise<void> {
                 NODE_ENV: 'production',
                 NEXT_MANUAL_SIG_HANDLE: 'true',
                 JARVIS_DATA_DIR: app.getPath('userData'),
+                JARVIS_APP_VERSION: app.getVersion(),
             },
             windowsHide: true,
             stdio: ['ignore', 'pipe', 'pipe'],

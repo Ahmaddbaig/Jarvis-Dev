@@ -5,6 +5,10 @@ import type { JarvisSettings } from '@jarvis/contracts';
 import { sfx } from '@/frontend/lib/sfx';
 import { ChromeSettingsSection } from './ChromeSettingsSection';
 import { useSystemDiagnostics } from '@/frontend/hooks/queries/useSystemDiagnostics';
+import {
+  useCreateRecoveryExport,
+  useStorageDiagnostics,
+} from '@/frontend/hooks/queries/useStorageAdmin';
 
 interface SystemSettingsSectionProps {
   settings: JarvisSettings;
@@ -16,6 +20,8 @@ export function SystemSettingsSection({ settings, onChange }: SystemSettingsSect
   const [permissionBusy, setPermissionBusy] = useState<string | null>(null);
   const [isMacElectron, setIsMacElectron] = useState(false);
   const diagnosticsQuery = useSystemDiagnostics();
+  const storageQuery = useStorageDiagnostics();
+  const recoveryExport = useCreateRecoveryExport();
   const diagLoading = diagnosticsQuery.isFetching;
   const diagOutput = diagnosticsQuery.data === undefined
     ? null
@@ -162,6 +168,50 @@ export function SystemSettingsSection({ settings, onChange }: SystemSettingsSect
           <pre className="text-[10px] leading-snug text-cyan-200/90 bg-black/50 border border-cyan-500/20 rounded p-3 overflow-x-auto max-h-64 overflow-y-auto font-mono whitespace-pre">
             {diagOutput}
           </pre>
+        )}
+      </div>
+
+      <div className="space-y-3 border border-cyan-500/20 bg-cyan-950/10 rounded p-4">
+        <div>
+          <h3 className="text-xs font-bold text-cyan-400 uppercase tracking-widest">Local Data Store</h3>
+          <p className="text-[10px] text-cyan-700 mt-1 leading-relaxed">
+            Verify the SQLite schema and create a recovery bundle before troubleshooting, upgrades, or rollback.
+            Exports stay on this computer and never include raw credentials from the new database.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => void storageQuery.refetch()}
+            disabled={storageQuery.isFetching || typeof window === 'undefined' || window.electron?.isElectron !== true}
+            className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest rounded border border-cyan-500/40 text-cyan-300 hover:bg-cyan-500/10 disabled:opacity-40"
+          >
+            {storageQuery.isFetching ? 'Checking…' : 'Check Storage'}
+          </button>
+          <button
+            type="button"
+            onClick={() => void recoveryExport.mutateAsync()}
+            disabled={recoveryExport.isPending || typeof window === 'undefined' || window.electron?.isElectron !== true}
+            className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest rounded border border-cyan-500/40 bg-cyan-500/10 text-cyan-300 hover:bg-cyan-500/20 disabled:opacity-40"
+          >
+            {recoveryExport.isPending ? 'Exporting…' : 'Create Recovery Export'}
+          </button>
+        </div>
+        {storageQuery.data && (
+          <p className="text-[10px] text-cyan-300 font-mono break-all">
+            Schema {storageQuery.data.schemaVersion}/{storageQuery.data.latestSchemaVersion} · {storageQuery.data.integrity}
+            {' · '}{storageQuery.data.journalMode} · {storageQuery.data.path}
+          </p>
+        )}
+        {recoveryExport.data && (
+          <p className="text-[10px] text-emerald-400 font-mono break-all">
+            Recovery files: {recoveryExport.data.files.database} and {recoveryExport.data.files.json}
+          </p>
+        )}
+        {(storageQuery.error || recoveryExport.error) && (
+          <p className="text-[10px] text-red-400 font-mono">
+            {String(storageQuery.error instanceof Error ? storageQuery.error.message : recoveryExport.error instanceof Error ? recoveryExport.error.message : storageQuery.error || recoveryExport.error)}
+          </p>
         )}
       </div>
     </div>
