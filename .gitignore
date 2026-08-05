@@ -1,6 +1,9 @@
 # Dependencies
 node_modules/
 
+# LocalAI runtime, model weights, generated files, and logs
+.local-ai/
+
 # Next.js build output
 .next/
 out/

@@ -87,7 +87,7 @@ export function useLocalConversation(
   const speakTokenRef = useRef(0);
 
   const reportTurnError = useCallback((message: string) => {
-    emitError('local', message, 'error');
+    emitError('voicebox', message, 'error');
   }, []);
 
   // Sentence-pipelined speech: TTS fetches run in order (Voicebox serves one
@@ -400,7 +400,7 @@ export function useLocalConversation(
         .then(async (res) => {
           const data = (await res.json().catch(() => null)) as { error?: string } | null;
           if (!res.ok) {
-            emitError('local', data?.error ?? 'Voice engine warmup failed.', 'warn');
+            emitError('voicebox', data?.error ?? 'Voice engine warmup failed.', 'warn');
           }
         })
         .catch(() => undefined);

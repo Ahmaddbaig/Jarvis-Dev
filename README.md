@@ -12,9 +12,11 @@ npm run dev:desktop
 
 ## Voice engines
 
-Three engines are selectable in Settings:
+Four engines are selectable in Settings:
 
 - **OpenAI Realtime** — GPT speech-to-speech over WebRTC (needs OpenAI API key).
+- **Local AI** — free on-device LocalAI speech pipeline with profiles tuned for
+  M2, M3, and M5 Macs.
 - **ElevenLabs** — Conversational AI agent over WebRTC (needs agent id).
 - **Voicebox** — the movie JARVIS voice: Silero VAD → whisper.cpp STT →
   API chat brain → Voicebox TTS with a cloned voice profile. The brain
@@ -38,6 +40,13 @@ The map uses CartoDB tiles, OpenStreetMap Nominatim geocoding, and OSRM routing
 without API keys. Geocoding is cached and rate-limited by Jarvis. To use
 self-hosted providers, set `JARVIS_NOMINATIM_URL` and `JARVIS_OSRM_URL` before
 starting the app.
+
+## Local AI installation
+
+For free on-device voice AI, including the separate M2, M3, and M5 profiles,
+see [LOCAL_AI_INSTALL.md](LOCAL_AI_INSTALL.md). Install only the profile matching
+the Mac that will run Jarvis. For a complete M2/8 GB walkthrough, see
+[localllm.md](localllm.md).
 
 ## Project layout
 

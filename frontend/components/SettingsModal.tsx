@@ -4,6 +4,12 @@ import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { FUNCTION_REGISTRY, JarvisFunction } from '@/frontend/lib/functions';
 import { sfx } from '@/frontend/lib/sfx';
+import {
+  DEFAULT_LOCAL_AI_BASE_URL,
+  LOCAL_AI_PROFILES,
+  LocalAIProfile,
+} from '@/frontend/lib/localAIProfiles';
+import type { VoiceEngineMode } from '@/frontend/lib/voiceEngineMode';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -22,9 +28,13 @@ export type JarvisPosition = 'center' | 'bottom-left' | 'bottom-right' | 'top-le
 export type RealtimeModel = 'gpt-realtime-2' | 'gpt-realtime-1.5' | 'gpt-realtime-mini';
 
 export interface JarvisSettings {
-  apiMode: 'openai' | 'elevenlabs' | 'local';
+  apiMode: VoiceEngineMode;
   apiKey: string;
   realtimeModel?: RealtimeModel;
+  localAIProfile?: LocalAIProfile;
+  localAIBaseUrl?: string;
+  microphoneDeviceId?: string;
+  speechVocabulary?: string;
   elevenLabsAgentId?: string;
   elevenLabsFirstMessage?: string;
   /** Brain provider for the Voicebox engine: OpenAI or Claude (Anthropic). */
@@ -107,6 +117,14 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
   const [diagLoading, setDiagLoading] = useState(false);
   const [diagOutput, setDiagOutput] = useState<string | null>(null);
   const [diagError, setDiagError] = useState<string | null>(null);
+  const [audioInputs, setAudioInputs] = useState<MediaDeviceInfo[]>([]);
+  const [macPermissions, setMacPermissions] = useState<MacPermissionStatus | null>(null);
+  const [permissionBusy, setPermissionBusy] = useState<string | null>(null);
+  const [isMacElectron, setIsMacElectron] = useState(false);
+
+  useEffect(() => {
+    setIsMacElectron(window.electron?.platform === 'darwin');
+  }, []);
 
   // Voicebox engine status (OpenAI brain + Voicebox profiles)
   const [brainStatus, setBrainStatus] = useState<{ ok: boolean; error?: string } | null>(null);
@@ -122,10 +140,10 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
   }, [isOpen, initialSettings]);
 
   // Probe brain + Voicebox whenever the Voicebox engine is selected
-  const isLocalMode = settings.apiMode === 'local';
+  const isVoiceboxMode = settings.apiMode === 'voicebox';
   const brainProvider = settings.brainProvider ?? 'openai';
   useEffect(() => {
-    if (!isOpen || !isLocalMode) return;
+    if (!isOpen || !isVoiceboxMode) return;
     let cancelled = false;
     fetch(`/api/voice/chat?provider=${brainProvider}`)
       .then((res) => res.json())
@@ -136,7 +154,47 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
       .then((data) => { if (!cancelled) setVoiceboxStatus(data); })
       .catch(() => { if (!cancelled) setVoiceboxStatus({ ok: false, profiles: [], error: 'Status check failed' }); });
     return () => { cancelled = true; };
-  }, [isOpen, isLocalMode, brainProvider]);
+  }, [isOpen, isVoiceboxMode, brainProvider]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const refreshAudioInputs = async () => {
+      try {
+        const devices = await navigator.mediaDevices?.enumerateDevices();
+        setAudioInputs((devices ?? []).filter((device) => device.kind === 'audioinput'));
+      } catch {
+        setAudioInputs([]);
+      }
+    };
+
+    void refreshAudioInputs();
+    navigator.mediaDevices?.addEventListener?.('devicechange', refreshAudioInputs);
+
+    const refreshMacPermissions = () => {
+      if (window.electron?.platform === 'darwin') {
+        void window.electron.getMacPermissions?.().then(setMacPermissions);
+      }
+    };
+
+    refreshMacPermissions();
+    window.addEventListener('focus', refreshMacPermissions);
+
+    return () => {
+      navigator.mediaDevices?.removeEventListener?.('devicechange', refreshAudioInputs);
+      window.removeEventListener('focus', refreshMacPermissions);
+    };
+  }, [isOpen]);
+
+  async function requestPermission(permission: 'accessibility' | 'screen' | 'microphone') {
+    setPermissionBusy(permission);
+    try {
+      const status = await window.electron?.requestMacPermission?.(permission);
+      if (status) setMacPermissions(status);
+    } finally {
+      setPermissionBusy(null);
+    }
+  }
 
   async function runDiagnostics() {
     sfx('click_sfx', 0.5);
@@ -210,11 +268,16 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
               {/* API Mode switcher */}
               <div className="space-y-2">
                 <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">Voice Engine</label>
-                <div className="grid grid-cols-3 gap-2">
-                  {(['openai', 'elevenlabs', 'local'] as const).map((mode) => {
+                <div className="grid grid-cols-2 gap-2">
+                  {(['openai', 'local', 'voicebox', 'elevenlabs'] as const).map((mode) => {
                     const active = (settings.apiMode ?? 'openai') === mode;
-                    const labels = { openai: 'OpenAI Realtime', elevenlabs: 'ElevenLabs', local: 'Voicebox' };
-                    const descs  = { openai: 'GPT-4o via WebRTC', elevenlabs: 'Jarvis Agent via WebRTC', local: 'GPT brain + JARVIS voice' };
+                    const labels = { openai: 'OpenAI', local: 'Local AI', voicebox: 'Voicebox', elevenlabs: 'ElevenLabs' };
+                    const descs  = {
+                      openai: 'Paid Realtime API',
+                      local: 'Free on this Mac',
+                      voicebox: 'Claude or GPT + cloned voice',
+                      elevenlabs: 'Hosted voice agent',
+                    };
                     return (
                       <button
                         key={mode}
@@ -237,7 +300,7 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
 
               {/* OpenAI fields — the key also powers the Voicebox engine's OpenAI brain */}
               {((settings.apiMode ?? 'openai') === 'openai' ||
-                (settings.apiMode === 'local' && brainProvider === 'openai')) && (
+                (settings.apiMode === 'voicebox' && brainProvider === 'openai')) && (
                 <div className="space-y-2">
                   <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">OpenAI API Key</label>
                   <input
@@ -247,6 +310,90 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
                     placeholder="sk-..."
                     className="w-full bg-cyan-950/20 border border-cyan-500/30 rounded px-3 py-2 text-cyan-100 focus:outline-none focus:border-cyan-400 focus:shadow-[0_0_10px_rgba(34,211,238,0.3)] transition-all font-mono text-sm"
                   />
+                </div>
+              )}
+
+              {/* Local AI fields */}
+              {(settings.apiMode ?? 'openai') === 'local' && (
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">Mac Performance Profile</label>
+                    <div className="grid grid-cols-3 gap-2">
+                      {(Object.values(LOCAL_AI_PROFILES)).map((profile) => {
+                        const active = (settings.localAIProfile ?? 'm5') === profile.id;
+                        return (
+                          <button
+                            key={profile.id}
+                            onClick={() => { sfx('select', 0.5); setSettings({ ...settings, localAIProfile: profile.id }); }}
+                            className={`flex flex-col items-center px-2 py-2.5 border rounded text-center transition-all ${
+                              active
+                                ? 'bg-cyan-500/20 border-cyan-400 text-cyan-300 shadow-[0_0_10px_rgba(34,211,238,0.2)]'
+                                : 'bg-transparent border-cyan-500/20 text-cyan-600 hover:border-cyan-500/50 hover:text-cyan-400'
+                            }`}
+                          >
+                            <span className="text-xs font-bold uppercase tracking-wide">{profile.label}</span>
+                            <span className="text-[10px] opacity-70 mt-0.5">{profile.hardware}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <p className="text-[10px] leading-relaxed text-cyan-700">
+                      {LOCAL_AI_PROFILES[settings.localAIProfile ?? 'm5'].description}
+                      {' '}Models are never downloaded when you switch here. Run the matching installer once on each Mac.
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">Local AI Server</label>
+                    <input
+                      type="url"
+                      value={settings.localAIBaseUrl ?? DEFAULT_LOCAL_AI_BASE_URL}
+                      onChange={(e) => setSettings({ ...settings, localAIBaseUrl: e.target.value })}
+                      placeholder={DEFAULT_LOCAL_AI_BASE_URL}
+                      className="w-full bg-cyan-950/20 border border-cyan-500/30 rounded px-3 py-2 text-cyan-100 focus:outline-none focus:border-cyan-400 focus:shadow-[0_0_10px_rgba(34,211,238,0.3)] transition-all font-mono text-sm"
+                    />
+                    <p className="text-[10px] text-cyan-700">
+                      No API key or subscription. Leave this on 127.0.0.1 when the model runs on the same Mac.
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">Microphone Input</label>
+                    <select
+                      value={settings.microphoneDeviceId ?? ''}
+                      onChange={(e) => setSettings({ ...settings, microphoneDeviceId: e.target.value })}
+                      className="w-full bg-[#021118] border border-cyan-500/30 rounded px-3 py-2 text-cyan-100 focus:outline-none focus:border-cyan-400 font-mono text-sm"
+                    >
+                      <option value="">System default microphone</option>
+                      {audioInputs.map((device, index) => (
+                        <option key={device.deviceId} value={device.deviceId}>
+                          {device.label || `Microphone ${index + 1}`}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-[10px] leading-relaxed text-cyan-700">
+                      For clearer recognition while wearing Bluetooth headphones, try selecting the MacBook microphone instead of the headset microphone.
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">Speech Vocabulary</label>
+                    <textarea
+                      value={settings.speechVocabulary ?? ''}
+                      onChange={(e) => setSettings({ ...settings, speechVocabulary: e.target.value })}
+                      placeholder="Skillet, Ahmad, Bambu Lab, project names, device names…"
+                      rows={3}
+                      maxLength={1000}
+                      className="w-full resize-y bg-[#021118] border border-cyan-500/30 rounded px-3 py-2 text-cyan-100 focus:outline-none focus:border-cyan-400 font-mono text-sm"
+                    />
+                    <p className="text-[10px] leading-relaxed text-cyan-700">
+                      Add names, artists, applications, devices, acronyms, and technical terms separated by commas or new lines. Local AI uses them as recognition hints for every ability.
+                    </p>
+                  </div>
+
+                  <p className="text-[10px] leading-relaxed text-cyan-600 border border-cyan-500/20 bg-cyan-950/20 rounded px-3 py-2">
+                    Local voice: Kokoro British male — a more natural, calm synthetic voice. It is Jarvis-inspired, not a clone of an actor&apos;s voice.
+                  </p>
                 </div>
               )}
 
@@ -307,8 +454,8 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
                 </div>
               )}
 
-              {/* Local engine fields */}
-              {(settings.apiMode ?? 'openai') === 'local' && (
+              {/* Voicebox engine fields */}
+              {(settings.apiMode ?? 'openai') === 'voicebox' && (
                 <div className="space-y-4">
                   {/* Service status */}
                   <div className="space-y-1 text-xs font-mono">
@@ -664,6 +811,58 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
                 Jarvis usually detects your shell and Python automatically. Use overrides only if Terminal or Computer Use
                 fail after a restart. Run diagnostics and share the JSON if you need support.
               </p>
+
+              {isMacElectron && (
+                <div className="space-y-3 border border-cyan-500/25 bg-cyan-950/15 rounded p-4">
+                  <div>
+                    <h3 className="text-xs font-bold text-cyan-400 uppercase tracking-widest">macOS Permissions</h3>
+                    <p className="text-[10px] text-cyan-700 mt-1 leading-relaxed">
+                      Accessibility lets Jarvis control the mouse and keyboard. Screen Recording lets Computer Use see the screen. You must approve each switch in macOS.
+                    </p>
+                  </div>
+
+                  {([
+                    ['accessibility', 'Accessibility', macPermissions?.accessibility],
+                    ['screen', 'Screen Recording', macPermissions?.screen],
+                    ['microphone', 'Microphone', macPermissions?.microphone],
+                  ] as const).map(([id, label, status]) => {
+                    const granted = status === 'granted';
+                    return (
+                      <div key={id} className="flex items-center justify-between gap-3 border-t border-cyan-500/10 pt-3">
+                        <div>
+                          <div className="text-xs text-cyan-200">{label}</div>
+                          <div className={`text-[10px] uppercase tracking-wider ${granted ? 'text-emerald-400' : 'text-amber-400'}`}>
+                            {granted ? 'Granted' : (status || 'Not checked')}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => void requestPermission(id)}
+                          disabled={permissionBusy !== null}
+                          className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest rounded border border-cyan-500/40 bg-cyan-500/10 text-cyan-300 hover:bg-cyan-500/20 disabled:opacity-50"
+                        >
+                          {permissionBusy === id ? 'Opening…' : granted ? 'Review' : 'Grant'}
+                        </button>
+                      </div>
+                    );
+                  })}
+
+                  {macPermissions?.appBundlePath && (
+                    <div className="border-t border-cyan-500/10 pt-3 space-y-2">
+                      <p className="text-[10px] text-cyan-700 font-mono break-all">
+                        Add this app if macOS does not list it: {macPermissions.appBundlePath}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => void window.electron?.revealMacPermissionApp?.()}
+                        className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest rounded border border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/10"
+                      >
+                        Reveal App in Finder
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div className="space-y-2">
                 <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">

@@ -18,6 +18,15 @@ import { sfx } from '@/frontend/lib/sfx';
 import { installErrorInterceptors, emitError } from '@/frontend/lib/errorBus';
 import { loadServerSettings, saveServerSettings } from '@/frontend/lib/serverSettings';
 import { useLocalConversation } from '@/frontend/lib/localVoice/useLocalConversation';
+import {
+  DEFAULT_LOCAL_AI_BASE_URL,
+  getLocalAIProfile,
+  normalizeLocalAIBaseUrl,
+} from '@/frontend/lib/localAIProfiles';
+import {
+  hasUsableVoiceEngineConfig,
+  migrateLegacyVoiceboxMode,
+} from '@/frontend/lib/voiceEngineMode';
 
 const FFT_BARS = 64;
 // Keep speaker bleed and song vocals below the activation point while still
@@ -32,9 +41,49 @@ const MUSIC_TOOL_ROUTING_INSTRUCTIONS =
   'Never reject a music request before trying the tool. Treat the phonetic variants "Chef G", "Chief G", and "Shef G" as the artist "Sheff G". ' +
   'Music, song lyrics, television, and other background audio are not user turns. Only respond when speech is clearly directed to you; otherwise remain silent and do not ask what the user was saying.';
 
-function buildAssistantInstructions(initialPrompt: string): string {
+const BUILT_IN_SPEECH_VOCABULARY = [
+  'Jarvis',
+  'Spotify',
+  'Skillet',
+  'Home Assistant',
+  'Bambu Lab',
+  'OpenAI',
+  'LocalAI',
+];
+
+function normalizeSpeechVocabulary(value?: string): string[] {
+  const seen = new Set<string>();
+  return (value ?? '')
+    .split(/[\n,]/)
+    .map((entry) => entry.replace(/\s+/g, ' ').trim())
+    .filter((entry) => {
+      const key = entry.toLocaleLowerCase();
+      if (!entry || entry.length > 80 || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 60);
+}
+
+function buildSpeechVocabulary(value?: string): string[] {
+  return normalizeSpeechVocabulary([...BUILT_IN_SPEECH_VOCABULARY, value ?? ''].join(','));
+}
+
+function buildTranscriptionPrompt(value?: string): string {
+  return (
+    'English voice commands for an assistant named Jarvis. Preserve normal spaces between words. ' +
+    `Expected names and terms: ${buildSpeechVocabulary(value).join(', ')}.`
+  );
+}
+
+function buildAssistantInstructions(initialPrompt: string, speechVocabulary?: string): string {
+  const vocabulary = buildSpeechVocabulary(speechVocabulary).join(', ');
   return (
     initialPrompt +
+    '\n\nSpeech recognition can contain phonetic spelling mistakes or missing word boundaries. ' +
+    'Before answering or calling a tool, silently repair the most likely natural wording using the conversation and tool context. ' +
+    'Preserve ordinary spaces in all human-language tool arguments. Do not rewrite exact URLs, file paths, identifiers, codes, or numbers. ' +
+    `Prefer these known names and terms when they are a close phonetic match: ${vocabulary}.` +
     '\n\n' + MUSIC_TOOL_ROUTING_INSTRUCTIONS +
     '\n\nDo not call navigate_to_page as part of a greeting or on your own initiative — only call it when the user explicitly asks to go to a different page.'
   );
@@ -49,9 +98,55 @@ function hasJarvisWakeWord(transcript: string): boolean {
 // tokens, and the reasoning-tier models think for seconds before speaking.
 const DEFAULT_OPENAI_CHAT_MODEL = 'gpt-4o-mini';
 const DEFAULT_CLAUDE_CHAT_MODEL = 'claude-haiku-4-5';
+
+async function ensureLocalAIReady(baseUrl: string, pipelineModel: string, profileLabel: string): Promise<void> {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 5_000);
+
+  try {
+    const readyResponse = await fetch(`${baseUrl}/readyz`, {
+      cache: 'no-store',
+      signal: controller.signal,
+    });
+    if (!readyResponse.ok) {
+      throw new Error(`LocalAI health check returned HTTP ${readyResponse.status}.`);
+    }
+
+    const modelsResponse = await fetch(`${baseUrl}/v1/models`, {
+      cache: 'no-store',
+      signal: controller.signal,
+    });
+    if (!modelsResponse.ok) {
+      throw new Error(`LocalAI model check returned HTTP ${modelsResponse.status}.`);
+    }
+
+    const payload = await modelsResponse.json() as { data?: Array<{ id?: string }> };
+    const installedModels = new Set((payload.data ?? []).map((model) => model.id));
+    if (!installedModels.has(pipelineModel)) {
+      throw new Error(
+        `${profileLabel} is selected but its model is not installed on this Mac. ` +
+        'Run scripts/local-ai/install-macos.zsh for the matching Mac profile; switching profiles never downloads models automatically.'
+      );
+    }
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error(`LocalAI did not respond within 5 seconds at ${baseUrl}. Start Jarvis with RUN-JARVIS-DEV.command.`);
+    }
+    if (error instanceof TypeError) {
+      throw new Error(`Cannot reach LocalAI at ${baseUrl}. Start Jarvis with RUN-JARVIS-DEV.command.`);
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
 const DEFAULT_SETTINGS: JarvisSettings = {
   apiMode: 'openai',
   apiKey: '',
+  localAIProfile: 'm5',
+  localAIBaseUrl: DEFAULT_LOCAL_AI_BASE_URL,
+  microphoneDeviceId: '',
+  speechVocabulary: '',
   elevenLabsAgentId: '',
   elevenLabsFirstMessage: '',
   brainProvider: 'openai',
@@ -274,7 +369,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
   }
 
   // Voicebox voice engine — OpenAI API brain + Voicebox JARVIS voice
-  const localConversation = useLocalConversation({
+  const voiceboxConversation = useLocalConversation({
     onConnect: () => setStatus('active'),
     onDisconnect: () => {
       if (statusRef.current !== 'idle') setStatus('idle');
@@ -282,7 +377,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     onError: (message) => {
       setStatus('error');
       setLastError(message);
-      emitError('local', message);
+      emitError('voicebox', message);
     },
   });
 
@@ -479,8 +574,8 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     if (currentPhotos.length === 0) return;
 
     // Local path — text-only contextual update (local text model has no vision)
-    if (localConversation.status === 'connected') {
-      localConversation.sendContextualUpdate(
+    if (voiceboxConversation.status === 'connected') {
+      voiceboxConversation.sendContextualUpdate(
         `The user currently has ${currentPhotos.length} image${currentPhotos.length > 1 ? 's' : ''} on screen for visual context.`,
       );
       return;
@@ -523,8 +618,8 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     if (!trimmed) return;
 
     // Local path
-    if (localConversation.status === 'connected') {
-      localConversation.sendContextualUpdate(
+    if (voiceboxConversation.status === 'connected') {
+      voiceboxConversation.sendContextualUpdate(
         'The user pasted the following text onto the HUD (it also appears in a TEXT NOTE widget). Treat it as context for what they want to discuss:\n\n' + trimmed,
       );
       return;
@@ -601,31 +696,46 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
   useEffect(() => {
     const timer = window.setTimeout(() => {
       loadServerSettings().then((serverSettings) => {
-        // Pick the "best" source: prefer server if it has credentials, otherwise localStorage
+        // Pick the best usable source. LocalAI does not require credentials.
         const serverRaw   = serverSettings.jarvis_settings;
         const localRaw    = localStorage.getItem('jarvis_settings');
+        const localAIAllowedHere =
+          window.electron?.isElectron === true ||
+          window.location.hostname === '127.0.0.1' ||
+          window.location.hostname === 'localhost';
 
-        const hasCredential = (raw: string | null): boolean => {
+        const parseConfig = (raw: string | null): Partial<JarvisSettings> | null => {
           try {
             const parsed = JSON.parse(raw ?? '{}') as Partial<JarvisSettings>;
-            return Boolean(
-              parsed.apiKey?.trim()
-              || parsed.claudeApiKey?.trim()
-              || parsed.elevenLabsAgentId?.trim(),
-            );
+            return migrateLegacyVoiceboxMode(parsed);
           } catch {
-            return false;
+            return null;
           }
         };
-        const serverHasKey = hasCredential(serverRaw ?? null);
-        const localHasKey = hasCredential(localRaw);
+        const serverConfig = parseConfig(serverRaw ?? null);
+        const localConfig = parseConfig(localRaw);
+        // A 127.0.0.1 LocalAI URL belongs to this Mac, never to every LAN
+        // browser that shares server settings.
+        const serverHasConfig = hasUsableVoiceEngineConfig(serverConfig, false);
+        const localHasConfig = hasUsableVoiceEngineConfig(localConfig, localAIAllowedHere);
+        const localWantsLocal = localConfig?.apiMode === 'local' && localAIAllowedHere;
 
-        // Choose the source that actually has credentials
-        const raw = (serverHasKey ? serverRaw : null) ?? (localHasKey ? localRaw : null) ?? serverRaw ?? localRaw;
+        const selectedConfig = localWantsLocal
+          ? localConfig
+          : (serverHasConfig ? serverConfig : null) ??
+            (localHasConfig ? localConfig : null) ??
+            serverConfig ??
+            localConfig;
 
-        if (raw) {
+        if (selectedConfig) {
           try {
-            const parsed = JSON.parse(raw) as Partial<JarvisSettings>;
+            const parsed = { ...selectedConfig };
+            // Preserve shared appearance/ability preferences without making a
+            // LAN browser connect to LocalAI on its own 127.0.0.1 address.
+            if (parsed.apiMode === 'local' && !localAIAllowedHere) {
+              parsed.apiMode = 'openai';
+              parsed.localAIBaseUrl = DEFAULT_SETTINGS.localAIBaseUrl;
+            }
             const enabledFunctions = Array.from(new Set([
               ...DEFAULT_SETTINGS.enabledFunctions,
               ...(parsed.enabledFunctions ?? []),
@@ -638,9 +748,9 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
               localStorage.setItem('jarvis_settings', JSON.stringify(nextSettings));
             }
 
-            // If localStorage has credentials but the server doesn't, push them up now.
-            // This self-heals after a race-condition wipe.
-            if (!serverHasKey && localHasKey) {
+            // If localStorage has a usable configuration but the server doesn't,
+            // push it up now. This self-heals after a race-condition wipe.
+            if (!serverHasConfig && localHasConfig && nextSettings.apiMode !== 'local') {
               saveServerSettings({ jarvis_settings: JSON.stringify(nextSettings) });
             }
           } catch (e) {
@@ -825,7 +935,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
 
   // ElevenLabs / local-engine audio level polling (simulates FFT from output volume)
   const isPolledEngineActive =
-    elConversation.status === 'connected' || localConversation.status === 'connected';
+    elConversation.status === 'connected' || voiceboxConversation.status === 'connected';
   useEffect(() => {
     if (status !== 'active' || !isPolledEngineActive) {
       if (elPollRef.current) {
@@ -836,8 +946,8 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     }
 
     const poll = () => {
-      const vol = localConversation.status === 'connected'
-        ? localConversation.getOutputVolume()
+      const vol = voiceboxConversation.status === 'connected'
+        ? voiceboxConversation.getOutputVolume()
         : elConversation.getOutputVolume();
       setAudioLevel(vol);
 
@@ -864,14 +974,22 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
 
   async function startRealtime(currentSettings = settings) {
     try {
-      // Don't start if no API key
-      if (!currentSettings.apiKey) {
+      const isLocal = (currentSettings.apiMode ?? 'openai') === 'local';
+      const localProfile = getLocalAIProfile(currentSettings.localAIProfile);
+      const localAIBaseUrl = normalizeLocalAIBaseUrl(currentSettings.localAIBaseUrl);
+
+      // OpenAI needs a paid API key. LocalAI intentionally does not.
+      if (!isLocal && !currentSettings.apiKey) {
         console.warn('No API key found, skipping connection');
         return;
       }
 
+      if (isLocal) {
+        await ensureLocalAIReady(localAIBaseUrl, localProfile.pipelineModel, localProfile.label);
+      }
+
       console.log(
-        `%c[Jarvis] startRealtime() called at ${new Date().toLocaleTimeString()} — model: ${currentSettings.realtimeModel ?? 'gpt-realtime-2'}`,
+        `%c[Jarvis] startRealtime() called at ${new Date().toLocaleTimeString()} — model: ${isLocal ? localProfile.pipelineModel : (currentSettings.realtimeModel ?? 'gpt-realtime-2')}`,
         'background:#0d2137;color:#4fc3f7;font-weight:bold;padding:2px 6px;border-radius:3px'
       );
 
@@ -880,14 +998,30 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
       setLastError(null);
       
       // Get microphone access
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: false 
-        }
-      });
+      const microphoneId = currentSettings.microphoneDeviceId?.trim();
+      const audioConstraints: MediaTrackConstraints = {
+        ...(microphoneId ? { deviceId: { exact: microphoneId } } : {}),
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: false,
+      };
+
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
+      } catch (error) {
+        if (!microphoneId) throw error;
+        console.warn('[Jarvis] Selected microphone is unavailable; falling back to the system default.', error);
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            channelCount: 1,
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: false,
+          },
+        });
+      }
       localAudioStreamRef.current = stream;
       stream.getAudioTracks().forEach((track) => {
         track.enabled = !micMutedRef.current;
@@ -932,48 +1066,82 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
 
-      const model = currentSettings.realtimeModel ?? 'gpt-realtime-2';
+      // LocalAI uses a single JSON signaling exchange (no trickle-ICE
+      // endpoint), so its offer must contain the gathered ICE candidates.
+      if (isLocal && pc.iceGatheringState !== 'complete') {
+        await new Promise<void>((resolve) => {
+          const timeout = window.setTimeout(resolve, 10_000);
+          const onStateChange = () => {
+            if (pc.iceGatheringState === 'complete') {
+              window.clearTimeout(timeout);
+              pc.removeEventListener('icegatheringstatechange', onStateChange);
+              resolve();
+            }
+          };
+          pc.addEventListener('icegatheringstatechange', onStateChange);
+        });
+      }
 
-      const fd = new FormData();
-      fd.set('sdp', offer.sdp ?? '');
-      fd.set('session', JSON.stringify({
-        type: 'realtime',
-        model,
-        audio: {
-          input: {
-            noise_reduction: { type: 'far_field' },
-            transcription: {
-              model: 'gpt-4o-mini-transcribe',
-              language: 'en',
-              prompt: 'The speaker may address an assistant named Jarvis. Spell the wake word as Jarvis.',
+      let response: Response;
+      if (isLocal) {
+        response = await fetch(`${localAIBaseUrl}/v1/realtime/calls`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sdp: pc.localDescription?.sdp ?? offer.sdp ?? '',
+            model: localProfile.pipelineModel,
+          }),
+        });
+      } else {
+        const model = currentSettings.realtimeModel ?? 'gpt-realtime-2';
+        const fd = new FormData();
+        fd.set('sdp', offer.sdp ?? '');
+        fd.set('session', JSON.stringify({
+          type: 'realtime',
+          model,
+          audio: {
+            input: {
+              noise_reduction: { type: 'far_field' },
+              transcription: {
+                model: 'gpt-4o-mini-transcribe',
+                language: 'en',
+                prompt: 'The speaker may address an assistant named Jarvis. Spell the wake word as Jarvis.',
+              },
+              turn_detection: {
+                type: 'server_vad',
+                threshold: REALTIME_VAD_THRESHOLD,
+                prefix_padding_ms: 500,
+                silence_duration_ms: 650,
+                create_response: false,
+                interrupt_response: true,
+              },
             },
-            turn_detection: {
-              type: 'server_vad',
-              threshold: REALTIME_VAD_THRESHOLD,
-              prefix_padding_ms: 500,
-              silence_duration_ms: 650,
-              create_response: false,
-              interrupt_response: true,
-            },
+            output: { voice: currentSettings.voice ?? 'echo' },
           },
-          output: { voice: currentSettings.voice ?? 'echo' },
-        },
-      }));
+        }));
 
-      const response = await fetch('https://api.openai.com/v1/realtime/calls', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${currentSettings.apiKey}`,
-        },
-        body: fd,
-      });
+        response = await fetch('https://api.openai.com/v1/realtime/calls', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${currentSettings.apiKey}`,
+          },
+          body: fd,
+        });
+      }
 
       if (!response.ok) {
         const text = await response.text();
         throw new Error(`Failed to create realtime session: ${text}`);
       }
 
-      const answerSdp = await response.text();
+      let answerSdp: string;
+      if (isLocal) {
+        const call = await response.json() as { sdp?: string };
+        if (!call.sdp) throw new Error('LocalAI returned a realtime session without an SDP answer.');
+        answerSdp = call.sdp;
+      } else {
+        answerSdp = await response.text();
+      }
       const answer = { type: 'answer', sdp: answerSdp } as RTCSessionDescriptionInit;
       await pc.setRemoteDescription(answer);
 
@@ -991,33 +1159,62 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
           'background:#1a3a1a;color:#81c784;font-weight:bold;padding:2px 6px;border-radius:3px'
         );
 
-        const sessionConfig = {
-          type: 'session.update',
-          session: {
-            type: 'realtime',
-            instructions: buildAssistantInstructions(currentSettings.initialPrompt),
-            tool_choice: 'auto',
-            audio: {
-              input: {
-                noise_reduction: { type: 'far_field' },
-                transcription: {
-                  model: 'gpt-4o-mini-transcribe',
-                  language: 'en',
-                  prompt: 'The speaker may address an assistant named Jarvis. Spell the wake word as Jarvis.',
+        // LocalAI's pipeline owns ASR, TTS, and semantic turn detection. Sending
+        // OpenAI model names here would make it try to load unavailable backends.
+        const sessionConfig = isLocal
+          ? {
+              type: 'session.update',
+              session: {
+                type: 'realtime',
+                instructions: buildAssistantInstructions(currentSettings.initialPrompt, currentSettings.speechVocabulary),
+                tool_choice: 'auto',
+                max_output_tokens: 512,
+                audio: {
+                  input: {
+                    transcription: {
+                      model: localProfile.transcriptionModel,
+                      language: 'en',
+                      prompt: buildTranscriptionPrompt(currentSettings.speechVocabulary),
+                    },
+                    turn_detection: {
+                      type: 'semantic_vad',
+                      eagerness: 'high',
+                      create_response: false,
+                      interrupt_response: true,
+                    },
+                  },
+                  output: { voice: '26' },
                 },
-                turn_detection: {
-                  type: 'server_vad',
-                  threshold: REALTIME_VAD_THRESHOLD,
-                  prefix_padding_ms: 500,
-                  silence_duration_ms: 650,
-                  create_response: false,
-                  interrupt_response: true,
-                },
+                ...(enabledTools.length > 0 ? { tools: enabledTools } : { tools: [] }),
               },
-            },
-            ...(enabledTools.length > 0 ? { tools: enabledTools } : { tools: [] }),
-          },
-        };
+            }
+          : {
+              type: 'session.update',
+              session: {
+                type: 'realtime',
+                instructions: buildAssistantInstructions(currentSettings.initialPrompt, currentSettings.speechVocabulary),
+                tool_choice: 'auto',
+                audio: {
+                  input: {
+                    noise_reduction: { type: 'far_field' },
+                    transcription: {
+                      model: 'gpt-4o-mini-transcribe',
+                      language: 'en',
+                      prompt: 'The speaker may address an assistant named Jarvis. Spell the wake word as Jarvis.',
+                    },
+                    turn_detection: {
+                      type: 'server_vad',
+                      threshold: REALTIME_VAD_THRESHOLD,
+                      prefix_padding_ms: 500,
+                      silence_duration_ms: 650,
+                      create_response: false,
+                      interrupt_response: true,
+                    },
+                  },
+                },
+                ...(enabledTools.length > 0 ? { tools: enabledTools } : { tools: [] }),
+              },
+            };
 
         dc.send(JSON.stringify(sessionConfig));
         sessionStartTimeRef.current = Date.now();
@@ -1037,8 +1234,9 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
           const data = JSON.parse(event.data);
 
           if (data.type === 'error') {
-            console.error('OpenAI Realtime Error:', JSON.stringify(data.error));
-            emitError('openai', JSON.stringify(data.error));
+            const errorSource = isLocal ? 'local-ai' : 'openai';
+            console.error(`${isLocal ? 'LocalAI' : 'OpenAI'} Realtime Error:`, JSON.stringify(data.error));
+            emitError(errorSource, JSON.stringify(data.error));
           }
 
           if (data.type === 'session.updated') {
@@ -1073,6 +1271,8 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
             }
 
             if (musicIsPlaying) await duckMusic();
+            // Both providers wait for this gate, so background music cannot
+            // trigger speech or tools before the wake-word check completes.
             dc.send(JSON.stringify({ type: 'response.create' }));
             return;
           }
@@ -1239,7 +1439,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
 
       const overrideAgent: Record<string, unknown> = {};
       if (currentSettings.initialPrompt) {
-        overrideAgent.prompt = { prompt: buildAssistantInstructions(currentSettings.initialPrompt) };
+        overrideAgent.prompt = { prompt: buildAssistantInstructions(currentSettings.initialPrompt, currentSettings.speechVocabulary) };
       }
       if (currentSettings.elevenLabsFirstMessage?.trim()) overrideAgent.firstMessage = currentSettings.elevenLabsFirstMessage.trim();
       const overrides = Object.keys(overrideAgent).length > 0 ? { agent: overrideAgent } : undefined;
@@ -1256,7 +1456,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     }
   }
 
-  async function startLocal(currentSettings = settings) {
+  async function startVoicebox(currentSettings = settings) {
     try {
       // Tear down any OpenAI WebRTC leftovers (mirrors startElevenLabs).
       if (peerConnectionRef.current) {
@@ -1279,14 +1479,14 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
       setLastError(null);
 
       const provider = currentSettings.brainProvider ?? 'openai';
-      await localConversation.startSession({
+      await voiceboxConversation.startSession({
         provider,
         model:
           currentSettings.chatModel?.trim() ||
           (provider === 'claude' ? DEFAULT_CLAUDE_CHAT_MODEL : DEFAULT_OPENAI_CHAT_MODEL),
         // Same music routing as the Realtime/ElevenLabs engines; the hook's
         // system prompt already appends the navigate_to_page caveat.
-        initialPrompt: currentSettings.initialPrompt + '\n\n' + MUSIC_TOOL_ROUTING_INSTRUCTIONS,
+        initialPrompt: buildAssistantInstructions(currentSettings.initialPrompt, currentSettings.speechVocabulary),
         firstMessage: currentSettings.localFirstMessage?.trim() || undefined,
         voiceProfileId: currentSettings.voiceboxProfileId?.trim() || undefined,
         playbackRate: currentSettings.voicePlaybackRate,
@@ -1295,7 +1495,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
       });
     } catch (error) {
       // Status/error state is set by the hook's onError callback.
-      console.error('Error starting local session:', error);
+      console.error('Error starting Voicebox session:', error);
     }
   }
 
@@ -1303,9 +1503,10 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     const mode = currentSettings.apiMode ?? 'openai';
     if (mode === 'elevenlabs') {
       await startElevenLabs(currentSettings);
-    } else if (mode === 'local') {
-      await startLocal(currentSettings);
+    } else if (mode === 'voicebox') {
+      await startVoicebox(currentSettings);
     } else {
+      // Both OpenAI and LocalAI use the realtime/WebRTC transport.
       await startRealtime(currentSettings);
     }
   }
@@ -1341,8 +1542,8 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     }
     // ElevenLabs cleanup (fire-and-forget; may return undefined if not connected)
     try { elConversation.endSession(); } catch { /* no active session */ }
-    // Local engine cleanup (VAD, playback, history)
-    try { localConversation.endSession(); } catch { /* no active session */ }
+    // Voicebox cleanup (VAD, playback, history)
+    try { voiceboxConversation.endSession(); } catch { /* no active session */ }
     setStatus('idle');
   }
 
@@ -1358,7 +1559,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     });
 
     try { elConversation.setMuted(muted); } catch { /* ElevenLabs session may be inactive */ }
-    try { localConversation.setMuted(muted); } catch { /* local session may be inactive */ }
+    try { voiceboxConversation.setMuted(muted); } catch { /* Voicebox session may be inactive */ }
     if (desktopModeRef.current) {
       window.electron?.setDesktopPanelMuted?.(muted);
     }
@@ -1370,10 +1571,10 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
       autoReconnectRef.current = false;
     } else {
       // User unmuted — if the session died while muted, revive it now.
-      // The local engine has no WebRTC connection; its session stays alive
+      // Voicebox has no WebRTC connection; its session stays alive
       // while muted, so a restart is only needed if it actually dropped.
       const sessionAlive =
-        (settings.apiMode === 'local' && localConversation.status === 'connected') ||
+        (settings.apiMode === 'voicebox' && voiceboxConversation.status === 'connected') ||
         (peerConnectionRef.current !== null &&
           (peerConnectionRef.current.connectionState === 'connected' ||
             peerConnectionRef.current.connectionState === 'connecting'));
@@ -1412,10 +1613,11 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
 
     const mode = settings.apiMode ?? 'openai';
     const shouldStart =
+      mode === 'local' ||
       (mode === 'elevenlabs' && !!settings.elevenLabsAgentId?.trim()) ||
       (mode === 'openai' && !!settings.apiKey) ||
       // Voicebox engine needs the API key matching its brain provider
-      (mode === 'local' &&
+      (mode === 'voicebox' &&
         (settings.brainProvider === 'claude' ? !!settings.claudeApiKey : !!settings.apiKey));
 
     console.log(
@@ -1431,23 +1633,23 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
       if (startTimer !== null) window.clearTimeout(startTimer);
       disconnect();
     };
-  }, [settings.apiKey, settings.apiMode, restartTrigger, dynamicState.loaded]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [settings.apiKey, settings.claudeApiKey, settings.brainProvider, settings.apiMode, settings.localAIProfile, settings.localAIBaseUrl, settings.microphoneDeviceId, restartTrigger, dynamicState.loaded]); // eslint-disable-line react-hooks/exhaustive-deps
 
 
   const handleSaveSettings = (newSettings: JarvisSettings) => {
     setSettings(newSettings);
     const serialised = JSON.stringify(newSettings);
     localStorage.setItem('jarvis_settings', serialised);
-    // Only write to server if at least one key credential is present, so a
-    // race-triggered blank save can never overwrite a good server config.
-    const hasCredentials =
+    // Local mode is valid without a credential. Other modes still require one,
+    // so a race-triggered blank save cannot overwrite a good server config.
+    const hasShareableConfig =
       (newSettings.apiMode === 'openai'      && !!newSettings.apiKey?.trim()) ||
       (newSettings.apiMode === 'elevenlabs'  && !!newSettings.elevenLabsAgentId?.trim()) ||
-      (newSettings.apiMode === 'local'   &&
+      (newSettings.apiMode === 'voicebox' &&
         (newSettings.brainProvider === 'claude'
           ? !!newSettings.claudeApiKey?.trim()
           : !!newSettings.apiKey?.trim()));
-    if (hasCredentials) {
+    if (hasShareableConfig) {
       saveServerSettings({ jarvis_settings: serialised });
     }
     setIsSettingsOpen(false);
