@@ -27,7 +27,10 @@ import {
   hasUsableVoiceEngineConfig,
   migrateLegacyVoiceboxMode,
 } from '@/frontend/lib/voiceEngineMode';
-import { useVoiceSessionState } from '@/frontend/lib/voiceSession';
+import {
+  releaseRealtimeTransport,
+  useVoiceSessionState,
+} from '@/frontend/lib/voiceSession';
 
 const FFT_BARS = 64;
 // Keep speaker bleed and song vocals below the activation point while still
@@ -361,6 +364,16 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
   });
   const musicDuckRequestRef = useRef<Promise<void> | null>(null);
   const musicRestoreTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function releaseRealtimeResources(): void {
+    const errors = releaseRealtimeTransport({
+      peerConnection: peerConnectionRef,
+      dataChannel: dataChannelRef,
+      remoteStream: remoteStreamRef,
+      localStream: localAudioStreamRef,
+    });
+    if (errors.length > 0) console.warn('[Jarvis] Realtime resource cleanup had errors:', errors);
+  }
 
   function appendChatMessage(role: ChatMessage['role'], rawText: string): void {
     const text = rawText.trim();
@@ -1611,22 +1624,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     try {
       // Only tear down OpenAI WebRTC — do NOT call endSession() here because
       // the ElevenLabs SDK queues it and will fire it on the session we're about to open.
-      if (peerConnectionRef.current) {
-        peerConnectionRef.current.close();
-        peerConnectionRef.current = null;
-      }
-      if (dataChannelRef.current) {
-        dataChannelRef.current.close();
-        dataChannelRef.current = null;
-      }
-      if (remoteStreamRef.current) {
-        remoteStreamRef.current.getTracks().forEach(t => t.stop());
-        remoteStreamRef.current = null;
-      }
-      if (localAudioStreamRef.current) {
-        localAudioStreamRef.current.getTracks().forEach(t => t.stop());
-        localAudioStreamRef.current = null;
-      }
+      releaseRealtimeResources();
       voiceSession.starting();
 
       await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -1659,22 +1657,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
   async function startVoicebox(currentSettings = settings) {
     try {
       // Tear down any OpenAI WebRTC leftovers (mirrors startElevenLabs).
-      if (peerConnectionRef.current) {
-        peerConnectionRef.current.close();
-        peerConnectionRef.current = null;
-      }
-      if (dataChannelRef.current) {
-        dataChannelRef.current.close();
-        dataChannelRef.current = null;
-      }
-      if (remoteStreamRef.current) {
-        remoteStreamRef.current.getTracks().forEach(t => t.stop());
-        remoteStreamRef.current = null;
-      }
-      if (localAudioStreamRef.current) {
-        localAudioStreamRef.current.getTracks().forEach(t => t.stop());
-        localAudioStreamRef.current = null;
-      }
+      releaseRealtimeResources();
       voiceSession.starting();
 
       const provider = currentSettings.brainProvider ?? 'openai';
@@ -1724,23 +1707,8 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
       clearTimeout(reconnectTimerRef.current);
       reconnectTimerRef.current = null;
     }
-    // OpenAI WebRTC cleanup
-    if (peerConnectionRef.current) {
-      peerConnectionRef.current.close();
-      peerConnectionRef.current = null;
-    }
-    if (dataChannelRef.current) {
-      dataChannelRef.current.close();
-      dataChannelRef.current = null;
-    }
-    if (remoteStreamRef.current) {
-      remoteStreamRef.current.getTracks().forEach(t => t.stop());
-      remoteStreamRef.current = null;
-    }
-    if (localAudioStreamRef.current) {
-      localAudioStreamRef.current.getTracks().forEach(t => t.stop());
-      localAudioStreamRef.current = null;
-    }
+    // OpenAI/LocalAI WebRTC cleanup
+    releaseRealtimeResources();
     // ElevenLabs cleanup (fire-and-forget; may return undefined if not connected)
     try { elConversation.endSession(); } catch { /* no active session */ }
     // Voicebox cleanup (VAD, playback, history)
