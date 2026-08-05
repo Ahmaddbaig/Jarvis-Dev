@@ -10,6 +10,7 @@ import {
   LOCAL_AI_PROFILES,
   LocalAIProfile,
 } from '@/frontend/lib/localAIProfiles';
+import type { VoiceEngineMode } from '@/frontend/lib/voiceEngineMode';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -28,7 +29,7 @@ export type JarvisPosition = 'center' | 'bottom-left' | 'bottom-right' | 'top-le
 export type RealtimeModel = 'gpt-realtime-2' | 'gpt-realtime-1.5' | 'gpt-realtime-mini';
 
 export interface JarvisSettings {
-  apiMode: 'openai' | 'elevenlabs' | 'local';
+  apiMode: VoiceEngineMode;
   apiKey: string;
   realtimeModel?: RealtimeModel;
   localAIProfile?: LocalAIProfile;
@@ -37,6 +38,17 @@ export interface JarvisSettings {
   speechVocabulary?: string;
   elevenLabsAgentId?: string;
   elevenLabsFirstMessage?: string;
+  /** Brain provider for the Voicebox engine: OpenAI or Claude (Anthropic). */
+  brainProvider?: 'openai' | 'claude';
+  /** Chat model for the Voicebox engine's brain (e.g. gpt-4o-mini, claude-opus-5). */
+  chatModel?: string;
+  /** Anthropic API key, used when brainProvider is 'claude'. */
+  claudeApiKey?: string;
+  /** Voicebox voice profile id; empty = auto-created "Jarvis" preset voice. */
+  voiceboxProfileId?: string;
+  /** Pitch-preserving Voicebox playback rate. */
+  voicePlaybackRate?: number;
+  localFirstMessage?: string;
   voice: 'alloy' | 'ash' | 'ballad' | 'coral' | 'echo' | 'sage' | 'shimmer' | 'verse' | 'marin' | 'cedar';
   initialPrompt: string;
   enabledFunctions: string[];
@@ -135,6 +147,10 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
     setIsMacElectron(window.electron?.platform === 'darwin');
   }, []);
 
+  // Voicebox engine status (OpenAI brain + Voicebox profiles)
+  const [brainStatus, setBrainStatus] = useState<{ ok: boolean; error?: string } | null>(null);
+  const [voiceboxStatus, setVoiceboxStatus] = useState<{ ok: boolean; profiles: { id: string; name: string }[]; error?: string } | null>(null);
+
   useEffect(() => {
     if (isOpen) {
       setSettings(initialSettings);
@@ -143,6 +159,23 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
       setDiagError(null);
     }
   }, [isOpen, initialSettings]);
+
+  // Probe brain + Voicebox whenever the Voicebox engine is selected
+  const isVoiceboxMode = settings.apiMode === 'voicebox';
+  const brainProvider = settings.brainProvider ?? 'openai';
+  useEffect(() => {
+    if (!isOpen || !isVoiceboxMode) return;
+    let cancelled = false;
+    fetch(`/api/voice/chat?provider=${brainProvider}`)
+      .then((res) => res.json())
+      .then((data) => { if (!cancelled) setBrainStatus(data); })
+      .catch(() => { if (!cancelled) setBrainStatus({ ok: false, error: 'Status check failed' }); });
+    fetch('/api/voice/profiles')
+      .then((res) => res.json())
+      .then((data) => { if (!cancelled) setVoiceboxStatus(data); })
+      .catch(() => { if (!cancelled) setVoiceboxStatus({ ok: false, profiles: [], error: 'Status check failed' }); });
+    return () => { cancelled = true; };
+  }, [isOpen, isVoiceboxMode, brainProvider]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -340,13 +373,14 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
               {/* API Mode switcher */}
               <div className="space-y-2">
                 <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">Voice Engine</label>
-                <div className="grid grid-cols-3 gap-2">
-                  {(['openai', 'local', 'elevenlabs'] as const).map((mode) => {
+                <div className="grid grid-cols-2 gap-2">
+                  {(['openai', 'local', 'voicebox', 'elevenlabs'] as const).map((mode) => {
                     const active = (settings.apiMode ?? 'openai') === mode;
-                    const labels = { openai: 'OpenAI', local: 'Local AI', elevenlabs: 'ElevenLabs' };
+                    const labels = { openai: 'OpenAI', local: 'Local AI', voicebox: 'Voicebox', elevenlabs: 'ElevenLabs' };
                     const descs  = {
                       openai: 'Paid Realtime API',
                       local: 'Free on this Mac',
+                      voicebox: 'Claude or OpenAI + same cloned voice',
                       elevenlabs: 'Hosted voice agent',
                     };
                     return (
@@ -369,8 +403,9 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
                 </div>
               </div>
 
-              {/* OpenAI fields */}
-              {(settings.apiMode ?? 'openai') === 'openai' && (
+              {/* OpenAI fields — the key also powers the Voicebox engine's OpenAI brain */}
+              {((settings.apiMode ?? 'openai') === 'openai' ||
+                (settings.apiMode === 'voicebox' && brainProvider === 'openai')) && (
                 <div className="space-y-2">
                   <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">OpenAI API Key</label>
                   <input
@@ -520,6 +555,160 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
                       className="w-full bg-cyan-950/20 border border-cyan-500/30 rounded px-3 py-2 text-cyan-100 focus:outline-none focus:border-cyan-400 focus:shadow-[0_0_10px_rgba(34,211,238,0.3)] transition-all font-mono text-sm"
                     />
                     <p className="text-xs text-cyan-700">Leave empty to use the agent&apos;s default greeting.</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Voicebox engine fields */}
+              {(settings.apiMode ?? 'openai') === 'voicebox' && (
+                <div className="space-y-4">
+                  {/* Service status */}
+                  <div className="space-y-1 text-xs font-mono">
+                    <p className={brainStatus?.ok ? 'text-green-400' : 'text-red-400'}>
+                      ● Brain ({brainProvider === 'claude' ? 'Claude API' : 'OpenAI API'}) {brainStatus === null ? '— checking…' : brainStatus.ok ? 'ready' : `not ready — ${brainStatus.error ?? 'no API key'}`}
+                    </p>
+                    <p className={voiceboxStatus?.ok ? 'text-green-400' : 'text-red-400'}>
+                      ● Voicebox {voiceboxStatus === null ? '— checking…' : voiceboxStatus.ok ? 'online' : `offline — ${voiceboxStatus.error ?? 'not reachable'}`}
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">Brain Provider</label>
+                    <select
+                      value={brainProvider}
+                      onChange={(e) => {
+                        sfx('select', 0.5);
+                        const provider = e.target.value === 'claude' ? 'claude' as const : 'openai' as const;
+                        setSettings({
+                          ...settings,
+                          brainProvider: provider,
+                          // Reset to the provider's default model so a GPT model
+                          // is never sent to the Claude API or vice versa.
+                          chatModel: provider === 'claude' ? 'claude-haiku-4-5' : 'gpt-4o-mini',
+                        });
+                      }}
+                      className="w-full bg-cyan-950/20 border border-cyan-500/30 rounded px-3 py-2 text-cyan-100 focus:outline-none focus:border-cyan-400 focus:shadow-[0_0_10px_rgba(34,211,238,0.3)] transition-all font-mono text-sm"
+                    >
+                      <option value="openai" className="bg-slate-900">OpenAI (GPT)</option>
+                      <option value="claude" className="bg-slate-900">Claude (Anthropic)</option>
+                    </select>
+                  </div>
+
+                  {brainProvider === 'claude' && (
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">Claude API Key</label>
+                      <input
+                        type="password"
+                        value={settings.claudeApiKey ?? ''}
+                        onChange={(e) => setSettings({ ...settings, claudeApiKey: e.target.value })}
+                        placeholder="sk-ant-..."
+                        className="w-full bg-cyan-950/20 border border-cyan-500/30 rounded px-3 py-2 text-cyan-100 focus:outline-none focus:border-cyan-400 focus:shadow-[0_0_10px_rgba(34,211,238,0.3)] transition-all font-mono text-sm"
+                      />
+                    </div>
+                  )}
+
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">
+                      Brain Model ({brainProvider === 'claude' ? 'Claude' : 'OpenAI'})
+                    </label>
+                    <div className="grid grid-cols-3 gap-2">
+                      {(brainProvider === 'claude'
+                        ? ['claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5']
+                        : ['gpt-4o-mini', 'gpt-4.1-mini', 'gpt-4o']
+                      ).map((model) => {
+                        const fallback = brainProvider === 'claude' ? 'claude-haiku-4-5' : 'gpt-4o-mini';
+                        const active = (settings.chatModel ?? fallback) === model;
+                        return (
+                          <button
+                            key={model}
+                            onClick={() => { sfx('select', 0.5); setSettings({ ...settings, chatModel: model }); }}
+                            className={`px-3 py-2 border rounded text-xs font-mono text-left transition-all ${
+                              active
+                                ? 'bg-cyan-500/20 border-cyan-400 text-cyan-300 shadow-[0_0_10px_rgba(34,211,238,0.2)]'
+                                : 'bg-transparent border-cyan-500/20 text-cyan-600 hover:border-cyan-500/50 hover:text-cyan-400'
+                            }`}
+                          >
+                            {model}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <input
+                      type="text"
+                      value={settings.chatModel ?? (brainProvider === 'claude' ? 'claude-haiku-4-5' : 'gpt-4o-mini')}
+                      onChange={(e) => setSettings({ ...settings, chatModel: e.target.value })}
+                      placeholder={brainProvider === 'claude' ? 'claude-haiku-4-5' : 'gpt-4o-mini'}
+                      className="w-full bg-cyan-950/20 border border-cyan-500/30 rounded px-3 py-2 text-cyan-100 focus:outline-none focus:border-cyan-400 focus:shadow-[0_0_10px_rgba(34,211,238,0.3)] transition-all font-mono text-sm"
+                    />
+                    <p className="text-xs text-cyan-700">
+                      {brainProvider === 'claude'
+                        ? 'Uses the Claude API key above. Any Claude model with tool calling works.'
+                        : 'Uses the OpenAI API key above. Any chat model with tool calling works.'}
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">Voice (Voicebox profile)</label>
+                    {voiceboxStatus?.ok && voiceboxStatus.profiles.length > 0 ? (
+                      <div className="grid grid-cols-2 gap-2">
+                        {voiceboxStatus.profiles.map((profile) => {
+                          const active = (settings.voiceboxProfileId ?? '') === profile.id
+                            || (!settings.voiceboxProfileId && profile.name === 'Jarvis');
+                          return (
+                            <button
+                              key={profile.id}
+                              onClick={() => { sfx('select', 0.5); setSettings({ ...settings, voiceboxProfileId: profile.id }); }}
+                              className={`px-3 py-2 border rounded text-xs text-left transition-all ${
+                                active
+                                  ? 'bg-cyan-500/20 border-cyan-400 text-cyan-300 shadow-[0_0_10px_rgba(34,211,238,0.2)]'
+                                  : 'bg-transparent border-cyan-500/20 text-cyan-600 hover:border-cyan-500/50 hover:text-cyan-400'
+                              }`}
+                            >
+                              {profile.name}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-cyan-700">
+                        A &quot;Jarvis&quot; voice (British male) is created automatically on first use.
+                        Clone your own in the Voicebox app and it will appear here.
+                      </p>
+                    )}
+                    <p className="text-[10px] text-cyan-700">
+                      The selected Voicebox profile stays the same when you switch the brain between Claude and OpenAI.
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">Speaking Speed</label>
+                      <span className="text-xs font-mono text-cyan-300">
+                        {(settings.voicePlaybackRate ?? 0.8).toFixed(2)}×
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0.7"
+                      max="1"
+                      step="0.05"
+                      value={settings.voicePlaybackRate ?? 0.8}
+                      onChange={(e) => setSettings({ ...settings, voicePlaybackRate: Number(e.target.value) })}
+                      className="w-full accent-cyan-400"
+                    />
+                    <p className="text-xs text-cyan-700">Slows the cloned voice while preserving its pitch. Default: 0.80×.</p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">First Message <span className="text-cyan-700 normal-case font-normal">(optional)</span></label>
+                    <input
+                      type="text"
+                      value={settings.localFirstMessage ?? ''}
+                      onChange={(e) => setSettings({ ...settings, localFirstMessage: e.target.value })}
+                      placeholder="Good evening, sir. All systems online."
+                      className="w-full bg-cyan-950/20 border border-cyan-500/30 rounded px-3 py-2 text-cyan-100 focus:outline-none focus:border-cyan-400 focus:shadow-[0_0_10px_rgba(34,211,238,0.3)] transition-all font-mono text-sm"
+                    />
+                    <p className="text-xs text-cyan-700">Spoken when the session starts. Leave empty for silence.</p>
                   </div>
                 </div>
               )}

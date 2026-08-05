@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { mapProviderErrorResponse, searchLocations } from '@/backend/maps/providers';
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -6,17 +7,11 @@ export async function GET(request: Request) {
   if (!q) return NextResponse.json({ error: 'Missing query' }, { status: 400 });
 
   try {
-    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=5&addressdetails=1`;
-    const res = await fetch(url, {
-      headers: {
-        'User-Agent': 'JarvisClient/1.0 (personal desktop assistant)',
-        Accept: 'application/json',
-      },
-    });
-    if (!res.ok) return NextResponse.json({ error: `Nominatim HTTP ${res.status}` }, { status: 502 });
-    const data = await res.json();
-    return NextResponse.json(data);
+    const requestedLimit = Number(searchParams.get('limit') ?? 5);
+    const limit = Number.isFinite(requestedLimit) ? requestedLimit : 5;
+    return NextResponse.json(await searchLocations(q, limit));
   } catch (err) {
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    const { message, status } = mapProviderErrorResponse(err);
+    return NextResponse.json({ error: message }, { status });
   }
 }

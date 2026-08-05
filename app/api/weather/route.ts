@@ -1,4 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
+import {
+  MapProviderError,
+  mapProviderErrorResponse,
+  parseMapCoordinate,
+  reverseLocation,
+} from '@/backend/maps/providers';
 
 const W = (file: string) => `/assets/Weather/${file}`;
 
@@ -35,20 +41,22 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const [weatherRes, geoRes] = await Promise.all([
-      fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true&temperature_unit=fahrenheit&windspeed_unit=mph&daily=temperature_2m_max,temperature_2m_min&timezone=auto`),
-      fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json`, {
-        headers: { 'User-Agent': 'JarvisClient/1.0' },
+    const latitude = parseMapCoordinate(lat, 'latitude');
+    const longitude = parseMapCoordinate(lon, 'longitude');
+    const [weatherRes, geoData] = await Promise.all([
+      fetch(`https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current_weather=true&temperature_unit=fahrenheit&windspeed_unit=mph&daily=temperature_2m_max,temperature_2m_min&timezone=auto`, {
+        signal: AbortSignal.timeout(12_000),
       }),
+      reverseLocation(latitude, longitude),
     ]);
+
+    if (!weatherRes.ok) {
+      throw new MapProviderError(`Weather service returned HTTP ${weatherRes.status}.`);
+    }
 
     const weatherData = await weatherRes.json() as {
       current_weather: { temperature: number; windspeed: number; weathercode: number; is_day: number };
       daily?: { temperature_2m_max: number[]; temperature_2m_min: number[] };
-    };
-
-    const geoData = await geoRes.json() as {
-      address?: { city?: string; town?: string; village?: string; state?: string };
     };
 
     const cw   = weatherData.current_weather;
@@ -69,6 +77,7 @@ export async function GET(req: NextRequest) {
       low:  weatherData.daily?.temperature_2m_min?.[0] != null ? Math.round(weatherData.daily.temperature_2m_min[0]) : null,
     });
   } catch (err) {
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    const { message, status } = mapProviderErrorResponse(err);
+    return NextResponse.json({ error: message }, { status });
   }
 }

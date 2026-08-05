@@ -35,6 +35,9 @@ export type ServerSettings = {
 
   // News
   jarvis_news_settings?: string;   // JSON-serialised NewsSettings object
+
+  // Voicebox voice engine
+  jarvis_voicebox_url?: string;    // default http://127.0.0.1:17493
 };
 
 // ── In-memory cache so widgets can read settings synchronously after boot ──

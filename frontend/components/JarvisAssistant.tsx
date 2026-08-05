@@ -17,11 +17,16 @@ import { PhotoWidget, PhotoEntry } from './PhotoWidget';
 import { sfx } from '@/frontend/lib/sfx';
 import { installErrorInterceptors, emitError } from '@/frontend/lib/errorBus';
 import { loadServerSettings, saveServerSettings } from '@/frontend/lib/serverSettings';
+import { useLocalConversation } from '@/frontend/lib/localVoice/useLocalConversation';
 import {
   DEFAULT_LOCAL_AI_BASE_URL,
   getLocalAIProfile,
   normalizeLocalAIBaseUrl,
 } from '@/frontend/lib/localAIProfiles';
+import {
+  hasUsableVoiceEngineConfig,
+  migrateLegacyVoiceboxMode,
+} from '@/frontend/lib/voiceEngineMode';
 
 const FFT_BARS = 64;
 // Keep speaker bleed and song vocals below the activation point while still
@@ -101,6 +106,12 @@ function hasJarvisWakeWord(transcript: string): boolean {
   return /\b(?:jarvis|jervis)\b/i.test(transcript);
 }
 
+// Brain for the Voicebox engine — per-provider defaults, swappable in Settings.
+// Haiku is the default Claude brain: spoken replies need sub-second first
+// tokens, and the reasoning-tier models think for seconds before speaking.
+const DEFAULT_OPENAI_CHAT_MODEL = 'gpt-4o-mini';
+const DEFAULT_CLAUDE_CHAT_MODEL = 'claude-haiku-4-5';
+
 async function ensureLocalAIReady(baseUrl: string, pipelineModel: string, profileLabel: string): Promise<void> {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), 5_000);
@@ -142,7 +153,6 @@ async function ensureLocalAIReady(baseUrl: string, pipelineModel: string, profil
     window.clearTimeout(timeout);
   }
 }
-
 const DEFAULT_SETTINGS: JarvisSettings = {
   apiMode: 'openai',
   apiKey: '',
@@ -152,6 +162,10 @@ const DEFAULT_SETTINGS: JarvisSettings = {
   speechVocabulary: '',
   elevenLabsAgentId: '',
   elevenLabsFirstMessage: '',
+  brainProvider: 'openai',
+  chatModel: DEFAULT_OPENAI_CHAT_MODEL,
+  claudeApiKey: '',
+  voicePlaybackRate: 0.8,
   voice: 'echo',
   initialPrompt: 'You are Jarvis, a helpful AI assistant. You are always helpful, polite, and concise. Subtle British accent. Robotic. Emotionally controlled. Witty and a little bit poking fun at the user.',
   enabledFunctions: ['desktop_mode', 'navigate_to_page', 'jarvis_disconnect', 'play_spotify'],
@@ -522,6 +536,25 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     }
   }
 
+  // Voicebox voice engine — Claude or OpenAI brain + one shared Voicebox voice
+  const voiceboxConversation = useLocalConversation({
+    onConnect: () => setStatus('active'),
+    onDisconnect: () => {
+      void restoreMusicVolume();
+      if (statusRef.current !== 'idle') setStatus('idle');
+    },
+    onError: (message) => {
+      setStatus('error');
+      setLastError(message);
+      emitError('voicebox', message);
+    },
+    onMessage: ({ message, role }) => appendChatMessage(role, message),
+    onModeChange: ({ mode }) => {
+      if (mode === 'speaking') void duckMusic();
+      else scheduleMusicRestore(500);
+    },
+  });
+
   // Photo context state
   const [photos, setPhotos] = useState<PhotoEntry[]>([]);
   const photosRef = useRef<PhotoEntry[]>([]);
@@ -714,6 +747,14 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
   function injectPhotosIntoSession(currentPhotos: PhotoEntry[]) {
     if (currentPhotos.length === 0) return;
 
+    // Local path — text-only contextual update (local text model has no vision)
+    if (voiceboxConversation.status === 'connected') {
+      voiceboxConversation.sendContextualUpdate(
+        `The user currently has ${currentPhotos.length} image${currentPhotos.length > 1 ? 's' : ''} on screen for visual context.`,
+      );
+      return;
+    }
+
     // ElevenLabs path — send text-only contextual update (no vision support via client SDK)
     if (elConversation.status === 'connected') {
       Promise.resolve(
@@ -749,6 +790,14 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
   function injectPastedHudTextIntoSession(rawText: string) {
     const trimmed = rawText.trim();
     if (!trimmed) return;
+
+    // Local path
+    if (voiceboxConversation.status === 'connected') {
+      voiceboxConversation.sendContextualUpdate(
+        'The user pasted the following text onto the HUD (it also appears in a TEXT NOTE widget). Treat it as context for what they want to discuss:\n\n' + trimmed,
+      );
+      return;
+    }
 
     // ElevenLabs path
     if (elConversation.status === 'connected') {
@@ -831,26 +880,18 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
 
         const parseConfig = (raw: string | null): Partial<JarvisSettings> | null => {
           try {
-            return JSON.parse(raw ?? '{}') as Partial<JarvisSettings>;
+            const parsed = JSON.parse(raw ?? '{}') as Partial<JarvisSettings>;
+            return migrateLegacyVoiceboxMode(parsed);
           } catch {
             return null;
           }
-        };
-        const hasUsableConfig = (parsed: Partial<JarvisSettings> | null, allowLocal: boolean): boolean => {
-          if (parsed) {
-            const mode = parsed.apiMode ?? 'openai';
-            if (mode === 'local') return allowLocal;
-            if (mode === 'elevenlabs') return !!parsed.elevenLabsAgentId?.trim();
-            return !!parsed.apiKey?.trim();
-          }
-          return false;
         };
         const serverConfig = parseConfig(serverRaw ?? null);
         const localConfig = parseConfig(localRaw);
         // A 127.0.0.1 LocalAI URL belongs to this Mac, never to every LAN
         // browser that shares server settings.
-        const serverHasConfig = hasUsableConfig(serverConfig, false);
-        const localHasConfig = hasUsableConfig(localConfig, localAIAllowedHere);
+        const serverHasConfig = hasUsableVoiceEngineConfig(serverConfig, false);
+        const localHasConfig = hasUsableVoiceEngineConfig(localConfig, localAIAllowedHere);
         const localWantsLocal = localConfig?.apiMode === 'local' && localAIAllowedHere;
 
         const selectedConfig = localWantsLocal
@@ -1066,9 +1107,11 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     };
   }, [status]);
 
-  // ElevenLabs audio level polling (simulates FFT from output volume)
+  // ElevenLabs / local-engine audio level polling (simulates FFT from output volume)
+  const isPolledEngineActive =
+    elConversation.status === 'connected' || voiceboxConversation.status === 'connected';
   useEffect(() => {
-    if (status !== 'active' || elConversation.status !== 'connected') {
+    if (status !== 'active' || !isPolledEngineActive) {
       if (elPollRef.current) {
         cancelAnimationFrame(elPollRef.current);
         elPollRef.current = null;
@@ -1077,7 +1120,9 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     }
 
     const poll = () => {
-      const vol = elConversation.getOutputVolume();
+      const vol = voiceboxConversation.status === 'connected'
+        ? voiceboxConversation.getOutputVolume()
+        : elConversation.getOutputVolume();
       setAudioLevel(vol);
 
       const t = Date.now() / 250;
@@ -1099,7 +1144,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
         elPollRef.current = null;
       }
     };
-  }, [status, elConversation.status]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [status, isPolledEngineActive]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function startRealtime(currentSettings = settings) {
     try {
@@ -1612,10 +1657,57 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     }
   }
 
+  async function startVoicebox(currentSettings = settings) {
+    try {
+      // Tear down any OpenAI WebRTC leftovers (mirrors startElevenLabs).
+      if (peerConnectionRef.current) {
+        peerConnectionRef.current.close();
+        peerConnectionRef.current = null;
+      }
+      if (dataChannelRef.current) {
+        dataChannelRef.current.close();
+        dataChannelRef.current = null;
+      }
+      if (remoteStreamRef.current) {
+        remoteStreamRef.current.getTracks().forEach(t => t.stop());
+        remoteStreamRef.current = null;
+      }
+      if (localAudioStreamRef.current) {
+        localAudioStreamRef.current.getTracks().forEach(t => t.stop());
+        localAudioStreamRef.current = null;
+      }
+      setStatus('listening');
+      setLastError(null);
+
+      const provider = currentSettings.brainProvider ?? 'openai';
+      await voiceboxConversation.startSession({
+        provider,
+        model:
+          currentSettings.chatModel?.trim() ||
+          (provider === 'claude' ? DEFAULT_CLAUDE_CHAT_MODEL : DEFAULT_OPENAI_CHAT_MODEL),
+        // Same music routing as the Realtime/ElevenLabs engines; the hook's
+        // system prompt already appends the navigate_to_page caveat.
+        initialPrompt: buildAssistantInstructions(currentSettings.initialPrompt, currentSettings.speechVocabulary),
+        firstMessage: currentSettings.localFirstMessage?.trim() || undefined,
+        voiceProfileId: currentSettings.voiceboxProfileId?.trim() || undefined,
+        playbackRate: currentSettings.voicePlaybackRate,
+        enabledFunctionNames: currentSettings.enabledFunctions,
+        getFunctions: () => (dynamicState.loaded ? dynamicState.allFunctions : FUNCTION_REGISTRY),
+      });
+    } catch (error) {
+      // Status/error state is set by the hook's onError callback.
+      console.error('Error starting Voicebox session:', error);
+    }
+  }
+
   async function start(currentSettings = settings) {
-    if ((currentSettings.apiMode ?? 'openai') === 'elevenlabs') {
+    const mode = currentSettings.apiMode ?? 'openai';
+    if (mode === 'elevenlabs') {
       await startElevenLabs(currentSettings);
+    } else if (mode === 'voicebox') {
+      await startVoicebox(currentSettings);
     } else {
+      // Both OpenAI and LocalAI use the realtime/WebRTC transport.
       await startRealtime(currentSettings);
     }
   }
@@ -1653,6 +1745,8 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     }
     // ElevenLabs cleanup (fire-and-forget; may return undefined if not connected)
     try { elConversation.endSession(); } catch { /* no active session */ }
+    // Voicebox cleanup (VAD, playback, history)
+    try { voiceboxConversation.endSession(); } catch { /* no active session */ }
     setStatus('idle');
   }
 
@@ -1668,6 +1762,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     });
 
     try { elConversation.setMuted(muted); } catch { /* ElevenLabs session may be inactive */ }
+    try { voiceboxConversation.setMuted(muted); } catch { /* Voicebox session may be inactive */ }
     if (desktopModeRef.current) {
       window.electron?.setDesktopPanelMuted?.(muted);
     }
@@ -1679,10 +1774,13 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
       autoReconnectRef.current = false;
     } else {
       // User unmuted — if the session died while muted, revive it now.
+      // Voicebox has no WebRTC connection; its session stays alive
+      // while muted, so a restart is only needed if it actually dropped.
       const sessionAlive =
-        peerConnectionRef.current !== null &&
-        (peerConnectionRef.current.connectionState === 'connected' ||
-          peerConnectionRef.current.connectionState === 'connecting');
+        (settings.apiMode === 'voicebox' && voiceboxConversation.status === 'connected') ||
+        (peerConnectionRef.current !== null &&
+          (peerConnectionRef.current.connectionState === 'connected' ||
+            peerConnectionRef.current.connectionState === 'connecting'));
       if (!sessionAlive) {
         setRestartTrigger((t) => t + 1);
       } else {
@@ -1699,12 +1797,18 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     setChatError(null);
 
     try {
-      if ((settings.apiMode ?? 'openai') === 'elevenlabs') {
+      const mode = settings.apiMode ?? 'openai';
+      if (mode === 'elevenlabs') {
         if (elConversation.status !== 'connected') {
           throw new Error('Start Jarvis before sending a message.');
         }
         appendChatMessage('user', message);
         elConversation.sendUserMessage(message);
+      } else if (mode === 'voicebox') {
+        if (voiceboxConversation.status !== 'connected') {
+          throw new Error('Start Jarvis before sending a message.');
+        }
+        await voiceboxConversation.sendUserMessage(message);
       } else {
         const dataChannel = dataChannelRef.current;
         if (!dataChannel || dataChannel.readyState !== 'open') {
@@ -1723,7 +1827,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
       }
 
       setChatText('');
-      void duckMusic();
+      if (mode !== 'voicebox') void duckMusic();
     } catch (error) {
       const messageText = error instanceof Error ? error.message : String(error);
       setChatError(messageText);
@@ -1761,7 +1865,10 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     const shouldStart =
       mode === 'local' ||
       (mode === 'elevenlabs' && !!settings.elevenLabsAgentId?.trim()) ||
-      (mode === 'openai' && !!settings.apiKey);
+      (mode === 'openai' && !!settings.apiKey) ||
+      // Voicebox engine needs the API key matching its brain provider
+      (mode === 'voicebox' &&
+        (settings.brainProvider === 'claude' ? !!settings.claudeApiKey : !!settings.apiKey));
 
     console.log(
       `%c[Jarvis] Auto-start effect fired at ${new Date().toLocaleTimeString()} — restartTrigger=${restartTrigger}, shouldStart=${shouldStart}, mode=${mode}`,
@@ -1776,7 +1883,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
       if (startTimer !== null) window.clearTimeout(startTimer);
       disconnect();
     };
-  }, [settings.apiKey, settings.apiMode, settings.localAIProfile, settings.localAIBaseUrl, settings.microphoneDeviceId, restartTrigger, dynamicState.loaded]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [settings.apiKey, settings.claudeApiKey, settings.brainProvider, settings.apiMode, settings.localAIProfile, settings.localAIBaseUrl, settings.microphoneDeviceId, restartTrigger, dynamicState.loaded]); // eslint-disable-line react-hooks/exhaustive-deps
 
 
   const handleSaveSettings = (newSettings: JarvisSettings) => {
@@ -1787,7 +1894,11 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     // so a race-triggered blank save cannot overwrite a good server config.
     const hasShareableConfig =
       (newSettings.apiMode === 'openai'      && !!newSettings.apiKey?.trim()) ||
-      (newSettings.apiMode === 'elevenlabs'  && !!newSettings.elevenLabsAgentId?.trim());
+      (newSettings.apiMode === 'elevenlabs'  && !!newSettings.elevenLabsAgentId?.trim()) ||
+      (newSettings.apiMode === 'voicebox' &&
+        (newSettings.brainProvider === 'claude'
+          ? !!newSettings.claudeApiKey?.trim()
+          : !!newSettings.apiKey?.trim()));
     if (hasShareableConfig) {
       saveServerSettings({ jarvis_settings: serialised });
     }
@@ -1808,9 +1919,12 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
   const ring2Scale = 1 + visualAudioLevel * 0.05;
   const logoScale = 1;
   const glowIntensity = 0;
-  const chatOnline = (settings.apiMode ?? 'openai') === 'elevenlabs'
+  const chatMode = settings.apiMode ?? 'openai';
+  const chatOnline = chatMode === 'elevenlabs'
     ? elConversation.status === 'connected'
-    : dataChannelRef.current?.readyState === 'open' && status === 'active';
+    : chatMode === 'voicebox'
+      ? voiceboxConversation.status === 'connected'
+      : dataChannelRef.current?.readyState === 'open' && status === 'active';
 
   const gridSize = ({ small: '20px 20px', medium: '40px 40px', large: '80px 80px', off: undefined } as Record<string, string | undefined>)[settings.grid ?? 'off'];
 
