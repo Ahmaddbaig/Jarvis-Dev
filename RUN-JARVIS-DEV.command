@@ -118,6 +118,8 @@ fi
 echo "Starting Jarvis Dev from the editable source code..."
 echo "Close this Terminal window or press Control-C to stop it."
 
+npm run build:electron
+
 next_binary="$PWD/node_modules/next/dist/bin/next"
 jarvis_chrome_ui_token="$(/usr/bin/openssl rand -hex 32)"
 

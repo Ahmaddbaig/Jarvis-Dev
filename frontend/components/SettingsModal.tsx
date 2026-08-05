@@ -385,8 +385,6 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
 
   useEffect(() => {
     if (isOpen && activeTab === 'computers') void refreshCompanions();
-  // refreshCompanions is intentionally triggered only when this tab opens.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, activeTab]);
 
   if (!isOpen) return null;

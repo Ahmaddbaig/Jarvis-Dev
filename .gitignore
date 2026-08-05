@@ -8,6 +8,12 @@ node_modules/
 .next/
 out/
 
+# Reproducible desktop build output
+.build/
+dist-electron/
+release/
+scripts/dist/
+
 # VAD runtime assets (copied from node_modules by scripts/copy-vad-assets.js)
 public/vad/
 

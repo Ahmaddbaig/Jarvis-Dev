@@ -1,5 +1,38 @@
+appId: com.jarvis.desktop
+productName: Jarvis
+asar: true
+
+directories:
+  output: release
+  buildResources: buildfiles
+
+files:
+  - dist-electron/**/*
+  - package.json
+
 extraResources:
+  # Keep node_modules below the FileSet root. electron-builder intentionally
+  # skips a root-level node_modules directory in extraResources.
+  - from: .next
+    to: app
+    filter:
+      - "standalone/**/*"
   - from: chrome-extension
     to: chrome-extension
     filter:
       - "**/*"
+  - from: buildfiles
+    to: buildfiles
+    filter:
+      - "icon.png"
+
+mac:
+  category: public.app-category.productivity
+  icon: buildfiles/icon.png
+
+win:
+  icon: buildfiles/icon.png
+
+linux:
+  category: Utility
+  icon: buildfiles/icon.png
