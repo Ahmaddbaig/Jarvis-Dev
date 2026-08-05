@@ -20,7 +20,16 @@ export interface CompanionPublicDevice {
   paused?: boolean;
   hostname?: string;
   screen?: { width: number; height: number };
-  displays?: Array<{ id?: number | string; name?: string; primary?: boolean }>;
+  displays?: Array<{
+    id?: number | string;
+    name?: string;
+    primary?: boolean;
+    jarvisScreen?: number;
+    left?: number;
+    top?: number;
+    width?: number;
+    height?: number;
+  }>;
   error?: string;
 }
 
@@ -33,7 +42,16 @@ export interface CompanionStatus {
   hostname: string;
   paused: boolean;
   screen: { width: number; height: number };
-  displays: Array<{ id?: number | string; name?: string; primary?: boolean }>;
+  displays: Array<{
+    id?: number | string;
+    name?: string;
+    primary?: boolean;
+    jarvisScreen?: number;
+    left?: number;
+    top?: number;
+    width?: number;
+    height?: number;
+  }>;
   lease: { active: boolean; controllerName?: string; expiresAt?: string };
 }
 

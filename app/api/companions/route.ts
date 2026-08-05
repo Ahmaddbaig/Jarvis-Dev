@@ -5,34 +5,23 @@ import {
   runCompanionCommand,
   unpairCompanionDevice,
 } from '@/backend/companion/client';
+import { isAuthenticatedDesktopRequest } from '@/backend/desktop-auth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-function localDesktopRequest(req: NextRequest): boolean {
-  const origin = req.headers.get('origin');
-  const host = req.headers.get('host');
-  if (!origin || !host) return false;
-  try {
-    const originUrl = new URL(origin);
-    const fetchSite = req.headers.get('sec-fetch-site');
-    return ['127.0.0.1', 'localhost', '[::1]'].includes(originUrl.hostname) &&
-      originUrl.host === host &&
-      (!fetchSite || fetchSite === 'same-origin');
-  } catch {
-    return false;
+export async function GET(req: NextRequest) {
+  if (!isAuthenticatedDesktopRequest(req)) {
+    return NextResponse.json({ error: 'Companion management is available only in the Jarvis desktop app.' }, { status: 401 });
   }
-}
-
-export async function GET() {
   return NextResponse.json({ devices: await listCompanionsWithStatus() }, {
     headers: { 'Cache-Control': 'no-store' },
   });
 }
 
 export async function POST(req: NextRequest) {
-  if (!localDesktopRequest(req)) {
-    return NextResponse.json({ error: 'Companion management is available only in the Jarvis desktop app.' }, { status: 403 });
+  if (!isAuthenticatedDesktopRequest(req)) {
+    return NextResponse.json({ error: 'Companion management is available only in the Jarvis desktop app.' }, { status: 401 });
   }
 
   try {

@@ -56,7 +56,10 @@ export function normalizeCompanionAddress(raw: string): string {
 }
 
 async function resolveLanHost(hostname: string): Promise<string> {
-  const records = await dns.lookup(hostname, { all: true, verbatim: true });
+  const unbracketed = hostname.replace(/^\[|\]$/g, '');
+  const records = net.isIP(unbracketed)
+    ? [{ address: unbracketed, family: net.isIPv4(unbracketed) ? 4 : 6 }]
+    : await dns.lookup(unbracketed, { all: true, verbatim: true });
   if (records.length === 0 || records.some((record) => !isPrivateIp(record.address))) {
     throw new Error('Companion addresses must resolve only to this computer or a private LAN address.');
   }
@@ -85,7 +88,8 @@ async function companionRequest<T>(
 ): Promise<CompanionResponse<T>> {
   const normalized = normalizeCompanionAddress(address);
   const url = new URL(normalized);
-  const resolvedAddress = await resolveLanHost(url.hostname);
+  const hostname = url.hostname.replace(/^\[|\]$/g, '');
+  const resolvedAddress = await resolveLanHost(hostname);
   const expectedFingerprint = normalizeFingerprint(options.fingerprint);
   if (expectedFingerprint.length < 16) throw new Error('Enter at least the 16-character fingerprint shown by the companion.');
 
@@ -99,7 +103,7 @@ async function companionRequest<T>(
     const socket = tls.connect({
       host: resolvedAddress,
       port: Number(url.port),
-      servername: net.isIP(url.hostname) ? undefined : url.hostname,
+      servername: net.isIP(hostname) ? undefined : hostname,
       rejectUnauthorized: false,
       minVersion: 'TLSv1.2',
     });
@@ -284,13 +288,19 @@ export async function runCompanionCommand(
 export async function unpairCompanionDevice(id: string): Promise<boolean> {
   const device = readCompanionRegistry().devices.find((candidate) => candidate.id === id);
   if (!device) return false;
-  const response = await companionRequest<{ revoked: boolean; error?: string }>(
-    device.address,
-    'POST',
-    '/v1/controllers/revoke-self',
-    { token: device.token, fingerprint: device.fingerprint }
-  );
-  assertSuccess(response);
+  try {
+    const response = await companionRequest<{ revoked: boolean; error?: string }>(
+      device.address,
+      'POST',
+      '/v1/controllers/revoke-self',
+      { token: device.token, fingerprint: device.fingerprint }
+    );
+    assertSuccess(response);
+  } catch (error) {
+    // Forgetting a lost/offline computer must not be blocked by an unreachable
+    // remote revocation endpoint. Its token is removed locally either way.
+    console.warn('[companion] Remote revoke failed; removing local pairing:', error);
+  }
   return removeCompanionDevice(id);
 }
 

@@ -7,9 +7,9 @@ Jarvis can use an existing Deskflow installation to move the shared keyboard and
 - Detects Deskflow on macOS, Windows, and Linux.
 - Reads the existing Deskflow server topology and computer names.
 - Reports whether Deskflow is running in server mode and whether its peer is connected.
-- Lets Jarvis switch to `Mac`, `Windows`, or an exact Deskflow screen name.
+- Lets Jarvis switch to `Mac`, `Windows`, or an exact Deskflow screen name. OS aliases are matched from the actual local OS and paired-companion identity, so either computer can host the full Jarvis app.
 - Refuses ambiguous layouts instead of moving the pointer to an unsafe edge.
-- Accepts switching requests only from the loopback-hosted Jarvis desktop UI. The LAN HTTPS proxy blocks this endpoint, so phones and other computers cannot seize input routing.
+- Accepts switching requests only with a random desktop credential held by the Electron app. Host/Origin headers are not trusted, and the LAN HTTPS proxy also blocks this endpoint, so phones and other computers cannot seize input routing.
 
 On this Mac, Deskflow 1.26.0 is the server and the Windows computer is directly below it. Jarvis therefore switches to Windows through the bottom edge and returns to the Mac through the top edge. Repeating the same target is safe because that edge has no outgoing link on the target computer.
 

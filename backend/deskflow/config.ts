@@ -2,6 +2,8 @@ import { execFileSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { windowsChildEnvironment, windowsSystemTool } from '@/backend/windows/system-tools';
+import { readCompanionRegistry } from '@/backend/companion/registry';
 
 export const DESKFLOW_DIRECTIONS = ['left', 'right', 'up', 'down'] as const;
 export type DeskflowDirection = (typeof DESKFLOW_DIRECTIONS)[number];
@@ -23,6 +25,7 @@ export interface DeskflowTopology {
   configPath: string | null;
   primaryScreen: string | null;
   screens: string[];
+  screenPlatforms: Record<string, 'mac' | 'windows' | 'linux' | 'unknown'>;
   links: Record<string, Partial<Record<DeskflowDirection, DeskflowLink[]>>>;
   switchDelayMs: number;
   switchDoubleTapMs: number;
@@ -186,6 +189,7 @@ export function parseDeskflowServerConfig(content: string, configPath: string | 
     configPath,
     primaryScreen: null,
     screens,
+    screenPlatforms: {},
     links,
     switchDelayMs,
     switchDoubleTapMs,
@@ -206,10 +210,11 @@ function deskflowInstalled(): boolean {
 function deskflowRunning(): boolean {
   try {
     if (process.platform === 'win32') {
-      const output = execFileSync('tasklist.exe', ['/FI', 'IMAGENAME eq deskflow-core.exe', '/FO', 'CSV', '/NH'], {
+      const output = execFileSync(windowsSystemTool('tasklist.exe'), ['/FI', 'IMAGENAME eq deskflow-core.exe', '/FO', 'CSV', '/NH'], {
         encoding: 'utf8',
         timeout: 3000,
         windowsHide: true,
+        env: windowsChildEnvironment(),
       });
       return /deskflow-core\.exe/i.test(output);
     }
@@ -234,10 +239,11 @@ function establishedPeerCount(): number {
       return output.split(/\r?\n/).filter((line) => line.includes('->')).length;
     }
     if (process.platform === 'win32') {
-      const output = execFileSync('netstat.exe', ['-ano', '-p', 'tcp'], {
+      const output = execFileSync(windowsSystemTool('netstat.exe'), ['-ano', '-p', 'tcp'], {
         encoding: 'utf8',
         timeout: 3000,
         windowsHide: true,
+        env: windowsChildEnvironment(),
       });
       return output.split(/\r?\n/).filter((line) => /:24800\s+.*ESTABLISHED/i.test(line)).length;
     }
@@ -275,6 +281,7 @@ export function getDeskflowStatus(): DeskflowStatus {
     configPath,
     primaryScreen,
     screens: [],
+    screenPlatforms: {},
     links: {},
     switchDelayMs: 0,
     switchDoubleTapMs: 0,
@@ -308,8 +315,29 @@ export function getDeskflowStatus(): DeskflowStatus {
   else if (!twoScreenTopology) switchReason = 'Safe edge switching currently requires exactly two configured computers.';
   else if (peerCount < 1) switchReason = 'No Deskflow client is currently connected.';
 
+  const screenPlatforms: DeskflowTopology['screenPlatforms'] = {};
+  const platformFamily = (platform: string): DeskflowTopology['screenPlatforms'][string] => {
+    if (platform === 'darwin') return 'mac';
+    if (platform === 'win32') return 'windows';
+    if (platform === 'linux') return 'linux';
+    return 'unknown';
+  };
+  const identity = (value: string) => value.toLowerCase().replace(/\.local$/, '').replace(/[^a-z0-9]/g, '');
+  const companions = readCompanionRegistry().devices;
+  for (const screen of topology.screens) {
+    if (screen === topology.primaryScreen) {
+      screenPlatforms[screen] = platformFamily(process.platform);
+      continue;
+    }
+    const matchingDevices = companions.filter((device) => identity(device.name) === identity(screen));
+    screenPlatforms[screen] = matchingDevices.length === 1
+      ? platformFamily(matchingDevices[0].platform)
+      : 'unknown';
+  }
+
   return {
     ...topology,
+    screenPlatforms,
     installed: deskflowInstalled(),
     running,
     serverMode,
@@ -326,12 +354,21 @@ export function resolveDeskflowTarget(status: DeskflowStatus, requestedTarget: s
   const exact = status.screens.find((screen) => screen.toLowerCase() === requested);
   if (exact) return exact;
 
-  if (['mac', 'macbook', 'local', 'server', 'this computer'].includes(requested)) {
+  if (['local', 'server', 'this computer'].includes(requested)) {
     return status.primaryScreen;
   }
-  if (['windows', 'windows pc', 'pc', 'remote', 'client'].includes(requested)) {
+  if (['remote', 'client'].includes(requested)) {
     const remoteScreens = status.screens.filter((screen) => screen !== status.primaryScreen);
     return remoteScreens.length === 1 ? remoteScreens[0] : null;
+  }
+  const requestedPlatform = ['mac', 'macbook'].includes(requested)
+    ? 'mac'
+    : ['windows', 'windows pc', 'pc'].includes(requested)
+      ? 'windows'
+      : null;
+  if (requestedPlatform) {
+    const matches = status.screens.filter((screen) => status.screenPlatforms[screen] === requestedPlatform);
+    return matches.length === 1 ? matches[0] : null;
   }
 
   const partial = status.screens.filter((screen) => screen.toLowerCase().includes(requested));

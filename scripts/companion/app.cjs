@@ -14,19 +14,21 @@ let latestInfo = null;
 let quitting = false;
 
 function setupText(info) {
-  const address = info.addresses[0] ? `https://${info.addresses[0]}:${info.port}` : `https://127.0.0.1:${info.port}`;
+  const addresses = (info.addresses.length ? info.addresses : ['127.0.0.1'])
+    .map((address) => `Address: https://${address}:${info.port}`);
   return [
     `Device: ${info.deviceName}`,
-    `Address: ${address}`,
+    ...addresses,
     `Pairing code: ${info.pairingCode}`,
     `Fingerprint: ${info.fingerprintShort}`,
+    ...(addresses.length > 1 ? ['Use the address for the physical Wi-Fi/Ethernet network shared with Jarvis.'] : []),
   ].join('\n');
 }
 
 function refreshMenu() {
   if (!tray || !latestInfo) return;
   const address = latestInfo.addresses[0]
-    ? `${latestInfo.addresses[0]}:${latestInfo.port}`
+    ? `${latestInfo.addresses[0]}:${latestInfo.port}${latestInfo.addresses.length > 1 ? ` (+${latestInfo.addresses.length - 1} more)` : ''}`
     : `127.0.0.1:${latestInfo.port}`;
   const stateLabel = latestInfo.paused
     ? 'CONTROL PAUSED'

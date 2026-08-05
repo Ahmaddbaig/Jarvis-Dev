@@ -14,6 +14,44 @@ const os_1 = require("os");
 const isDev = !electron_1.app.isPackaged;
 const PORT = Number.parseInt(process.env.JARVIS_PORT || (isDev ? '3100' : '3000'), 10);
 const HTTPS_PORT = Number.parseInt(process.env.JARVIS_HTTPS_PORT || (isDev ? '3543' : '3443'), 10);
+const DESKTOP_TOKEN_PATH = path_1.default.join(process.cwd(), '.jarvis-desktop-token');
+function loadDesktopControlToken() {
+    const environmentToken = process.env.JARVIS_DESKTOP_TOKEN?.trim();
+    if (/^[A-Za-z0-9_-]{43}$/.test(environmentToken || ''))
+        return environmentToken;
+    // Packaged Next.js is spawned by this process and inherits the in-memory
+    // token, so no secret needs to be written beside the installed app.
+    if (!isDev)
+        return crypto_1.default.randomBytes(32).toString('base64url');
+    try {
+        const existing = fs_1.default.readFileSync(DESKTOP_TOKEN_PATH, 'utf8').trim();
+        if (/^[A-Za-z0-9_-]{43}$/.test(existing))
+            return existing;
+    }
+    catch (error) {
+        if (error.code !== 'ENOENT')
+            throw error;
+    }
+    const token = crypto_1.default.randomBytes(32).toString('base64url');
+    try {
+        fs_1.default.writeFileSync(DESKTOP_TOKEN_PATH, `${token}\n`, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+        try {
+            fs_1.default.chmodSync(DESKTOP_TOKEN_PATH, 0o600);
+        }
+        catch { /* Windows has no POSIX mode. */ }
+        return token;
+    }
+    catch (error) {
+        if (error.code !== 'EEXIST')
+            throw error;
+        const existing = fs_1.default.readFileSync(DESKTOP_TOKEN_PATH, 'utf8').trim();
+        if (!/^[A-Za-z0-9_-]{43}$/.test(existing))
+            throw new Error('The Jarvis desktop token file is invalid.');
+        return existing;
+    }
+}
+const DESKTOP_CONTROL_TOKEN = loadDesktopControlToken();
+process.env.JARVIS_DESKTOP_TOKEN = DESKTOP_CONTROL_TOKEN;
 // Keep this editable build separate from the Patreon-installed Jarvis app.
 electron_1.app.setPath('userData', path_1.default.join(electron_1.app.getPath('appData'), 'Jarvis Dev'));
 electron_1.app.setName('Jarvis Dev');
@@ -336,6 +374,15 @@ function setDesktopMode(options) {
     return { success: true, enabled: false };
 }
 function setupDesktopModeIpc() {
+    electron_1.ipcMain.handle('desktop-control-token:get', (event) => {
+        try {
+            const sender = new URL(event.senderFrame.url);
+            if (sender.protocol === 'http:' && sender.hostname === '127.0.0.1' && Number(sender.port) === PORT)
+                return DESKTOP_CONTROL_TOKEN;
+        }
+        catch { /* Reject non-Jarvis renderer URLs below. */ }
+        throw new Error('Desktop control credentials are available only to the local Jarvis renderer.');
+    });
     electron_1.ipcMain.handle('desktop-mode:set', (_event, options) => {
         return setDesktopMode(options);
     });
@@ -646,6 +693,16 @@ function createWindow() {
     mainWindow.webContents.setWindowOpenHandler(({ url }) => {
         electron_1.shell.openExternal(url);
         return { action: 'deny' };
+    });
+    mainWindow.webContents.on('will-navigate', (event, url) => {
+        try {
+            const destination = new URL(url);
+            if (destination.protocol === 'http:' && destination.hostname === '127.0.0.1' && Number(destination.port) === PORT)
+                return;
+        }
+        catch { /* Open malformed/external destinations outside Electron. */ }
+        event.preventDefault();
+        void electron_1.shell.openExternal(url);
     });
     mainWindow.on('closed', () => {
         mainWindow = null;

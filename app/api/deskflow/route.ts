@@ -8,23 +8,11 @@ import {
   resolveDeskflowTarget,
   safeEdgeForTarget,
 } from '@/backend/deskflow/config';
+import { isAuthenticatedDesktopRequest } from '@/backend/desktop-auth';
+import { windowsChildEnvironment, windowsSystemTool } from '@/backend/windows/system-tools';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-
-function sameOrigin(req: NextRequest): boolean {
-  const origin = req.headers.get('origin');
-  const host = req.headers.get('host');
-  if (!origin || !host) return false;
-  try {
-    const originUrl = new URL(origin);
-    const isLoopback = ['127.0.0.1', 'localhost', '[::1]'].includes(originUrl.hostname);
-    const fetchSite = req.headers.get('sec-fetch-site');
-    return isLoopback && originUrl.host === host && (!fetchSite || fetchSite === 'same-origin');
-  } catch {
-    return false;
-  }
-}
 
 function wait(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -66,11 +54,12 @@ function localDisplayRects(): DisplayRect[] {
       '[pscustomobject]@{x=$_.Bounds.X;y=$_.Bounds.Y;width=$_.Bounds.Width;height=$_.Bounds.Height}})',
       '$screens | ConvertTo-Json -Compress',
     ].join(';');
-    const output = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+    const output = execFileSync(windowsSystemTool('powershell.exe'), ['-NoProfile', '-NonInteractive', '-Command', script], {
       encoding: 'utf8',
       timeout: 3000,
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'ignore'],
+      env: windowsChildEnvironment(),
     });
     const parsed = JSON.parse(output) as DisplayRect | DisplayRect[];
     return Array.isArray(parsed) ? parsed : [parsed];
@@ -163,15 +152,18 @@ async function moveThroughEdge(
   await wait(Math.max(120, switchDelayMs + 75));
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  if (!isAuthenticatedDesktopRequest(req)) {
+    return NextResponse.json({ error: 'Deskflow control is available only in the Jarvis desktop app.' }, { status: 401 });
+  }
   return NextResponse.json(getDeskflowStatus(), {
     headers: { 'Cache-Control': 'no-store' },
   });
 }
 
 export async function POST(req: NextRequest) {
-  if (!sameOrigin(req)) {
-    return NextResponse.json({ error: 'Deskflow control requires a same-origin Jarvis request.' }, { status: 403 });
+  if (!isAuthenticatedDesktopRequest(req)) {
+    return NextResponse.json({ error: 'Deskflow control is available only in the Jarvis desktop app.' }, { status: 401 });
   }
 
   try {

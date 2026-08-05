@@ -30,6 +30,8 @@ For this development version, the companion is launched from the repository. A s
 4. Look for the Jarvis icon in the notification area. It may be inside the `^` hidden-icons menu.
 5. Open the tray menu and choose **Copy pairing information**.
 
+If the copied text shows more than one address, use the address for the physical Wi-Fi or Ethernet adapter shared with the Jarvis computer. VPN, Hyper-V, WSL, and virtual-machine adapters can also appear in this list.
+
 Windows does not normally require Accessibility or Screen Recording permission. Jarvis cannot control an administrator/UAC window from a non-administrator companion; keep both at the normal user level for testing.
 
 ## 2B. Start the companion on macOS
@@ -71,6 +73,10 @@ Example requests:
 - “Open Notepad on the Windows computer.”
 - “Type hello from Jarvis on Windows.”
 - “Use the Windows computer to open Settings.”
+- “Open Notepad on Windows and type hello from Jarvis.”
+- “Use monitor 1 on the Windows computer to open Chrome.”
+
+Monitor numbers start at `0` for the primary monitor. Ask “List my companion computers” to see the detected displays and their `jarvisScreen` numbers. Windows app launching understands friendly names including Chrome, Edge, Spotify, Discord, Notepad, Calculator, Settings, File Explorer, Command Prompt, and PowerShell. Jarvis launches the app, waits briefly, and attempts to focus its window before typing.
 
 Direct companion commands work with the free Local AI voice option. The current visual Computer Use reasoning loop still requires an OpenAI API key; replacing that vision/reasoning model with a fast local model is a separate step.
 
@@ -78,14 +84,15 @@ Direct companion commands work with the free Local AI voice option. The current 
 
 - Open the companion tray menu and choose **Emergency stop / pause control** to immediately reject control and end the active lease.
 - Choose **Resume control** when ready.
-- Remove a pairing from Jarvis → Settings → Computers when it is no longer needed. Keep the companion online while removing it so Jarvis can revoke the remote token.
+- Remove a pairing from Jarvis → Settings → Computers when it is no longer needed. Jarvis attempts to revoke the remote token, but an offline or lost computer can still be forgotten locally.
+- Remote Computer Use pauses before model-reported consequential actions and asks for a one-time confirmation bound to that exact task and computer.
 - The companion accepts HTTPS connections on port `45831`, uses certificate pinning and bearer-token authentication, and limits each controller to a short exclusive lease.
 - It has no arbitrary shell-command endpoint.
 
 ## If pairing does not work
 
 - Confirm both computers are on the same home/private network and not isolated by a guest Wi-Fi network.
-- Use the numerical LAN address printed by the companion, not `127.0.0.1` unless Jarvis and the companion run on the same computer.
+- Use one of the numerical LAN addresses printed by the companion, not `127.0.0.1` unless Jarvis and the companion run on the same computer. If several are shown, try the Wi-Fi/Ethernet address rather than a VPN or virtual adapter address.
 - On Windows, confirm the firewall rule is enabled for Private networks.
 - Turn off a VPN temporarily if it blocks local-network traffic.
 - Confirm the companion window is still running and its tray status is not paused.

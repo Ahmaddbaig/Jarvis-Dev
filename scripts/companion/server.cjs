@@ -30,12 +30,42 @@ function defaultDataDir() {
 
 function privateLanAddresses() {
   const addresses = [];
-  for (const interfaces of Object.values(os.networkInterfaces())) {
+  for (const [interfaceName, interfaces] of Object.entries(os.networkInterfaces())) {
     for (const entry of interfaces || []) {
-      if (entry.family === 'IPv4' && !entry.internal) addresses.push(entry.address);
+      if (entry.family !== 'IPv4' || entry.internal) continue;
+      const octets = entry.address.split('.').map(Number);
+      const isPrivate = octets[0] === 10 ||
+        (octets[0] === 169 && octets[1] === 254) ||
+        (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) ||
+        (octets[0] === 192 && octets[1] === 168);
+      if (!isPrivate) continue;
+      const virtual = /(?:docker|wsl|hyper-v|vethernet|vmware|vbox|virtual|vpn|tun|tap|utun|tailscale|zerotier)/i.test(interfaceName);
+      addresses.push({ address: entry.address, virtual });
     }
   }
-  return addresses;
+  return [...new Map(
+    addresses.sort((left, right) => Number(left.virtual) - Number(right.virtual))
+      .map((entry) => [entry.address, entry.address])
+  ).values()];
+}
+
+function windowsSystemTool(filename) {
+  const root = process.env.SystemRoot || process.env.windir || 'C:\\Windows';
+  const candidates = [path.join(root, 'System32', filename), path.join(root, 'Sysnative', filename)];
+  return candidates.find((candidate) => fs.existsSync(candidate)) || candidates[0];
+}
+
+function windowsChildEnvironment(extra = {}) {
+  const root = process.env.SystemRoot || process.env.windir || 'C:\\Windows';
+  const existing = process.env.Path || process.env.PATH || '';
+  const merged = [
+    existing,
+    path.join(root, 'System32'),
+    root,
+    path.join(root, 'System32', 'Wbem'),
+    path.join(root, 'System32', 'WindowsPowerShell', 'v1.0'),
+  ].filter(Boolean).join(';');
+  return { ...process.env, Path: merged, PATH: merged, ...extra };
 }
 
 function writePrivateJson(filePath, value) {
@@ -113,25 +143,25 @@ function normalizeKey(value) {
   return aliases[value.toLowerCase()] || value.toLowerCase();
 }
 
-function requirePoint(action, width, height) {
+function requirePoint(action, width, height, offsetX = 0, offsetY = 0) {
   if (!validNumber(action.x, 0, Math.max(0, width - 1)) || !validNumber(action.y, 0, Math.max(0, height - 1))) {
-    throw new Error(`Input coordinates must be inside the primary display (${width}x${height}).`);
+    throw new Error(`Input coordinates must be inside the selected display (${width}x${height}).`);
   }
-  return { x: Math.round(action.x), y: Math.round(action.y) };
+  return { x: Math.round(action.x + offsetX), y: Math.round(action.y + offsetY) };
 }
 
-async function executeInputAction(action, width, height) {
+async function executeInputAction(action, width, height, offsetX = 0, offsetY = 0) {
   if (!action || typeof action !== 'object') throw new Error('Invalid input action.');
   const type = action.type;
   const buttons = ['left', 'right', 'middle'];
 
   if (type === 'move') {
-    const point = requirePoint(action, width, height);
+    const point = requirePoint(action, width, height, offsetX, offsetY);
     robot.moveMouse(point.x, point.y);
     return;
   }
   if (type === 'click' || type === 'double_click') {
-    const point = requirePoint(action, width, height);
+    const point = requirePoint(action, width, height, offsetX, offsetY);
     const button = buttons.includes(action.button) ? action.button : 'left';
     robot.moveMouse(point.x, point.y);
     robot.mouseClick(button, type === 'double_click');
@@ -152,7 +182,7 @@ async function executeInputAction(action, width, height) {
     return;
   }
   if (type === 'scroll') {
-    const point = requirePoint(action, width, height);
+    const point = requirePoint(action, width, height, offsetX, offsetY);
     robot.moveMouse(point.x, point.y);
     const horizontal = clamp(Math.trunc(-Number(action.scrollX || 0) / 100), -20, 20);
     const vertical = clamp(Math.trunc(-Number(action.scrollY || 0) / 100), -20, 20);
@@ -163,7 +193,7 @@ async function executeInputAction(action, width, height) {
     if (!Array.isArray(action.path) || action.path.length < 2 || action.path.length > 100) {
       throw new Error('drag requires a path of 2 to 100 points.');
     }
-    const points = action.path.map((point) => requirePoint(point, width, height));
+    const points = action.path.map((point) => requirePoint(point, width, height, offsetX, offsetY));
     robot.moveMouse(points[0].x, points[0].y);
     robot.mouseToggle('down', 'left');
     try {
@@ -180,6 +210,113 @@ async function executeInputAction(action, width, height) {
   throw new Error(`Unsupported input action: ${String(type)}`);
 }
 
+function firstExistingFile(candidates) {
+  return candidates.find((candidate) => candidate && fs.existsSync(candidate)) || null;
+}
+
+function windowsApplication(application) {
+  const requested = application.trim();
+  const normalized = requested.toLowerCase().replace(/\.exe$/, '').replace(/\s+/g, ' ');
+  const root = process.env.SystemRoot || process.env.windir || 'C:\\Windows';
+  const programFiles = process.env.ProgramFiles || 'C:\\Program Files';
+  const programFilesX86 = process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)';
+  const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+  const roamingAppData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+  const aliases = {
+    notepad: { command: windowsSystemTool('notepad.exe'), args: [], title: 'Notepad' },
+    calculator: { command: windowsSystemTool('calc.exe'), args: [], title: 'Calculator' },
+    calc: { command: windowsSystemTool('calc.exe'), args: [], title: 'Calculator' },
+    settings: { command: windowsSystemTool('explorer.exe'), args: ['ms-settings:'], title: 'Settings' },
+    explorer: { command: windowsSystemTool('explorer.exe'), args: [], title: 'File Explorer' },
+    'file explorer': { command: windowsSystemTool('explorer.exe'), args: [], title: 'File Explorer' },
+    'command prompt': { command: windowsSystemTool('cmd.exe'), args: [], title: 'Command Prompt' },
+    cmd: { command: windowsSystemTool('cmd.exe'), args: [], title: 'Command Prompt' },
+    powershell: {
+      command: path.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+      args: [],
+      title: 'Windows PowerShell',
+    },
+  };
+  if (aliases[normalized]) return aliases[normalized];
+
+  if (normalized === 'discord') {
+    const updater = path.join(localAppData, 'Discord', 'Update.exe');
+    return fs.existsSync(updater)
+      ? { command: updater, args: ['--processStart', 'Discord.exe'], title: 'Discord' }
+      : { command: 'Discord.exe', args: [], title: 'Discord' };
+  }
+  if (normalized === 'spotify') {
+    const installed = firstExistingFile([path.join(roamingAppData, 'Spotify', 'Spotify.exe')]);
+    return installed
+      ? { command: installed, args: [], title: 'Spotify' }
+      : { command: windowsSystemTool('explorer.exe'), args: ['spotify:'], title: 'Spotify' };
+  }
+
+  const knownApps = {
+    chrome: {
+      paths: [
+        path.join(programFiles, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+        path.join(programFilesX86, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+        path.join(localAppData, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+      ],
+      fallback: 'chrome.exe',
+      title: 'Google Chrome',
+    },
+    'google chrome': null,
+    edge: {
+      paths: [
+        path.join(programFilesX86, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+        path.join(programFiles, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+      ],
+      fallback: 'msedge.exe',
+      title: 'Microsoft Edge',
+    },
+    'microsoft edge': null,
+  };
+  knownApps['google chrome'] = knownApps.chrome;
+  knownApps['microsoft edge'] = knownApps.edge;
+  const known = knownApps[normalized];
+  if (known) {
+    return { command: firstExistingFile(known.paths) || known.fallback, args: [], title: known.title };
+  }
+
+  if (path.isAbsolute(requested)) {
+    if (!fs.existsSync(requested)) throw new Error(`Application was not found at ${requested}.`);
+    return { command: requested, args: [], title: path.basename(requested, path.extname(requested)) };
+  }
+  if (!/^[a-z0-9._+-]+(?:\.exe)?$/i.test(requested)) {
+    throw new Error(`Unknown Windows application “${requested}”. Try a known name such as Chrome, Edge, Spotify, Notepad, Calculator, Settings, or File Explorer.`);
+  }
+  return { command: requested, args: [], title: path.basename(requested, path.extname(requested)) };
+}
+
+function focusWindowsApplication(processId, title) {
+  const script = [
+    'Start-Sleep -Milliseconds 900',
+    '$shell=New-Object -ComObject WScript.Shell',
+    '$activated=$false',
+    'if ($env:JARVIS_COMPANION_PID -match "^[0-9]+$") { $activated=$shell.AppActivate([int]$env:JARVIS_COMPANION_PID) }',
+    'if (-not $activated -and $env:JARVIS_COMPANION_TITLE) { $activated=$shell.AppActivate($env:JARVIS_COMPANION_TITLE) }',
+  ].join(';');
+  return new Promise((resolve) => {
+    const child = spawn(
+      windowsSystemTool('WindowsPowerShell\\v1.0\\powershell.exe'),
+      ['-NoProfile', '-NonInteractive', '-Command', script],
+      {
+        stdio: 'ignore',
+        windowsHide: true,
+        shell: false,
+        env: windowsChildEnvironment({
+          JARVIS_COMPANION_PID: String(processId || ''),
+          JARVIS_COMPANION_TITLE: title || '',
+        }),
+      }
+    );
+    child.once('error', () => resolve());
+    child.once('exit', () => resolve());
+  });
+}
+
 function launchApplication(application) {
   if (typeof application !== 'string' || application.length < 1 || application.length > 160 || /[\r\n\0]/.test(application)) {
     throw new Error('Invalid application name.');
@@ -187,12 +324,15 @@ function launchApplication(application) {
 
   let command;
   let args;
+  let windowTitle = '';
   if (process.platform === 'darwin') {
     command = '/usr/bin/open';
     args = ['-a', application];
   } else if (process.platform === 'win32') {
-    command = 'powershell.exe';
-    args = ['-NoProfile', '-NonInteractive', '-Command', 'Start-Process -FilePath $args[0]', application];
+    const resolved = windowsApplication(application);
+    command = resolved.command;
+    args = resolved.args;
+    windowTitle = resolved.title;
   } else {
     if (!/^[a-z0-9._+-]+$/i.test(application)) throw new Error('Linux application names may not contain spaces.');
     command = application;
@@ -200,21 +340,75 @@ function launchApplication(application) {
   }
 
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { detached: false, stdio: 'ignore', windowsHide: true, shell: false });
+    const child = spawn(command, args, {
+      detached: process.platform === 'win32',
+      stdio: 'ignore',
+      windowsHide: true,
+      shell: false,
+      env: process.platform === 'win32' ? windowsChildEnvironment() : process.env,
+    });
     const timer = setTimeout(() => {
-      child.kill();
       reject(new Error(`Timed out while launching ${application}.`));
     }, 10_000);
     child.once('error', (error) => {
       clearTimeout(timer);
       reject(error);
     });
+    child.once('spawn', async () => {
+      if (process.platform === 'win32') {
+        clearTimeout(timer);
+        child.unref();
+        await focusWindowsApplication(child.pid, windowTitle);
+        resolve();
+      }
+    });
     child.once('exit', (code) => {
+      if (process.platform === 'win32') return;
       clearTimeout(timer);
       if (code === 0) resolve();
       else reject(new Error(`Could not launch ${application} (exit code ${String(code)}).`));
     });
   });
+}
+
+async function displayLayout() {
+  const detected = await screenshot.listDisplays();
+  if (!Array.isArray(detected) || detected.length === 0) {
+    throw new Error('No displays were detected. Check screen-recording permission.');
+  }
+  robot.updateScreenMetrics();
+  const primarySize = robot.getScreenSize();
+  const primary = detected.find((display) => display.primary === true) ||
+    detected.find((display) => Number(display.left) === 0 && Number(display.top) === 0) ||
+    detected[0];
+  const ordered = [primary, ...detected.filter((display) => display !== primary)];
+  return ordered.map((display, index) => {
+    const detectedIndex = detected.indexOf(display);
+    const isPrimary = index === 0;
+    const width = isPrimary ? primarySize.width : Number(display.width);
+    const height = isPrimary ? primarySize.height : Number(display.height);
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width < 1 || height < 1) {
+      throw new Error(`Display ${index} reported invalid dimensions.`);
+    }
+    return {
+      ...display,
+      primary: isPrimary,
+      jarvisScreen: index,
+      width,
+      height,
+      left: Number.isFinite(Number(display.left)) ? Number(display.left) : 0,
+      top: Number.isFinite(Number(display.top)) ? Number(display.top) : 0,
+      captureSelector: process.platform === 'win32' ? display.id : detectedIndex,
+    };
+  });
+}
+
+function selectedDisplay(displays, requested) {
+  const screen = requested === undefined ? 0 : requested;
+  if (!Number.isInteger(screen) || screen < 0 || screen >= displays.length) {
+    throw new Error(`Screen must be an integer from 0 to ${Math.max(0, displays.length - 1)}.`);
+  }
+  return displays[screen];
 }
 
 async function createIdentity(dataDir, deviceName) {
@@ -394,7 +588,9 @@ async function startCompanion(options = {}) {
       robot.updateScreenMetrics();
       const screen = robot.getScreenSize();
       let displays = [];
-      try { displays = await screenshot.listDisplays(); } catch { /* capture will report a useful error */ }
+      try {
+        displays = (await displayLayout()).map(({ captureSelector: _captureSelector, ...display }) => display);
+      } catch { /* capture will report a useful error */ }
       jsonResponse(res, 200, {
         protocol: 1,
         deviceId: state.identity.deviceId,
@@ -452,30 +648,20 @@ async function startCompanion(options = {}) {
 
     if (req.method === 'POST' && pathname === '/v1/capture') {
       const body = await readJson(req);
-      if (body.screen !== undefined && body.screen !== 0) {
-        jsonResponse(res, 400, { error: 'Only primary-display capture is currently supported.' });
-        return;
-      }
-      const displays = await screenshot.listDisplays();
-      if (!Array.isArray(displays) || displays.length === 0) throw new Error('No displays were detected. Check screen-recording permission.');
-      robot.updateScreenMetrics();
-      const size = robot.getScreenSize();
-      const primaryDisplay = displays.find((display) =>
-        display.primary === true || (display.left === 0 && display.top === 0)
-      ) || displays[0];
-      const screenSelector = process.platform === 'win32' ? primaryDisplay.id : 0;
-      const capturedImage = await screenshot({ format: 'jpg', screen: screenSelector });
+      const displays = await displayLayout();
+      const display = selectedDisplay(displays, body.screen);
+      const capturedImage = await screenshot({ format: 'jpg', screen: display.captureSelector });
       // macOS captures Retina pixels while RobotJS uses logical coordinates.
       // Normalize every screenshot so model coordinates exactly match input.
       const image = await sharp(capturedImage)
-        .resize(size.width, size.height, { fit: 'fill' })
+        .resize(display.width, display.height, { fit: 'fill' })
         .jpeg({ quality: 82 })
         .toBuffer();
       jsonResponse(res, 200, {
         mimeType: 'image/jpeg',
-        width: size.width,
-        height: size.height,
-        screen: 0,
+        width: display.width,
+        height: display.height,
+        screen: display.jarvisScreen,
         imageBase64: image.toString('base64'),
       });
       return;
@@ -487,10 +673,15 @@ async function startCompanion(options = {}) {
         jsonResponse(res, 400, { error: 'Input requires between one and 50 actions.' });
         return;
       }
-      robot.updateScreenMetrics();
-      const size = robot.getScreenSize();
-      for (const action of body.actions) await executeInputAction(action, size.width, size.height);
-      jsonResponse(res, 200, { success: true, actionsExecuted: body.actions.length });
+      const display = selectedDisplay(await displayLayout(), body.screen);
+      for (const action of body.actions) {
+        await executeInputAction(action, display.width, display.height, display.left, display.top);
+      }
+      jsonResponse(res, 200, {
+        success: true,
+        actionsExecuted: body.actions.length,
+        screen: display.jarvisScreen,
+      });
       return;
     }
 

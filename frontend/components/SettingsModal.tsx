@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { FUNCTION_REGISTRY, JarvisFunction } from '@/frontend/lib/functions';
 import { sfx } from '@/frontend/lib/sfx';
+import { desktopControlFetch } from '@/frontend/lib/desktopControlClient';
 import {
   DEFAULT_LOCAL_AI_BASE_URL,
   LOCAL_AI_PROFILES,
@@ -207,7 +208,7 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
     setCompanionBusy(true);
     setCompanionMessage(null);
     try {
-      const response = await fetch('/api/companions', { cache: 'no-store' });
+      const response = await desktopControlFetch('/api/companions', { cache: 'no-store' });
       const data = await response.json() as { devices?: CompanionView[]; error?: string };
       if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
       setCompanions(data.devices ?? []);
@@ -222,7 +223,7 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
     setCompanionBusy(true);
     setCompanionMessage(null);
     try {
-      const response = await fetch('/api/companions', {
+      const response = await desktopControlFetch('/api/companions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -237,7 +238,7 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
       setCompanionCode('');
       setCompanionFingerprint('');
       setCompanionMessage('Computer paired securely.');
-      const listResponse = await fetch('/api/companions', { cache: 'no-store' });
+      const listResponse = await desktopControlFetch('/api/companions', { cache: 'no-store' });
       const listData = await listResponse.json() as { devices?: CompanionView[] };
       if (listResponse.ok) setCompanions(listData.devices ?? []);
     } catch (error) {
@@ -251,7 +252,7 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
     setCompanionBusy(true);
     setCompanionMessage(null);
     try {
-      const response = await fetch('/api/companions', {
+      const response = await desktopControlFetch('/api/companions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'remove', id }),

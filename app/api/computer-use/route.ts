@@ -5,6 +5,7 @@ import fs from 'fs';
 import os from 'os';
 import { readCompanionRegistry, resolveCompanionDevice } from '@/backend/companion/registry';
 import { runRemoteComputerUse } from '@/backend/companion/computer-use';
+import { isAuthenticatedDesktopRequest } from '@/backend/desktop-auth';
 
 // In production (packaged .app), process.cwd() is the standalone dir which
 // contains scripts/dist/computer_use (the PyInstaller binary).
@@ -258,13 +259,19 @@ function run(
 }
 
 export async function POST(req: NextRequest) {
+  if (!isAuthenticatedDesktopRequest(req)) {
+    return NextResponse.json({ error: 'Computer control is available only in the Jarvis desktop app.' }, { status: 401 });
+  }
   try {
     const body = await req.json();
-    const { task, apiKey, pythonPathOverride, target } = body as {
+    const { task, apiKey, pythonPathOverride, target, confirmationId, confirmed, screen } = body as {
       task?: string;
       apiKey?: string;
       pythonPathOverride?: string | null;
       target?: string | null;
+      confirmationId?: string;
+      confirmed?: boolean;
+      screen?: number;
     };
     if (!task) return NextResponse.json({ error: 'Missing task' }, { status: 400 });
     if (!apiKey) return NextResponse.json({ error: 'Missing apiKey' }, { status: 400 });
@@ -298,7 +305,11 @@ export async function POST(req: NextRequest) {
     }
 
     const result = remoteDevice
-      ? await runRemoteComputerUse(task, apiKey, remoteDevice)
+      ? await runRemoteComputerUse(task, apiKey, remoteDevice, {
+          confirmationId: typeof confirmationId === 'string' ? confirmationId : undefined,
+          confirmed: confirmed === true,
+          screen: Number.isInteger(screen) && Number(screen) >= 0 ? Number(screen) : 0,
+        })
       : await run(task, apiKey, pyOverride);
     return NextResponse.json(result);
   } catch (err) {
