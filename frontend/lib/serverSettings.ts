@@ -54,27 +54,31 @@ export function getCachedSetting(key: keyof ServerSettings): string {
   return '';
 }
 
-export async function loadServerSettings(): Promise<ServerSettings> {
-  try {
-    const res = await fetch('/api/settings', { cache: 'no-store' });
-    if (!res.ok) return _cache;
-    const data = (await res.json()) as ServerSettings;
-    _cache = data;
-    _loaded = true;
-    // Back-fill localStorage so the host machine benefits from server settings too
-    if (typeof window !== 'undefined') {
-      const syncKeys: (keyof ServerSettings)[] = [
-        'jarvis_ha_url', 'jarvis_ha_token',
-        'jarvis_weather_location', 'jarvis_weather_lat', 'jarvis_weather_lon',
-        'jarvis_ical_url', 'bambu_email', 'bambu_token_exp',
-      ];
-      for (const k of syncKeys) {
-        if (data[k] && !localStorage.getItem(k)) {
-          localStorage.setItem(k, data[k]!);
-        }
+export async function fetchServerSettings(signal?: AbortSignal): Promise<ServerSettings> {
+  const response = await fetch('/api/settings', { cache: 'no-store', signal });
+  if (!response.ok) throw new Error(`Settings returned HTTP ${response.status}.`);
+  const data = (await response.json()) as ServerSettings;
+  _cache = data;
+  _loaded = true;
+  // Back-fill localStorage so the host machine benefits from server settings too
+  if (typeof window !== 'undefined') {
+    const syncKeys: (keyof ServerSettings)[] = [
+      'jarvis_ha_url', 'jarvis_ha_token',
+      'jarvis_weather_location', 'jarvis_weather_lat', 'jarvis_weather_lon',
+      'jarvis_ical_url', 'bambu_email', 'bambu_token_exp',
+    ];
+    for (const key of syncKeys) {
+      if (data[key] && !localStorage.getItem(key)) {
+        localStorage.setItem(key, data[key]);
       }
     }
-    return data;
+  }
+  return data;
+}
+
+export async function loadServerSettings(): Promise<ServerSettings> {
+  try {
+    return await fetchServerSettings();
   } catch {
     return _cache;
   }
@@ -82,15 +86,20 @@ export async function loadServerSettings(): Promise<ServerSettings> {
 
 export function isServerSettingsLoaded(): boolean { return _loaded; }
 
-export async function saveServerSettings(patch: Partial<ServerSettings>): Promise<void> {
+export async function persistServerSettings(patch: Partial<ServerSettings>): Promise<void> {
   // Update cache immediately so subsequent getCachedSetting calls see the new value
   _cache = { ..._cache, ...patch };
+  const response = await fetch('/api/settings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  if (!response.ok) throw new Error(`Settings save returned HTTP ${response.status}.`);
+}
+
+export async function saveServerSettings(patch: Partial<ServerSettings>): Promise<void> {
   try {
-    await fetch('/api/settings', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(patch),
-    });
+    await persistServerSettings(patch);
   } catch (e) {
     console.error('[serverSettings] save failed:', e);
   }

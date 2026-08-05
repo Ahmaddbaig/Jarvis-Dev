@@ -1,18 +1,9 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { motion } from 'framer-motion';
-
-interface WeatherData {
-  tempF: number;
-  tempC: number;
-  feelsLikeF: number;
-  humidity: number;
-  windMph: number;
-  windDir: string;
-  description: string;
-  uvIndex: number;
-}
+import Image from 'next/image';
+import { useWeather } from '@/frontend/hooks/queries/useWeather';
 
 export interface SidePanelData {
   label: string;
@@ -28,37 +19,12 @@ interface Props {
   onSearchNearby: (query: string) => void;
 }
 
-const WEATHER_ICONS: Record<number, string> = {
-  113: '☀️', 116: '⛅', 119: '☁️', 122: '☁️', 143: '🌫️',
-  176: '🌦️', 179: '🌨️', 182: '🌧️', 185: '🌧️', 200: '⛈️',
-  227: '🌨️', 230: '❄️', 248: '🌫️', 260: '🌫️', 263: '🌦️',
-  266: '🌦️', 281: '🌧️', 284: '🌧️', 293: '🌦️', 296: '🌦️',
-  299: '🌧️', 302: '🌧️', 305: '🌧️', 308: '🌧️', 311: '🌧️',
-  314: '🌧️', 317: '🌧️', 320: '❄️', 323: '🌨️', 326: '🌨️',
-  329: '🌨️', 332: '❄️', 335: '❄️', 338: '❄️', 350: '🌧️',
-  353: '🌦️', 356: '🌧️', 359: '🌧️', 362: '🌧️', 365: '🌧️',
-  368: '🌨️', 371: '❄️', 374: '🌧️', 377: '🌧️', 386: '⛈️',
-  389: '⛈️', 392: '⛈️', 395: '❄️',
-};
-
 export function MapSidePanel({ data, onClose, onRouteHere, onSearchNearby }: Props) {
-  const [weather, setWeather] = useState<WeatherData | null>(null);
-  const [loadingWeather, setLoadingWeather] = useState(true);
   const [routeQuery, setRouteQuery] = useState('');
   const [nearbyQuery, setNearbyQuery] = useState('');
-
-  useEffect(() => {
-    setWeather(null);
-    setLoadingWeather(true);
-
-    fetch(`/api/weather?lat=${data.lat}&lng=${data.lng}`)
-      .then((r) => r.json())
-      .then((d: WeatherData & { error?: string }) => {
-        if (!d.error) setWeather(d);
-      })
-      .catch(() => {})
-      .finally(() => setLoadingWeather(false));
-  }, [data.lat, data.lng]);
+  const weatherQuery = useWeather(data.lat, data.lng);
+  const weather = weatherQuery.data;
+  const loadingWeather = weatherQuery.isPending;
 
   return (
     <motion.div
@@ -113,9 +79,7 @@ export function MapSidePanel({ data, onClose, onRouteHere, onSearchNearby }: Pro
           ) : weather ? (
             <div className="space-y-2">
               <div className="flex items-center gap-2">
-                <span className="text-2xl leading-none">
-                  {WEATHER_ICONS[Math.round(weather.feelsLikeF)] ?? '🌡️'}
-                </span>
+                <Image src={weather.icon} alt={weather.condition} width={32} height={32} className="w-8 h-8 object-contain shrink-0" />
                 <div>
                   <div className="text-[18px] font-mono font-bold text-white leading-none">
                     {weather.tempF}°F
@@ -127,9 +91,9 @@ export function MapSidePanel({ data, onClose, onRouteHere, onSearchNearby }: Pro
               <div className="grid grid-cols-3 gap-1.5 mt-2">
                 {[
                   { label: 'Feels', value: `${weather.feelsLikeF}°F` },
-                  { label: 'Humidity', value: `${weather.humidity}%` },
+                  { label: 'Humidity', value: weather.humidity == null ? '—' : `${weather.humidity}%` },
                   { label: 'Wind', value: `${weather.windMph} mph ${weather.windDir}` },
-                  { label: 'UV', value: String(weather.uvIndex) },
+                  { label: 'UV', value: weather.uvIndex == null ? '—' : String(weather.uvIndex) },
                 ].map((item) => (
                   <div key={item.label} className="bg-white/[0.03] rounded p-1.5 border border-white/[0.05]">
                     <div className="text-[8px] font-mono text-white/30 uppercase">{item.label}</div>

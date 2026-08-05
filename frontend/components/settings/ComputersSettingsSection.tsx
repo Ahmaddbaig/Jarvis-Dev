@@ -1,22 +1,13 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
-import { desktopControlFetch } from '@/frontend/lib/desktopControlClient';
+import { useState } from 'react';
 import { sfx } from '@/frontend/lib/sfx';
-
-interface CompanionView {
-  id: string;
-  name: string;
-  address: string;
-  platform: string;
-  arch: string;
-  pairedAt: string;
-  online: boolean;
-  paused?: boolean;
-  hostname?: string;
-  screen?: { width: number; height: number };
-  error?: string;
-}
+import {
+  useCompanions,
+  usePairCompanion,
+  useRemoveCompanion,
+  type CompanionView,
+} from '@/frontend/hooks/queries/useCompanions';
 
 interface ComputersSettingsSectionProps {
   active: boolean;
@@ -24,79 +15,40 @@ interface ComputersSettingsSectionProps {
 }
 
 export function ComputersSettingsSection({ active, onViewComputer }: ComputersSettingsSectionProps) {
-  const [companions, setCompanions] = useState<CompanionView[]>([]);
   const [companionAddress, setCompanionAddress] = useState('');
   const [companionCode, setCompanionCode] = useState('');
   const [companionFingerprint, setCompanionFingerprint] = useState('');
-  const [companionBusy, setCompanionBusy] = useState(false);
   const [companionMessage, setCompanionMessage] = useState<string | null>(null);
-
-  const refreshCompanions = useCallback(async () => {
-    setCompanionBusy(true);
-    setCompanionMessage(null);
-    try {
-      const response = await desktopControlFetch('/api/companions', { cache: 'no-store' });
-      const data = await response.json() as { devices?: CompanionView[]; error?: string };
-      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
-      setCompanions(data.devices ?? []);
-    } catch (error) {
-      setCompanionMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setCompanionBusy(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (active) void refreshCompanions();
-  }, [active, refreshCompanions]);
+  const companionsQuery = useCompanions(active);
+  const pairCompanionMutation = usePairCompanion();
+  const removeCompanionMutation = useRemoveCompanion();
+  const companions = companionsQuery.data ?? [];
+  const companionBusy = companionsQuery.isFetching
+    || pairCompanionMutation.isPending
+    || removeCompanionMutation.isPending;
+  const requestError = companionsQuery.error || pairCompanionMutation.error || removeCompanionMutation.error;
+  const requestMessage = requestError instanceof Error ? requestError.message : requestError ? String(requestError) : null;
 
   async function pairComputer() {
-    setCompanionBusy(true);
     setCompanionMessage(null);
     try {
-      const response = await desktopControlFetch('/api/companions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'pair',
-          address: companionAddress.trim(),
-          code: companionCode.trim(),
-          fingerprint: companionFingerprint.trim(),
-        }),
+      await pairCompanionMutation.mutateAsync({
+        address: companionAddress.trim(),
+        code: companionCode.trim(),
+        fingerprint: companionFingerprint.trim(),
       });
-      const data = await response.json() as { error?: string };
-      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
       setCompanionCode('');
       setCompanionFingerprint('');
       setCompanionMessage('Computer paired securely.');
-      const listResponse = await desktopControlFetch('/api/companions', { cache: 'no-store' });
-      const listData = await listResponse.json() as { devices?: CompanionView[] };
-      if (listResponse.ok) setCompanions(listData.devices ?? []);
-    } catch (error) {
-      setCompanionMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setCompanionBusy(false);
-    }
+    } catch { /* mutation state renders the error */ }
   }
 
   async function removeComputer(id: string) {
-    setCompanionBusy(true);
     setCompanionMessage(null);
     try {
-      const response = await desktopControlFetch('/api/companions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'remove', id }),
-      });
-      const data = await response.json() as { error?: string };
-      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
-      setCompanions((current) => current.filter((device) => device.id !== id));
+      await removeCompanionMutation.mutateAsync(id);
       setCompanionMessage('Computer removed from Jarvis.');
-    } catch (error) {
-      setCompanionMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setCompanionBusy(false);
-    }
+    } catch { /* mutation state renders the error */ }
   }
 
   function viewComputer(device: CompanionView) {
@@ -165,9 +117,9 @@ export function ComputersSettingsSection({ active, onViewComputer }: ComputersSe
         {companionBusy ? 'Connecting…' : 'Pair Computer'}
       </button>
 
-      {companionMessage && (
+      {(companionMessage || requestMessage) && (
         <p className="text-xs text-cyan-300 border border-cyan-500/20 bg-cyan-950/20 rounded px-3 py-2">
-          {companionMessage}
+          {companionMessage || requestMessage}
         </p>
       )}
 
@@ -179,7 +131,7 @@ export function ComputersSettingsSection({ active, onViewComputer }: ComputersSe
           </div>
           <button
             type="button"
-            onClick={() => void refreshCompanions()}
+            onClick={() => { setCompanionMessage(null); void companionsQuery.refetch(); }}
             disabled={companionBusy}
             className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest rounded border border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/10 disabled:opacity-40"
           >

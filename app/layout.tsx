@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { JarvisQueryProvider } from "@/frontend/components/JarvisQueryProvider";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -64,7 +65,7 @@ export default function RootLayout({
         ` }} />
       </head>
       <body className="antialiased">
-        {children}
+        <JarvisQueryProvider>{children}</JarvisQueryProvider>
       </body>
     </html>
   );

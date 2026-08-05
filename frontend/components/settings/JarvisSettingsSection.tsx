@@ -13,6 +13,7 @@ import {
   DEFAULT_LOCAL_AI_BASE_URL,
   LOCAL_AI_PROFILES,
 } from '@/frontend/lib/localAIProfiles';
+import { useBrainStatus, useVoiceProfiles } from '@/frontend/hooks/queries/useVoiceModelStatus';
 
 const VISUALIZERS: { id: JarvisVisualizer; name: string; desc: string }[] = [
   { id: 'frequency-ring', name: 'Frequency Ring', desc: 'FFT bars radiating from the logo rings' },
@@ -55,31 +56,15 @@ interface JarvisSettingsSectionProps {
 export function JarvisSettingsSection({ settings, onChange }: JarvisSettingsSectionProps) {
   const setSettings = onChange;
   const [audioInputs, setAudioInputs] = useState<MediaDeviceInfo[]>([]);
-  const [brainStatus, setBrainStatus] = useState<{ ok: boolean; error?: string } | null>(null);
-  const [voiceboxStatus, setVoiceboxStatus] = useState<{
-    ok: boolean;
-    profiles: { id: string; name: string }[];
-    error?: string;
-  } | null>(null);
 
   const isVoiceboxMode = settings.apiMode === 'voicebox';
   const brainProvider = settings.brainProvider ?? 'openai';
-
-  useEffect(() => {
-    if (!isVoiceboxMode) return;
-    let cancelled = false;
-    fetch(`/api/voice/chat?provider=${brainProvider}`)
-      .then((response) => response.json())
-      .then((data) => { if (!cancelled) setBrainStatus(data); })
-      .catch(() => { if (!cancelled) setBrainStatus({ ok: false, error: 'Status check failed' }); });
-    fetch('/api/voice/profiles')
-      .then((response) => response.json())
-      .then((data) => { if (!cancelled) setVoiceboxStatus(data); })
-      .catch(() => {
-        if (!cancelled) setVoiceboxStatus({ ok: false, profiles: [], error: 'Status check failed' });
-      });
-    return () => { cancelled = true; };
-  }, [isVoiceboxMode, brainProvider]);
+  const brainStatusQuery = useBrainStatus(brainProvider, isVoiceboxMode);
+  const voiceProfilesQuery = useVoiceProfiles(isVoiceboxMode);
+  const brainStatus = brainStatusQuery.data
+    ?? (brainStatusQuery.isError ? { ok: false, error: 'Status check failed' } : null);
+  const voiceboxStatus = voiceProfilesQuery.data
+    ?? (voiceProfilesQuery.isError ? { ok: false, profiles: [], error: 'Status check failed' } : null);
 
   useEffect(() => {
     const refreshAudioInputs = async () => {

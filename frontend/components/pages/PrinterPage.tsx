@@ -1,43 +1,22 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { saveServerSettings, getCachedSetting } from '@/frontend/lib/serverSettings';
 import { PageHeader } from '../PageHeader';
+import {
+  useDisconnectPrinters,
+  usePrinterCommand,
+  usePrinterDevices,
+  usePrinterStatus,
+  usePrinterTasks,
+  usePrinterTelemetry,
+  type PrinterInfo,
+  type PrinterTelemetry,
+  type PrintTask,
+} from '@/frontend/hooks/queries/usePrinters';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
-
-interface PrinterInfo {
-  deviceId: string;
-  name: string;
-  model?: string;
-}
-
-interface PrinterTelemetry {
-  gcode_state?: string;
-  subtask_name?: string;
-  mc_percent?: number;
-  mc_remaining_time?: number;
-  nozzle_temper?: number;
-  nozzle_target_temper?: number;
-  bed_temper?: number;
-  bed_target_temper?: number;
-  chamber_temper?: number;
-  wifi_signal?: string;
-  ams?: { ams?: Array<{ tray: Array<{ id: string; tray_color?: string; tray_id_name?: string; cols?: string[] }> }> };
-  ams_status?: string;
-  [key: string]: unknown;
-}
-
-interface PrintTask {
-  id: string | number;
-  title?: string;
-  deviceName?: string;
-  cover?: string;
-  status?: number;
-  costTime?: number;
-  weight?: number;
-}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -416,14 +395,19 @@ function TaskCard({ task }: { task: PrintTask }) {
 interface Props { onNavigateHome: () => void }
 
 export function PrinterPage({ onNavigateHome }: Props) {
-  const [authenticated, setAuthenticated] = useState<boolean | null>(null);
-  const [printers, setPrinters]           = useState<PrinterInfo[]>([]);
-  const [telemetry, setTelemetry]         = useState<Record<string, PrinterTelemetry>>({});
-  const [tasks, setTasks]                 = useState<PrintTask[]>([]);
   const [tab, setTab]                     = useState<'dashboard' | 'history'>('dashboard');
-  const [mqttConnected, setMqttConnected] = useState(false);
   const [clock, setClock]                 = useState('');
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const statusQuery = usePrinterStatus();
+  const authenticated = statusQuery.isPending ? null : statusQuery.data?.authenticated ?? false;
+  const mqttConnected = statusQuery.data?.mqttConnected ?? false;
+  const printersQuery = usePrinterDevices(authenticated === true);
+  const telemetryQuery = usePrinterTelemetry(authenticated === true);
+  const tasksQuery = usePrinterTasks(authenticated === true && tab === 'history');
+  const commandMutation = usePrinterCommand();
+  const disconnectMutation = useDisconnectPrinters();
+  const printers = printersQuery.data ?? [];
+  const telemetry = telemetryQuery.data ?? {};
+  const tasks = tasksQuery.data ?? [];
 
   // Clock
   useEffect(() => {
@@ -431,68 +415,13 @@ export function PrinterPage({ onNavigateHome }: Props) {
     tick(); const id = setInterval(tick, 1000); return () => clearInterval(id);
   }, []);
 
-  const checkStatus = useCallback(async () => {
-    const res = await fetch('/api/bambu/status');
-    const data = await res.json() as { authenticated?: boolean; mqttConnected?: boolean };
-    setAuthenticated(data.authenticated ?? false);
-    setMqttConnected(data.mqttConnected ?? false);
-    return data.authenticated ?? false;
-  }, []);
-
-  const fetchPrinters = useCallback(async () => {
-    try {
-      const res = await fetch('/api/bambu/printers');
-      if (res.ok) setPrinters(await res.json() as PrinterInfo[]);
-    } catch {}
-  }, []);
-
-  const fetchTelemetry = useCallback(async () => {
-    try {
-      const res = await fetch('/api/bambu/telemetry');
-      if (res.ok) setTelemetry(await res.json() as Record<string, PrinterTelemetry>);
-    } catch {}
-  }, []);
-
-  const fetchTasks = useCallback(async () => {
-    try {
-      const res = await fetch('/api/bambu/tasks');
-      if (res.ok) {
-        const d = await res.json() as { tasks?: PrintTask[] };
-        setTasks(d.tasks ?? []);
-      }
-    } catch {}
-  }, []);
-
-  useEffect(() => {
-    checkStatus().then((auth) => {
-      if (auth) {
-        fetchPrinters();
-        fetchTelemetry();
-      }
-    });
-  }, [checkStatus, fetchPrinters, fetchTelemetry]);
-
-  // Poll telemetry every 3s when authenticated
-  useEffect(() => {
-    if (authenticated) {
-      pollRef.current = setInterval(() => { fetchTelemetry(); checkStatus(); }, 3000);
-    }
-    return () => { if (pollRef.current) clearInterval(pollRef.current); };
-  }, [authenticated, fetchTelemetry, checkStatus]);
-
   const sendCommand = async (deviceId: string, cmd: string) => {
-    await fetch('/api/bambu/command', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ deviceId, command: cmd }),
-    });
-    setTimeout(fetchTelemetry, 500);
+    await commandMutation.mutateAsync({ deviceId, command: cmd });
   };
 
   const handleWizardComplete = async () => {
-    await checkStatus();
-    await fetchPrinters();
-    await fetchTelemetry();
+    await statusQuery.refetch();
+    await Promise.all([printersQuery.refetch(), telemetryQuery.refetch()]);
   };
 
   const activePrinters = printers.filter((p) => {
@@ -554,7 +483,7 @@ export function PrinterPage({ onNavigateHome }: Props) {
       {/* Tab bar */}
       <div className="relative z-10 flex items-center gap-1 px-6 py-2 shrink-0" style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
         {(['dashboard', 'history'] as const).map((t) => (
-          <button key={t} onClick={() => { setTab(t); if (t === 'history') fetchTasks(); }}
+          <button key={t} onClick={() => setTab(t)}
             className="px-4 py-1.5 font-mono text-xs uppercase tracking-widest rounded-md transition-all"
             style={tab === t
               ? { background: 'rgba(34,211,238,0.12)', color: '#22d3ee', border: '1px solid rgba(34,211,238,0.3)' }
@@ -576,7 +505,7 @@ export function PrinterPage({ onNavigateHome }: Props) {
                   </svg>
                   <p className="font-mono text-sm text-white/30">No printers found</p>
                   <p className="font-mono text-[11px] text-white/20">Make sure your Bambu Cloud account has printers registered</p>
-                  <button onClick={fetchPrinters} className="font-mono text-xs text-cyan-400 hover:text-cyan-300 border border-cyan-400/30 px-4 py-1.5 rounded-md transition-colors">Refresh</button>
+                  <button onClick={() => void printersQuery.refetch()} className="font-mono text-xs text-cyan-400 hover:text-cyan-300 border border-cyan-400/30 px-4 py-1.5 rounded-md transition-colors">Refresh</button>
                 </div>
               ) : (
                 <div className="grid gap-5" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))' }}>
@@ -607,7 +536,7 @@ export function PrinterPage({ onNavigateHome }: Props) {
       {/* Bottom status bar */}
       <div className="relative z-10 flex items-center justify-between px-6 py-2 shrink-0" style={{ borderTop: '1px solid rgba(34,211,238,0.08)', background: 'rgba(0,0,0,0.4)' }}>
         <span className="font-mono text-[9px] uppercase tracking-widest text-white/20">Jarvis · 3D Print Monitor</span>
-        <button onClick={() => { setAuthenticated(false); fetch('/api/bambu/status', { method: 'DELETE' }); }}
+        <button onClick={() => disconnectMutation.mutate()}
           className="font-mono text-[9px] text-white/20 hover:text-red-400/70 transition-colors uppercase tracking-widest">
           Disconnect
         </button>

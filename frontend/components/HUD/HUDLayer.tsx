@@ -20,7 +20,9 @@ import { PrinterWidget } from './widgets/PrinterWidget';
 import { WeatherHomeWidget } from './widgets/WeatherHomeWidget';
 import { HADeviceWidget } from './widgets/HADeviceWidget';
 import { CompanionDisplayWidget } from './widgets/CompanionDisplayWidget';
-import { getCachedSetting, loadServerSettings } from '@/frontend/lib/serverSettings';
+import { getCachedSetting } from '@/frontend/lib/serverSettings';
+import { useServerSettings } from '@/frontend/hooks/queries/useServerSettings';
+import { useHomeAssistantService, useHomeAssistantStates } from '@/frontend/hooks/queries/useHomeAssistant';
 
 type WidgetType = 'system' | 'network' | 'map' | 'clock' | 'suit' | 'music' | 'text' | 'pdf' | 'image' | 'terminal' | 'tv' | 'printer' | 'weather-home' | 'ha-device' | 'ha-toggle' | 'companion-display';
 
@@ -350,12 +352,6 @@ export function HUDLayer({ scanReady = true }: { scanReady?: boolean }) {
 function HAPowerButtonFloater({
   initialX, initialY, config, onClose,
 }: { initialX: number; initialY: number; config?: Record<string, unknown>; onClose: () => void }) {
-  const [isOn, setIsOn]       = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [entity, setEntity]   = useState<{ id: string } | null>(null);
-  // Store credentials in state so toggle is always reliable (not dependent on cache at click time)
-  const [haUrl, setHaUrl]     = useState('');
-  const [haToken, setHaToken] = useState('');
   const constraintsRef = useRef<HTMLDivElement>(null);
 
   const nameFilter = config?.name       as string | undefined;
@@ -363,74 +359,45 @@ function HAPowerButtonFloater({
   const domain     = config?.domain     as string | undefined;
   // Label: prefer explicit label > name_filter (what the user called it) > HA friendly_name fallback
   const configLabel = (config?.label as string | undefined) ?? nameFilter;
-  const [displayName, setDisplayName] = useState(configLabel ?? '…');
-
-  useEffect(() => {
-    (async () => {
-      // Always ensure server settings are loaded before reading credentials —
-      // the cache may be cold if ElevenLabs added this widget before the page
-      // finished its own loadServerSettings() call.
-      let url   = getCachedSetting('jarvis_ha_url');
-      let token = getCachedSetting('jarvis_ha_token');
-      if (!url || !token) {
-        const s = await loadServerSettings();
-        url   = s.jarvis_ha_url   ?? '';
-        token = s.jarvis_ha_token ?? '';
-      }
-      if (!url || !token) { setLoading(false); return; }
-      setHaUrl(url);
-      setHaToken(token);
-
-      try {
-        const r = await fetch(`/api/home-assistant?url=${encodeURIComponent(url)}&token=${encodeURIComponent(token)}&path=/api/states`);
-        const all = await r.json() as Array<{ entity_id: string; state: string; attributes: Record<string, unknown> }>;
-        let found: typeof all[0] | null = null;
-        if (entityIds?.length) {
-          found = all.find(e => entityIds.includes(e.entity_id)) ?? null;
-        } else if (nameFilter) {
-          found = all.find(e =>
-            (e.attributes.friendly_name as string ?? '').toLowerCase().includes(nameFilter.toLowerCase())
-          ) ?? null;
-          // Alias: "Light N" smart plugs may live in switch domain
-          if (!found) {
-            found = all.find(e =>
-              e.entity_id.startsWith('switch.') &&
-              (e.attributes.friendly_name as string ?? '').toLowerCase().includes(nameFilter.toLowerCase())
-            ) ?? null;
-          }
-        } else if (domain) {
-          found = all.find(e => e.entity_id.startsWith(domain + '.')) ?? null;
-          if (!found && domain === 'light') {
-            found = all.find(e =>
-              e.entity_id.startsWith('switch.') &&
-              (e.attributes.friendly_name as string ?? '').toLowerCase().includes('light')
-            ) ?? null;
-          }
-        }
-        if (found) {
-          setEntity({ id: found.entity_id });
-          setIsOn(['on', 'playing', 'open', 'unlocked'].includes(found.state));
-          if (!configLabel) {
-            setDisplayName((found.attributes.friendly_name as string) ?? found.entity_id);
-          }
-        }
-      } catch { /* swallow — shows NOT FOUND */ }
-      setLoading(false);
-    })();
-  }, [nameFilter, domain, entityIds]); // eslint-disable-line react-hooks/exhaustive-deps
+  const settingsQuery = useServerSettings();
+  const haUrl = settingsQuery.data?.jarvis_ha_url || getCachedSetting('jarvis_ha_url');
+  const haToken = settingsQuery.data?.jarvis_ha_token || getCachedSetting('jarvis_ha_token');
+  const statesQuery = useHomeAssistantStates(haUrl, haToken);
+  const serviceMutation = useHomeAssistantService(haUrl, haToken);
+  const all = statesQuery.data ?? [];
+  let found = entityIds?.length
+    ? all.find((candidate) => entityIds.includes(candidate.entity_id))
+    : nameFilter
+      ? all.find((candidate) =>
+          (candidate.attributes.friendly_name ?? '').toLowerCase().includes(nameFilter.toLowerCase())
+        )
+      : domain
+        ? all.find((candidate) => candidate.entity_id.startsWith(`${domain}.`))
+        : undefined;
+  if (!found && nameFilter) {
+    found = all.find((candidate) =>
+      candidate.entity_id.startsWith('switch.')
+      && (candidate.attributes.friendly_name ?? '').toLowerCase().includes(nameFilter.toLowerCase())
+    );
+  }
+  if (!found && domain === 'light') {
+    found = all.find((candidate) =>
+      candidate.entity_id.startsWith('switch.')
+      && (candidate.attributes.friendly_name ?? '').toLowerCase().includes('light')
+    );
+  }
+  const entity = found ? { id: found.entity_id } : null;
+  const isOn = Boolean(found && ['on', 'playing', 'open', 'unlocked'].includes(found.state));
+  const displayName = configLabel ?? found?.attributes.friendly_name ?? found?.entity_id ?? '…';
+  const loading = settingsQuery.isPending || statesQuery.isPending;
 
   const toggle = async () => {
     if (!entity || !haUrl || !haToken) return;
-    const d    = entity.id.split('.')[0];
-    const next = !isOn;
-    setIsOn(next);
-    const res = await fetch('/api/home-assistant', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: haUrl, token: haToken, domain: d, service: next ? 'turn_on' : 'turn_off', serviceData: { entity_id: entity.id } }),
+    await serviceMutation.mutateAsync({
+      domain: entity.id.split('.')[0],
+      service: isOn ? 'turn_off' : 'turn_on',
+      entityId: entity.id,
     });
-    // Roll back optimistic update if the call failed
-    if (!res.ok) setIsOn(!next);
   };
 
   return (

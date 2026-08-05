@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import type { JarvisSettings } from '@jarvis/contracts';
 import { sfx } from '@/frontend/lib/sfx';
 import { ChromeSettingsSection } from './ChromeSettingsSection';
+import { useSystemDiagnostics } from '@/frontend/hooks/queries/useSystemDiagnostics';
 
 interface SystemSettingsSectionProps {
   settings: JarvisSettings;
@@ -11,12 +12,17 @@ interface SystemSettingsSectionProps {
 }
 
 export function SystemSettingsSection({ settings, onChange }: SystemSettingsSectionProps) {
-  const [diagLoading, setDiagLoading] = useState(false);
-  const [diagOutput, setDiagOutput] = useState<string | null>(null);
-  const [diagError, setDiagError] = useState<string | null>(null);
   const [macPermissions, setMacPermissions] = useState<MacPermissionStatus | null>(null);
   const [permissionBusy, setPermissionBusy] = useState<string | null>(null);
   const [isMacElectron, setIsMacElectron] = useState(false);
+  const diagnosticsQuery = useSystemDiagnostics();
+  const diagLoading = diagnosticsQuery.isFetching;
+  const diagOutput = diagnosticsQuery.data === undefined
+    ? null
+    : JSON.stringify(diagnosticsQuery.data, null, 2);
+  const diagError = diagnosticsQuery.error instanceof Error
+    ? diagnosticsQuery.error.message
+    : diagnosticsQuery.error ? String(diagnosticsQuery.error) : null;
 
   useEffect(() => {
     setIsMacElectron(window.electron?.platform === 'darwin');
@@ -44,22 +50,7 @@ export function SystemSettingsSection({ settings, onChange }: SystemSettingsSect
 
   async function runDiagnostics() {
     sfx('click_sfx', 0.5);
-    setDiagLoading(true);
-    setDiagError(null);
-    setDiagOutput(null);
-    try {
-      const response = await fetch('/api/system-diagnostics');
-      if (!response.ok) {
-        setDiagError(`HTTP ${response.status}`);
-        return;
-      }
-      const data = await response.json();
-      setDiagOutput(JSON.stringify(data, null, 2));
-    } catch (diagnosticError) {
-      setDiagError(diagnosticError instanceof Error ? diagnosticError.message : String(diagnosticError));
-    } finally {
-      setDiagLoading(false);
-    }
+    await diagnosticsQuery.refetch();
   }
 
   return (

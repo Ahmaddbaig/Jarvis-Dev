@@ -1,42 +1,40 @@
 'use client';
 import { useState, useEffect } from 'react';
 import { getCachedSetting } from '@/frontend/lib/serverSettings';
-
-interface WeatherData {
-  temp: number; condition: string; icon: string;
-  city: string; wind: number; hi: number; lo: number;
-}
+import { useServerSettings } from '@/frontend/hooks/queries/useServerSettings';
+import { useGeocode, useWeather } from '@/frontend/hooks/queries/useWeather';
 
 export function WeatherHomeWidget() {
-  const [data, setData] = useState<WeatherData | null>(null);
-  const [error, setError] = useState('');
+  const serverSettingsQuery = useServerSettings();
+  const [browserCoords, setBrowserCoords] = useState<{ lat: number; lon: number } | null>(null);
+  const settings = serverSettingsQuery.data;
+  const storedLocation = settings?.jarvis_weather_location || getCachedSetting('jarvis_weather_location');
+  const storedLatRaw = settings?.jarvis_weather_lat || getCachedSetting('jarvis_weather_lat');
+  const storedLonRaw = settings?.jarvis_weather_lon || getCachedSetting('jarvis_weather_lon');
+  const storedLat = Number(storedLatRaw);
+  const storedLon = Number(storedLonRaw);
+  const hasStoredCoords = Boolean(storedLatRaw && storedLonRaw)
+    && Number.isFinite(storedLat)
+    && Number.isFinite(storedLon);
+  const geocodeQuery = useGeocode(storedLocation, 1, !hasStoredCoords);
+  const geocoded = geocodeQuery.data?.[0];
+  const coords = hasStoredCoords
+    ? { lat: storedLat, lon: storedLon }
+    : geocoded
+      ? { lat: Number(geocoded.lat), lon: Number(geocoded.lon) }
+      : browserCoords;
+  const weatherQuery = useWeather(coords?.lat, coords?.lon);
+  const data = weatherQuery.data;
+  const error = weatherQuery.isError
+    ? 'Weather unavailable'
+    : (!coords && geocodeQuery.isError ? 'Location not available' : '');
 
   useEffect(() => {
-    const stored = getCachedSetting('jarvis_weather_location') || (typeof window !== 'undefined' ? localStorage.getItem('jarvis_weather_location') : null);
-
-    const fetchByCoords = async (lat: number, lon: number) => {
-      try {
-        const res = await fetch(`/api/weather?lat=${lat}&lon=${lon}`);
-        if (res.ok) setData(await res.json());
-        else setError('Could not load weather');
-      } catch { setError('Weather unavailable'); }
-    };
-
-    if (stored) {
-      fetch(`/api/geocode?q=${encodeURIComponent(stored)}`)
-        .then((r) => r.json())
-        .then((d: { lat?: number; lon?: number }) => {
-          if (d.lat && d.lon) fetchByCoords(d.lat, d.lon);
-          else navigator.geolocation?.getCurrentPosition((p) => fetchByCoords(p.coords.latitude, p.coords.longitude));
-        })
-        .catch(() => navigator.geolocation?.getCurrentPosition((p) => fetchByCoords(p.coords.latitude, p.coords.longitude)));
-    } else {
-      navigator.geolocation?.getCurrentPosition(
-        (p) => fetchByCoords(p.coords.latitude, p.coords.longitude),
-        () => setError('Location not available'),
-      );
-    }
-  }, []);
+    if (hasStoredCoords || geocoded || (storedLocation && !geocodeQuery.isError)) return;
+    navigator.geolocation?.getCurrentPosition((position) => {
+      setBrowserCoords({ lat: position.coords.latitude, lon: position.coords.longitude });
+    });
+  }, [geocodeQuery.isError, geocoded, hasStoredCoords, storedLocation]);
 
   if (error) return <div className="flex-1 flex items-center justify-center"><p className="font-mono text-[10px] text-white/25">{error}</p></div>;
   if (!data)  return <div className="flex-1 flex items-center justify-center"><div className="w-5 h-5 rounded-full border border-cyan-400/40 border-t-cyan-400 animate-spin" /></div>;

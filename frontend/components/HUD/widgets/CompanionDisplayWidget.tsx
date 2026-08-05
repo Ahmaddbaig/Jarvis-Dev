@@ -1,68 +1,17 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { desktopControlFetch } from '@/frontend/lib/desktopControlClient';
-
-interface PreviewFrame {
-  mimeType: string;
-  width: number;
-  height: number;
-  displayWidth: number;
-  displayHeight: number;
-  screen: number;
-  capturedAt: string;
-  imageBase64: string;
-}
-
-interface PreviewError {
-  error?: string;
-}
+import { useState } from 'react';
+import { useCompanionPreview } from '@/frontend/hooks/queries/useCompanions';
 
 export function CompanionDisplayWidget({ config }: { config?: Record<string, unknown> }) {
   const target = typeof config?.target === 'string' ? config.target : '';
   const name = typeof config?.name === 'string' ? config.name : target || 'Companion';
   const configuredScreen = Number(config?.screen);
   const [screen, setScreen] = useState(Number.isInteger(configuredScreen) && configuredScreen >= 0 ? configuredScreen : 0);
-  const [frame, setFrame] = useState<PreviewFrame | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [paused, setPaused] = useState(false);
-  const [retryKey, setRetryKey] = useState(0);
-
-  useEffect(() => {
-    if (!target || paused) return;
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let controller: AbortController | undefined;
-
-    const poll = async () => {
-      controller = new AbortController();
-      try {
-        const response = await desktopControlFetch(
-          `/api/companions/preview?target=${encodeURIComponent(target)}&screen=${screen}`,
-          { cache: 'no-store', signal: controller.signal }
-        );
-        const data = await response.json() as PreviewFrame & PreviewError;
-        if (!response.ok) throw new Error(data.error || `Preview failed with HTTP ${response.status}.`);
-        if (!cancelled) {
-          setFrame(data);
-          setError(null);
-        }
-      } catch (pollError) {
-        if (!cancelled && !(pollError instanceof DOMException && pollError.name === 'AbortError')) {
-          setError(pollError instanceof Error ? pollError.message : String(pollError));
-        }
-      } finally {
-        if (!cancelled) timer = setTimeout(poll, 1_000);
-      }
-    };
-
-    void poll();
-    return () => {
-      cancelled = true;
-      if (timer) clearTimeout(timer);
-      controller?.abort();
-    };
-  }, [paused, retryKey, screen, target]);
+  const previewQuery = useCompanionPreview(target, screen, !paused);
+  const frame = previewQuery.data;
+  const error = previewQuery.error instanceof Error ? previewQuery.error.message : null;
 
   if (!target) {
     return (
@@ -129,8 +78,8 @@ export function CompanionDisplayWidget({ config }: { config?: Record<string, unk
             type="button"
             onClick={(event) => {
               event.stopPropagation();
-              if (error) setRetryKey((current) => current + 1);
               setPaused((current) => !current);
+              if (paused || error) void previewQuery.refetch();
             }}
             className="rounded border border-cyan-500/30 px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider text-cyan-200 hover:bg-cyan-500/10"
           >
@@ -147,7 +96,7 @@ export function CompanionDisplayWidget({ config }: { config?: Record<string, unk
             onClick={(event) => {
               event.stopPropagation();
               setPaused(false);
-              setRetryKey((current) => current + 1);
+              void previewQuery.refetch();
             }}
             className="mt-2 rounded border border-cyan-500/30 px-2 py-1 text-[9px] uppercase tracking-widest text-cyan-300"
           >

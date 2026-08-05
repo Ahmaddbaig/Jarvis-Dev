@@ -1,94 +1,35 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
-import { chromeControlFetch } from '@/frontend/lib/chromeControlClient';
-
-interface ChromeControlStatus {
-  paired: boolean;
-  connected: boolean;
-  extensionName?: string;
-  pairedAt?: string;
-  lastSeen?: string;
-  extensionPath: string;
-  supportedEndpoints: string[];
-}
+import { useState } from 'react';
+import {
+  useChromeStatus,
+  useCreateChromePairing,
+  useRevokeChromePairing,
+  type ChromePairing,
+} from '@/frontend/hooks/queries/useChromeControl';
 
 export function ChromeSettingsSection() {
-  const [status, setStatus] = useState<ChromeControlStatus | null>(null);
-  const [pairing, setPairing] = useState<{ code: string; expiresAt: string } | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const refreshStatus = useCallback(async () => {
-    try {
-      const response = await chromeControlFetch('/api/chrome-control');
-      if (!response.ok) throw new Error(`Chrome status returned HTTP ${response.status}.`);
-      setStatus(await response.json() as ChromeControlStatus);
-      setError(null);
-    } catch (refreshError) {
-      setError(refreshError instanceof Error ? refreshError.message : String(refreshError));
-    }
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    chromeControlFetch('/api/chrome-control')
-      .then(async (response) => {
-        if (!response.ok) throw new Error(`Chrome status returned HTTP ${response.status}.`);
-        return response.json() as Promise<ChromeControlStatus>;
-      })
-      .then((nextStatus) => {
-        if (!cancelled) {
-          setStatus(nextStatus);
-          setError(null);
-        }
-      })
-      .catch((refreshError) => {
-        if (!cancelled) setError(refreshError instanceof Error ? refreshError.message : String(refreshError));
-      });
-    return () => { cancelled = true; };
-  }, []);
+  const [pairing, setPairing] = useState<ChromePairing | null>(null);
+  const statusQuery = useChromeStatus();
+  const createPairingMutation = useCreateChromePairing();
+  const revokePairingMutation = useRevokeChromePairing();
+  const status = statusQuery.data;
+  const busy = createPairingMutation.isPending || revokePairingMutation.isPending;
+  const requestError = createPairingMutation.error || revokePairingMutation.error || statusQuery.error;
+  const error = requestError instanceof Error ? requestError.message : requestError ? String(requestError) : null;
 
   async function createPairing() {
-    setBusy(true);
-    setError(null);
     try {
-      const response = await chromeControlFetch('/api/chrome-control', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ operation: 'create_pairing' }),
-      });
-      const data = await response.json() as { code?: string; expiresAt?: string; error?: string };
-      if (!response.ok || !data.code || !data.expiresAt) {
-        throw new Error(data.error || 'Jarvis could not generate a pairing code.');
-      }
-      setPairing({ code: data.code, expiresAt: data.expiresAt });
-      await refreshStatus();
-    } catch (pairingError) {
-      setError(pairingError instanceof Error ? pairingError.message : String(pairingError));
-    } finally {
-      setBusy(false);
-    }
+      setPairing(await createPairingMutation.mutateAsync());
+    } catch { /* mutation state renders the error */ }
   }
 
   async function revokePairing() {
     if (!window.confirm('Revoke the paired Jarvis Chrome extension? Chrome control will stop immediately.')) return;
-    setBusy(true);
-    setError(null);
     try {
-      const response = await chromeControlFetch('/api/chrome-control', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ operation: 'revoke_pairing' }),
-      });
-      if (!response.ok) throw new Error(`Chrome revoke returned HTTP ${response.status}.`);
+      await revokePairingMutation.mutateAsync();
       setPairing(null);
-      await refreshStatus();
-    } catch (revokeError) {
-      setError(revokeError instanceof Error ? revokeError.message : String(revokeError));
-    } finally {
-      setBusy(false);
-    }
+    } catch { /* mutation state renders the error */ }
   }
 
   return (
@@ -146,7 +87,7 @@ export function ChromeSettingsSection() {
         </button>
         <button
           type="button"
-          onClick={() => void refreshStatus()}
+          onClick={() => void statusQuery.refetch()}
           disabled={busy}
           className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest rounded border border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/10 disabled:opacity-50"
         >

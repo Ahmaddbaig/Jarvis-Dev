@@ -11,7 +11,7 @@ import {
   type JarvisSettings,
 } from '@jarvis/contracts';
 import { FUNCTION_REGISTRY, getFunctionByName, JarvisFunction } from '@/frontend/lib/functions';
-import { loadDynamicFunctions, createGetFunctionByName, DynamicFunctionState } from '@/frontend/lib/dynamic-functions';
+import { createGetFunctionByName } from '@/frontend/lib/dynamic-functions';
 import { XrayWidget } from './XrayWidget';
 import { CameraWidget } from './CameraWidget';
 import { ArcReactorVisualizer } from './visualizers/ArcReactorVisualizer';
@@ -21,13 +21,17 @@ import { OriginalVisualizer } from './visualizers/OriginalVisualizer';
 import { PhotoWidget, PhotoEntry } from './PhotoWidget';
 import { sfx } from '@/frontend/lib/sfx';
 import { installErrorInterceptors, emitError } from '@/frontend/lib/errorBus';
-import { loadServerSettings, saveServerSettings } from '@/frontend/lib/serverSettings';
+import { useSaveServerSettings, useServerSettings } from '@/frontend/hooks/queries/useServerSettings';
 import { useLocalConversation } from '@/frontend/lib/localVoice/useLocalConversation';
 import {
   useVisualizerAudio,
   VISUALIZER_FFT_BARS,
 } from '@/frontend/hooks/useVisualizerAudio';
 import { useJarvisVoice } from '@/frontend/hooks/useJarvisVoice';
+import { useDynamicFunctions } from '@/frontend/hooks/queries/useDynamicFunctions';
+import { useQueryClient } from '@tanstack/react-query';
+import { nowPlayingQueryOptions } from '@/frontend/hooks/queries/useMusic';
+import { queryKeys } from '@/frontend/lib/query/keys';
 import {
   DEFAULT_LOCAL_AI_BASE_URL,
   getLocalAIProfile,
@@ -229,6 +233,10 @@ function isDesktopPanelPosition(value: unknown): value is DesktopPanelPosition {
 
 export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
   const voiceSession = useJarvisVoice();
+  const serverSettingsQuery = useServerSettings();
+  const { mutate: saveSettingsToServer } = useSaveServerSettings();
+  const dynamicFunctionsQuery = useDynamicFunctions();
+  const queryClient = useQueryClient();
   const { status, lastError, micMuted } = voiceSession;
   const [chatText, setChatText] = useState('');
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
@@ -305,13 +313,13 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
   }
 
   // Dynamic function state — starts unloaded; gates auto-start.
-  const [dynamicState, setDynamicState] = useState<DynamicFunctionState>({
+  const dynamicState = dynamicFunctionsQuery.data ?? {
     allFunctions: FUNCTION_REGISTRY,
     mcpFunctions: [],
     skillFunctions: [],
     loaded: false,
     loadError: null,
-  });
+  };
   const dynamicGetFunctionByNameRef = useRef<(name: string) => JarvisFunction | undefined>(getFunctionByName);
 
   // Ref-based ElevenLabs clientTools so dynamic functions are included at runtime.
@@ -411,6 +419,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
         musicDuckRef.current.previousVolume =
           typeof data.previousVolume === 'number' ? data.previousVolume : null;
         musicDuckRef.current.app = data.app ?? null;
+        void queryClient.invalidateQueries({ queryKey: queryKeys.music.all });
         // Failsafe in case a provider disconnects without an audio-finished event.
         scheduleMusicRestore(30_000);
       } catch {
@@ -454,6 +463,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ command: 'volume', value: previousVolume, app: duckedApp }),
       });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.music.all });
     } catch {
       // The failsafe is best-effort; a later manual volume change remains available.
     }
@@ -795,8 +805,8 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
 
   // Load settings — server first (shared across all LAN clients), then localStorage fallback
   useEffect(() => {
-    const timer = window.setTimeout(() => {
-      loadServerSettings().then((serverSettings) => {
+    if (serverSettingsQuery.isPending) return;
+    const serverSettings = serverSettingsQuery.data ?? {};
         // Pick the best usable source. LocalAI does not require credentials.
         const serverRaw   = serverSettings.jarvis_settings;
         const localRaw    = localStorage.getItem('jarvis_settings');
@@ -861,7 +871,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
             // If localStorage has a usable configuration but the server doesn't,
             // push it up now. This self-heals after a race-condition wipe.
             if (!serverHasConfig && localHasConfig && nextSettings.apiMode !== 'local') {
-              saveServerSettings({ jarvis_settings: JSON.stringify(nextSettings) });
+              saveSettingsToServer({ jarvis_settings: JSON.stringify(nextSettings) });
             }
           } catch (e) {
             console.error('Failed to parse settings', e);
@@ -873,39 +883,35 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
             setSettings(prev => ({ ...prev, apiKey: envKey }));
           }
         }
-      });
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, []);
+  }, [serverSettingsQuery.data, serverSettingsQuery.isPending, saveSettingsToServer]);
 
   // Load dynamic functions (MCP + Skills) on mount — runs before auto-start.
   useEffect(() => {
-    loadDynamicFunctions().then((state) => {
-      setDynamicState(state);
-      dynamicGetFunctionByNameRef.current = createGetFunctionByName(state.allFunctions);
+    const state = dynamicFunctionsQuery.data;
+    if (!state) return;
+    dynamicGetFunctionByNameRef.current = createGetFunctionByName(state.allFunctions);
 
-      // Seed enabledFunctions with new MCP/Skill tool names
-      if (state.mcpFunctions.length > 0 || state.skillFunctions.length > 0) {
-        setSettings((prev) => {
-          const existingEnabled = new Set(prev.enabledFunctions);
-          const newTools = [...state.mcpFunctions, ...state.skillFunctions]
-            .filter((f) => !existingEnabled.has(f.name))
-            .map((f) => f.name);
-          if (newTools.length === 0) return prev;
-          const updated = {
-            ...prev,
-            enabledFunctions: [...prev.enabledFunctions, ...newTools],
-          };
-          const serialised = JSON.stringify(updated);
-          localStorage.setItem('jarvis_settings', serialised);
-          // Do NOT write to server here — settings may not have loaded from the
-          // server yet (race condition) and would overwrite the real API key.
-          // The server file is only updated when the user explicitly saves settings.
-          return updated;
-        });
-      }
-    });
-  }, []);
+    // Seed enabledFunctions with new MCP/Skill tool names
+    if (state.mcpFunctions.length > 0 || state.skillFunctions.length > 0) {
+      setSettings((prev) => {
+        const existingEnabled = new Set(prev.enabledFunctions);
+        const newTools = [...state.mcpFunctions, ...state.skillFunctions]
+          .filter((f) => !existingEnabled.has(f.name))
+          .map((f) => f.name);
+        if (newTools.length === 0) return prev;
+        const updated = {
+          ...prev,
+          enabledFunctions: [...prev.enabledFunctions, ...newTools],
+        };
+        const serialised = JSON.stringify(updated);
+        localStorage.setItem('jarvis_settings', serialised);
+        // Do NOT write to server here — settings may not have loaded from the
+        // server yet (race condition) and would overwrite the real API key.
+        // The server file is only updated when the user explicitly saves settings.
+        return updated;
+      });
+    }
+  }, [dynamicFunctionsQuery.data]);
 
   // Keep elClientToolsRef in sync with dynamic function state
   useEffect(() => {
@@ -1133,9 +1139,8 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
 
             let musicIsPlaying = false;
             try {
-              const musicRes = await fetch('/api/music');
-              const musicData = await musicRes.json() as { isPlaying?: boolean };
-              musicIsPlaying = musicRes.ok && musicData.isPlaying === true;
+              const musicData = await queryClient.fetchQuery(nowPlayingQueryOptions());
+              musicIsPlaying = musicData?.isPlaying === true;
             } catch {
               // If playback status is unavailable, preserve normal conversation behavior.
             }
@@ -1555,7 +1560,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
           ? !!newSettings.claudeApiKey?.trim()
           : !!newSettings.apiKey?.trim()));
     if (hasShareableConfig) {
-      saveServerSettings({ jarvis_settings: serialised });
+      saveSettingsToServer({ jarvis_settings: serialised });
     }
     setIsSettingsOpen(false);
     // Increment trigger so the auto-start effect re-runs with the new settings.

@@ -1,16 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-
-interface StockQuote {
-  symbol: string;
-  price?: number;
-  change?: number;
-  changePct?: number;
-  up?: boolean;
-  sparkline?: number[];
-  error?: string;
-}
+import { useStockQuotes } from '@/frontend/hooks/queries/useStockQuotes';
 
 function Sparkline({ data, up }: { data: number[]; up: boolean }) {
   if (data.length < 2) return <div className="w-[80px] h-7" />;
@@ -73,32 +63,10 @@ interface Props {
 }
 
 export function StocksColumn({ symbols }: Props) {
-  const [quotes, setQuotes] = useState<StockQuote[]>([]);
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
-  const [loading, setLoading] = useState(true);
+  const { data: quotes = [], isPending, dataUpdatedAt } = useStockQuotes(symbols);
+  const lastUpdated = dataUpdatedAt > 0 ? new Date(dataUpdatedAt) : null;
 
-  useEffect(() => {
-    async function fetchQuotes() {
-      try {
-        const res = await fetch(`/api/stock-quote?symbols=${encodeURIComponent(symbols)}`);
-        const data = (await res.json()) as { quotes?: StockQuote[] };
-        if (data.quotes) {
-          setQuotes(data.quotes);
-          setLastUpdated(new Date());
-        }
-      } catch {
-        // keep stale data
-      } finally {
-        setLoading(false);
-      }
-    }
-
-    fetchQuotes();
-    const interval = setInterval(fetchQuotes, 30_000);
-    return () => clearInterval(interval);
-  }, [symbols]);
-
-  if (loading && quotes.length === 0) {
+  if (isPending && quotes.length === 0) {
     return (
       <div className="flex items-center justify-center h-20 text-[10px] font-mono text-white/20 uppercase tracking-widest">
         Loading market data…

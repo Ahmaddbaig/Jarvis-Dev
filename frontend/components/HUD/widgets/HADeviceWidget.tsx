@@ -1,79 +1,59 @@
 'use client';
-import { useState, useEffect, useRef, useCallback } from 'react';
 import { getCachedSetting } from '@/frontend/lib/serverSettings';
-
-interface HAEntity {
-  entity_id: string;
-  state: string;
-  attributes: Record<string, unknown>;
-}
-
-function loadHA() {
-  if (typeof window === 'undefined') return { url: '', token: '' };
-  return {
-    url:   getCachedSetting('jarvis_ha_url'),
-    token: getCachedSetting('jarvis_ha_token'),
-  };
-}
+import { useServerSettings } from '@/frontend/hooks/queries/useServerSettings';
+import {
+  useHomeAssistantService,
+  useHomeAssistantStates,
+  type HAEntity,
+} from '@/frontend/hooks/queries/useHomeAssistant';
 
 export function HADeviceWidget({ config }: { config?: Record<string, unknown> }) {
-  const [entities, setEntities] = useState<HAEntity[]>([]);
-  const [loading, setLoading] = useState(true);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
   // config.entity_ids: string[] or config.domain: string
   const entityIds  = config?.entity_ids as string[] | undefined;
   const domain     = config?.domain     as string   | undefined;
   const friendlyFilter = config?.name as string | undefined;
-
-  const fetchEntities = useCallback(async () => {
-    const { url, token } = loadHA();
-    if (!url || !token) { setLoading(false); return; }
-    try {
-      const res = await fetch(`/api/home-assistant?url=${encodeURIComponent(url)}&token=${encodeURIComponent(token)}&path=/api/states`);
-      if (!res.ok) return;
-      const all = await res.json() as HAEntity[];
-      let filtered = all;
-      if (entityIds?.length) {
-        filtered = all.filter((e) => entityIds.includes(e.entity_id));
-      } else if (domain) {
-        filtered = all.filter((e) => e.entity_id.startsWith(domain + '.'));
-        // Alias: "Light 1-4" smart plugs live in the switch domain.
-        // When domain=light yields nothing, also include switch entities
-        // whose friendly name contains "light".
-        if (domain === 'light' && filtered.length === 0) {
-          filtered = all.filter(
-            (e) =>
-              e.entity_id.startsWith('switch.') &&
-              (e.attributes.friendly_name as string ?? '')
-                .toLowerCase()
-                .includes('light'),
-          );
-        }
-      } else if (friendlyFilter) {
-        filtered = all.filter((e) => (e.attributes.friendly_name as string ?? '').toLowerCase().includes(friendlyFilter.toLowerCase()));
-      }
-      setEntities(filtered.slice(0, 6));
-    } catch {}
-    finally { setLoading(false); }
-  }, [entityIds, domain, friendlyFilter]);
-
-  useEffect(() => { fetchEntities(); pollRef.current = setInterval(fetchEntities, 5000); return () => { if (pollRef.current) clearInterval(pollRef.current); }; }, [fetchEntities]);
+  const settingsQuery = useServerSettings();
+  const url = settingsQuery.data?.jarvis_ha_url || getCachedSetting('jarvis_ha_url');
+  const token = settingsQuery.data?.jarvis_ha_token || getCachedSetting('jarvis_ha_token');
+  const statesQuery = useHomeAssistantStates(url, token);
+  const serviceMutation = useHomeAssistantService(url, token);
+  const all = statesQuery.data ?? [];
+  let filtered = all;
+  if (entityIds?.length) {
+    filtered = all.filter((entity) => entityIds.includes(entity.entity_id));
+  } else if (domain) {
+    filtered = all.filter((entity) => entity.entity_id.startsWith(domain + '.'));
+    if (domain === 'light' && filtered.length === 0) {
+      filtered = all.filter((entity) =>
+        entity.entity_id.startsWith('switch.')
+        && (entity.attributes.friendly_name ?? '').toLowerCase().includes('light')
+      );
+    }
+  } else if (friendlyFilter) {
+    filtered = all.filter((entity) =>
+      (entity.attributes.friendly_name ?? '').toLowerCase().includes(friendlyFilter.toLowerCase())
+    );
+  }
+  const entities = filtered.slice(0, 6);
+  const loading = settingsQuery.isPending || statesQuery.isPending;
 
   const toggle = async (entity: HAEntity) => {
-    const { url, token } = loadHA();
-    const d = entity.entity_id.split('.')[0];
+    const serviceDomain = entity.entity_id.split('.')[0];
     const isOn = ['on','playing','idle','open','unlocked'].includes(entity.state);
-    await fetch('/api/home-assistant', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url, token, domain: d, service: isOn ? 'turn_off' : 'turn_on', serviceData: { entity_id: entity.entity_id } }) });
-    setEntities((prev) => prev.map((e) => e.entity_id === entity.entity_id ? { ...e, state: isOn ? 'off' : 'on' } : e));
-    setTimeout(fetchEntities, 800);
+    await serviceMutation.mutateAsync({
+      domain: serviceDomain,
+      service: isOn ? 'turn_off' : 'turn_on',
+      entityId: entity.entity_id,
+    });
   };
 
   const setBrightness = async (entity: HAEntity, pct: number) => {
-    const { url, token } = loadHA();
-    await fetch('/api/home-assistant', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url, token, domain: 'light', service: 'turn_on', entity_id: entity.entity_id, brightness: Math.round(pct * 2.55) }) });
+    await serviceMutation.mutateAsync({
+      domain: 'light',
+      service: 'turn_on',
+      entityId: entity.entity_id,
+      serviceData: { brightness: Math.round(pct * 2.55) },
+    });
   };
 
   if (loading) return <div className="flex-1 flex items-center justify-center"><div className="w-5 h-5 rounded-full border border-cyan-400/40 border-t-cyan-400 animate-spin" /></div>;

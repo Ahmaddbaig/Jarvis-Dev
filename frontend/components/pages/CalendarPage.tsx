@@ -6,6 +6,13 @@ import type { ICalEvent } from '@/app/api/ical/route';
 import { GoogleCalendarWizard } from '../wizards/GoogleCalendarWizard';
 import type { GoogleServiceId } from '@/shared/google-services';
 import { PageHeader } from '../PageHeader';
+import { useQueryClient } from '@tanstack/react-query';
+import { queryKeys } from '@/frontend/lib/query/keys';
+import {
+  useCalendarEvents,
+  useCalendarIntegrationStatus,
+  useCreateCalendarEvent,
+} from '@/frontend/hooks/queries/useCalendar';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -70,74 +77,47 @@ export function CalendarPage({ onNavigateHome }: Props) {
   const [tasks,   setTasks]   = useState<TaskStore>(loadTasks);
   const [newTask, setNewTask] = useState('');
   const [newTime, setNewTime] = useState('');
-
-  // Google Calendar events state
-  const [gcalEvents, setGcalEvents] = useState<GCalEvents>({});
-  const [gcalEventsLoading, setGcalEventsLoading] = useState(false);
-  const [gcalEventsError, setGcalEventsError] = useState('');
   // Google Calendar MCP wizard state
   const [showWizard, setShowWizard] = useState(false);
-  const [gcalConfigured, setGcalConfigured] = useState(false);
-  const [gcalTools, setGcalTools] = useState(0);
+  const [calendarRange] = useState(() => {
+    const now = new Date();
+    return {
+      timeMin: new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString(),
+      timeMax: new Date(now.getFullYear(), now.getMonth() + 4, 0, 23, 59, 59).toISOString(),
+    };
+  });
+  const queryClient = useQueryClient();
+  const integrationQuery = useCalendarIntegrationStatus();
+  const gcalConfigured = Boolean(integrationQuery.data?.configured && integrationQuery.data?.connected);
+  const gcalTools = integrationQuery.data?.tools ?? 0;
+  const eventsQuery = useCalendarEvents(calendarRange.timeMin, calendarRange.timeMax, gcalConfigured);
+  const createEventMutation = useCreateCalendarEvent(calendarRange.timeMin, calendarRange.timeMax);
+  const gcalEvents = groupByDate(eventsQuery.data ?? []);
+  const gcalEventsLoading = eventsQuery.isFetching;
+  const gcalEventsError = eventsQuery.error instanceof Error ? eventsQuery.error.message : '';
+  const { refetch: refetchCalendarEvents } = eventsQuery;
 
   // ── Fetch MCP events (Google Calendar via OAuth MCP server) ───────────────
 
-  const fetchMcpEvents = useCallback(async () => {
-    setGcalEventsLoading(true);
-    setGcalEventsError('');
-    try {
-      // Fetch a wide window: 1 month back through 4 months forward
-      const now     = new Date();
-      const timeMin = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString();
-      const timeMax = new Date(now.getFullYear(), now.getMonth() + 4, 0, 23, 59, 59).toISOString();
-
-      const res  = await fetch(`/api/mcp/calendar-events?timeMin=${encodeURIComponent(timeMin)}&timeMax=${encodeURIComponent(timeMax)}`);
-      const data = await res.json() as { events?: ICalEvent[]; error?: string };
-      if (!res.ok || data.error) {
-        setGcalEventsError(data.error ?? 'Could not load Google Calendar events.');
-        return;
-      }
-      setGcalEvents(groupByDate(data.events ?? []));
-    } catch {
-      setGcalEventsError('Could not load Google Calendar events.');
-    } finally {
-      setGcalEventsLoading(false);
-    }
-  }, []);
+  const fetchMcpEvents = useCallback(() => {
+    void refetchCalendarEvents();
+  }, [refetchCalendarEvents]);
 
   // Check if Google Calendar MCP is configured on mount
   useEffect(() => {
-    const checkConfig = async () => {
-      try {
-        const res = await fetch('/api/mcp/dynamic');
-        const data = await res.json();
-        const connected = data.configured && data.connected;
-        setGcalConfigured(connected);
-        setGcalTools(data.tools ?? 0);
-        // Auto-show wizard only if not configured AND user hasn't dismissed it
-        if (!data.configured) {
-          const skipped = localStorage.getItem('jarvis_gcal_wizard_skipped');
-          if (!skipped) {
-            setShowWizard(true);
-          }
-        }
-        // If MCP is connected, fetch events from it right away
-        if (connected) {
-          fetchMcpEvents();
-        }
-      } catch {
-        // API not available, don't show wizard
+    if (integrationQuery.isSuccess && !integrationQuery.data.configured) {
+      const skipped = localStorage.getItem('jarvis_gcal_wizard_skipped');
+      if (!skipped) {
+        setShowWizard(true);
       }
-    };
-    checkConfig();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    }
+  }, [integrationQuery.data, integrationQuery.isSuccess]);
 
   const handleWizardComplete = (connectedServices?: GoogleServiceId[]) => {
     setShowWizard(false);
     if (!connectedServices || connectedServices.includes('calendar')) {
-      setGcalConfigured(true);
-      fetchMcpEvents();
+      void integrationQuery.refetch();
+      void queryClient.invalidateQueries({ queryKey: queryKeys.calendar.all });
     }
   };
 
@@ -186,24 +166,23 @@ export function CalendarPage({ onNavigateHome }: Props) {
       if (type === 'add_mcp_event' && detail.event) {
         // Optimistic insert — show the new GCal event immediately
         const ev = detail.event as ICalEvent;
-        const key = ev.start.slice(0, 10);
-        setGcalEvents((prev) => ({ ...prev, [key]: [...(prev[key] ?? []), ev] }));
+        queryClient.setQueryData<ICalEvent[]>(
+          queryKeys.calendar.events(calendarRange.timeMin, calendarRange.timeMax),
+          (current) => [...(current ?? []), ev],
+        );
       }
       if (type === 'remove_mcp_event') {
         // Optimistic filter — strip by ID or title immediately so the UI reacts at once
         const removedId   = detail.eventId as string | undefined;
         const removedText = ((detail.text as string | undefined) ?? '').toLowerCase();
-        setGcalEvents((prev) => {
-          const next = { ...prev };
-          for (const key of Object.keys(next)) {
-            next[key] = next[key].filter((ev) => {
-              if (removedId && ev.id === removedId) return false;
-              if (removedText && ev.title.toLowerCase().includes(removedText)) return false;
-              return true;
-            });
-          }
-          return next;
-        });
+        queryClient.setQueryData<ICalEvent[]>(
+          queryKeys.calendar.events(calendarRange.timeMin, calendarRange.timeMax),
+          (current) => (current ?? []).filter((event) => {
+            if (removedId && event.id === removedId) return false;
+            if (removedText && event.title.toLowerCase().includes(removedText)) return false;
+            return true;
+          }),
+        );
         // Re-fetch immediately — Google's API propagates deletes instantly so the
         // fresh list will not include the deleted event, making the removal permanent.
         fetchMcpEvents();
@@ -214,51 +193,36 @@ export function CalendarPage({ onNavigateHome }: Props) {
     };
     window.addEventListener('jarvis:calendar', handler);
     return () => window.removeEventListener('jarvis:calendar', handler);
-  }, [selectedKey, gcalConfigured, fetchMcpEvents]);
+  }, [calendarRange.timeMax, calendarRange.timeMin, fetchMcpEvents, queryClient, selectedKey]);
 
   // ── Local task helpers ─────────────────────────────────────────────────────
 
-  const [addingToGcal, setAddingToGcal] = useState(false);
+  const addingToGcal = createEventMutation.isPending;
 
   const addTask = useCallback(async () => {
     const text = newTask.trim(); if (!text) return;
 
     if (gcalConfigured) {
       // Add to Google Calendar via MCP
-      setAddingToGcal(true);
       try {
-        const res = await fetch('/api/mcp/create-event', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            summary: text,
-            date:    selectedKey,
-            time:    newTime.trim() || undefined,
-          }),
+        const data = await createEventMutation.mutateAsync({
+          summary: text,
+          date: selectedKey,
+          time: newTime.trim() || undefined,
         });
-        const data = await res.json() as { success?: boolean; error?: string; optimistic?: ICalEvent };
-        if (res.ok && data.success) {
+        if (data.success) {
           setNewTask(''); setNewTime('');
-          // Optimistic insert — show instantly
-          if (data.optimistic) {
-            const key = data.optimistic.start.slice(0, 10);
-            setGcalEvents((prev) => ({ ...prev, [key]: [...(prev[key] ?? []), data.optimistic!] }));
-          }
-          // Background refresh to replace optimistic with real GCal data
-          setTimeout(() => fetchMcpEvents(), 4000);
           return;
         }
         // If MCP create fails, fall through to local
-      } catch { /* fall through */ } finally {
-        setAddingToGcal(false);
-      }
+      } catch { /* fall through */ }
     }
 
     // Local fallback
     const task: Task = { id: Date.now().toString(), text, done: false, time: newTime.trim() || undefined };
     setTasks((prev) => { const next = { ...prev, [selectedKey]: [...(prev[selectedKey] ?? []), task] }; saveTasks(next); return next; });
     setNewTask(''); setNewTime('');
-  }, [newTask, newTime, selectedKey, gcalConfigured, fetchMcpEvents]);
+  }, [createEventMutation, gcalConfigured, newTask, newTime, selectedKey]);
 
   const toggleTask = useCallback((key: string, id: string) => {
     setTasks((prev) => {

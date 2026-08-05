@@ -8,6 +8,14 @@ import {
   getScopeText,
   type GoogleServiceId,
 } from '@/shared/google-services';
+import { useQueryClient } from '@tanstack/react-query';
+import {
+  googleAuthStatusQueryOptions,
+  googleServicesStatusQueryOptions,
+  useGoogleServicesStatus,
+  type GoogleServiceStatus,
+  type GoogleServicesStatusResponse,
+} from '@/frontend/hooks/queries/useGoogleServicesStatus';
 
 interface GoogleCalendarWizardProps {
   onComplete: (connectedServices?: GoogleServiceId[]) => void;
@@ -36,25 +44,6 @@ interface ValidationResult {
   valid: boolean;
   error?: string;
   data?: CredentialsJson;
-}
-
-interface GoogleServiceStatus {
-  id: GoogleServiceId;
-  label: string;
-  shortLabel: string;
-  serverName: string;
-  configured: boolean;
-  connected: boolean;
-  tools: number;
-  authenticated: boolean;
-  tokenPath: string | null;
-}
-
-interface GoogleServicesStatusResponse {
-  hasCredentials: boolean;
-  credentialsPath: string;
-  services: GoogleServiceStatus[];
-  error?: string;
 }
 
 type AuthState =
@@ -272,17 +261,18 @@ const stepVariants = {
 };
 
 export function GoogleCalendarWizard({ onComplete, onSkip, onBack }: GoogleCalendarWizardProps) {
+  const queryClient = useQueryClient();
+  const statusQuery = useGoogleServicesStatus();
   const [currentStep, setCurrentStep] = useState(0);
   const [selectedIds, setSelectedIds] = useState<GoogleServiceId[]>(['calendar']);
   const [selectionTouched, setSelectionTouched] = useState(false);
-  const [serviceStatuses, setServiceStatuses] = useState<Record<GoogleServiceId, GoogleServiceStatus | undefined>>({
-    calendar: undefined,
-    gmail: undefined,
-  });
-  const [statusLoading, setStatusLoading] = useState(true);
-  const [statusError, setStatusError] = useState<string | null>(null);
-  const [hasCredentials, setHasCredentials] = useState(false);
-  const [credentialsPath, setCredentialsPath] = useState<string | null>(null);
+  const serviceStatuses = useMemo(() => Object.fromEntries(
+    (statusQuery.data?.services ?? []).map((service) => [service.id, service]),
+  ) as Record<GoogleServiceId, GoogleServiceStatus | undefined>, [statusQuery.data]);
+  const statusLoading = statusQuery.isPending || statusQuery.isFetching;
+  const statusError = statusQuery.error instanceof Error ? statusQuery.error.message : null;
+  const hasCredentials = statusQuery.data?.hasCredentials ?? false;
+  const credentialsPath = statusQuery.data?.credentialsPath ?? null;
 
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [validatedData, setValidatedData] = useState<CredentialsJson | null>(null);
@@ -311,15 +301,10 @@ export function GoogleCalendarWizard({ onComplete, onSkip, onBack }: GoogleCalen
   );
 
   const fetchGoogleStatus = useCallback(async (updateSelection = false): Promise<GoogleServicesStatusResponse> => {
-    const res = await fetch('/api/mcp/google-services');
-    const data = await res.json() as GoogleServicesStatusResponse;
-    if (!res.ok || data.error) {
-      throw new Error(data.error || 'Could not load Google service status.');
-    }
-
-    setHasCredentials(data.hasCredentials);
-    setCredentialsPath(data.credentialsPath);
-    setServiceStatuses(Object.fromEntries(data.services.map((service) => [service.id, service])) as Record<GoogleServiceId, GoogleServiceStatus>);
+    const data = await queryClient.fetchQuery({
+      ...googleServicesStatusQueryOptions(),
+      staleTime: 0,
+    });
 
     if (updateSelection && !selectionTouched) {
       const pending = data.services
@@ -329,24 +314,15 @@ export function GoogleCalendarWizard({ onComplete, onSkip, onBack }: GoogleCalen
     }
 
     return data;
-  }, [selectionTouched]);
+  }, [queryClient, selectionTouched]);
 
   useEffect(() => {
-    let alive = true;
-    const load = async () => {
-      setStatusLoading(true);
-      setStatusError(null);
-      try {
-        await fetchGoogleStatus(true);
-      } catch (err) {
-        if (alive) setStatusError(err instanceof Error ? err.message : String(err));
-      } finally {
-        if (alive) setStatusLoading(false);
-      }
-    };
-    load();
-    return () => { alive = false; };
-  }, [fetchGoogleStatus]);
+    if (!statusQuery.data || selectionTouched) return;
+    const pending = statusQuery.data.services
+      .filter((service) => !service.connected && !service.authenticated)
+      .map((service) => service.id);
+    setSelectedIds(getGoogleServiceIds(pending.length > 0 ? pending : ['calendar']));
+  }, [selectionTouched, statusQuery.data]);
 
   useEffect(() => {
     return () => {
@@ -445,13 +421,12 @@ export function GoogleCalendarWizard({ onComplete, onSkip, onBack }: GoogleCalen
   const pollForAuth = useCallback(async (id: GoogleServiceId) => {
     for (let attempt = 0; attempt < 90; attempt++) {
       await delay(2000);
-      const res = await fetch(`/api/mcp/auth-status?service=${encodeURIComponent(id)}`);
-      const data = await res.json() as { authenticated?: boolean; error?: string };
-      if (!res.ok || data.error) throw new Error(data.error || `Could not check ${id} auth status.`);
+      const data = await queryClient.fetchQuery(googleAuthStatusQueryOptions(id));
+      if (data.error) throw new Error(data.error || `Could not check ${id} auth status.`);
       if (data.authenticated) return;
     }
     throw new Error('Authentication timed out. Complete Google sign-in in the browser, then retry this service.');
-  }, []);
+  }, [queryClient]);
 
   const runAuthForServices = useCallback(async (idsToRun: GoogleServiceId[]) => {
     if (idsToRun.length === 0) return;

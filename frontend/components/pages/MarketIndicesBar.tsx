@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useStockQuotes } from '@/frontend/hooks/queries/useStockQuotes';
 
 interface IndexQuote {
   symbol: string;
@@ -21,35 +22,15 @@ const INDICES = [
 ];
 
 export function MarketIndicesBar() {
-  const [quotes, setQuotes] = useState<IndexQuote[]>([]);
   const [time, setTime] = useState('');
   const [date, setDate] = useState('');
+  const { data: stockQuotes = [] } = useStockQuotes(INDICES.map((index) => index.symbol), 60_000);
+  const quotes: IndexQuote[] = stockQuotes.map((quote) => ({
+    ...quote,
+    label: INDICES.find((index) => index.symbol === quote.symbol)?.label ?? quote.symbol,
+  }));
 
   useEffect(() => {
-    const symbols = INDICES.map((i) => i.symbol).join(',');
-
-    async function fetchIndices() {
-      try {
-        const res = await fetch(`/api/stock-quote?symbols=${encodeURIComponent(symbols)}`);
-        const data = (await res.json()) as {
-          quotes?: { symbol: string; price?: number; changePct?: number; up?: boolean }[];
-        };
-        if (data.quotes) {
-          setQuotes(
-            data.quotes.map((q) => ({
-              ...q,
-              label: INDICES.find((i) => i.symbol === q.symbol)?.label ?? q.symbol,
-            }))
-          );
-        }
-      } catch {
-        // silent
-      }
-    }
-
-    fetchIndices();
-    const stockInterval = setInterval(fetchIndices, 60_000);
-
     function tick() {
       const now = new Date();
       setTime(
@@ -63,7 +44,6 @@ export function MarketIndicesBar() {
     const clockInterval = setInterval(tick, 1000);
 
     return () => {
-      clearInterval(stockInterval);
       clearInterval(clockInterval);
     };
   }, []);

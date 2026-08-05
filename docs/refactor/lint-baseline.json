@@ -1,15 +1,15 @@
 {
   "snapshotCommit": "5fca4270a5912dc9e41fecc0f35c5327d3ffafa8",
-  "maxWarnings": 67,
+  "maxWarnings": 63,
   "rules": {
     "@next/next/no-img-element": 8,
     "@typescript-eslint/no-explicit-any": 2,
     "@typescript-eslint/no-unused-expressions": 1,
-    "@typescript-eslint/no-unused-vars": 17,
+    "@typescript-eslint/no-unused-vars": 15,
     "react-hooks/exhaustive-deps": 6,
     "react-hooks/immutability": 1,
     "react-hooks/purity": 6,
     "react-hooks/refs": 8,
-    "react-hooks/set-state-in-effect": 18
+    "react-hooks/set-state-in-effect": 16
   }
 }

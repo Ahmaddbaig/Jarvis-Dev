@@ -1,19 +1,10 @@
 'use client';
-import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion } from 'framer-motion';
-
-interface PrinterTelemetry {
-  gcode_state?: string;
-  subtask_name?: string;
-  mc_percent?: number;
-  mc_remaining_time?: number;
-  nozzle_temper?: number;
-  bed_temper?: number;
-  nozzle_target_temper?: number;
-  bed_target_temper?: number;
-}
-
-interface PrinterInfo { deviceId: string; name: string; model?: string }
+import {
+  usePrinterCommand,
+  usePrinterDevices,
+  usePrinterTelemetry,
+} from '@/frontend/hooks/queries/usePrinters';
 
 function getPrinterImage(name: string): string | null {
   const n = name.toUpperCase();
@@ -43,25 +34,14 @@ function statusColor(state?: string) {
 }
 
 export function PrinterWidget({ config }: { config?: Record<string, unknown> }) {
-  const [printers, setPrinters] = useState<PrinterInfo[]>([]);
-  const [telemetry, setTelemetry] = useState<Record<string, PrinterTelemetry>>({});
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const { data: printers = [] } = usePrinterDevices();
+  const { data: telemetry = {} } = usePrinterTelemetry();
+  const commandMutation = usePrinterCommand();
 
   const targetName = config?.printer_name as string | undefined;
 
-  const fetchData = useCallback(async () => {
-    try {
-      const [pr, tr] = await Promise.all([fetch('/api/bambu/printers'), fetch('/api/bambu/telemetry')]);
-      if (pr.ok) setPrinters(await pr.json());
-      if (tr.ok) setTelemetry(await tr.json());
-    } catch {}
-  }, []);
-
-  useEffect(() => { fetchData(); pollRef.current = setInterval(fetchData, 4000); return () => { if (pollRef.current) clearInterval(pollRef.current); }; }, [fetchData]);
-
   const sendCmd = async (deviceId: string, command: string) => {
-    await fetch('/api/bambu/command', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ deviceId, command }) });
-    setTimeout(fetchData, 500);
+    await commandMutation.mutateAsync({ deviceId, command });
   };
 
   // Filter to target printer if specified

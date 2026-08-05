@@ -1,52 +1,29 @@
 'use client';
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { getCachedSetting } from '@/frontend/lib/serverSettings';
-
-interface HAEntity {
-  entity_id: string;
-  state: string;
-  attributes: Record<string, unknown>;
-}
-
-function loadHA() {
-  if (typeof window === 'undefined') return { url: '', token: '' };
-  return {
-    url:   getCachedSetting('jarvis_ha_url'),
-    token: getCachedSetting('jarvis_ha_token'),
-  };
-}
+import { useServerSettings } from '@/frontend/hooks/queries/useServerSettings';
+import { useHomeAssistantService, useHomeAssistantStates } from '@/frontend/hooks/queries/useHomeAssistant';
 
 export function TVWidget() {
-  const [tv, setTv] = useState<HAEntity | null>(null);
   const [volume, setVolume] = useState(28);
-  const [dragging, setDragging] = useState(false);
   const [sourceOffset, setSourceOffset] = useState(0);
   const trackRef = useRef<HTMLDivElement>(null);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const settingsQuery = useServerSettings();
+  const url = settingsQuery.data?.jarvis_ha_url || getCachedSetting('jarvis_ha_url');
+  const token = settingsQuery.data?.jarvis_ha_token || getCachedSetting('jarvis_ha_token');
+  const statesQuery = useHomeAssistantStates(url, token);
+  const serviceMutation = useHomeAssistantService(url, token);
+  const tv = statesQuery.data?.find((entity) => entity.entity_id.startsWith('media_player.')) ?? null;
 
-  const fetchTV = useCallback(async () => {
-    const { url, token } = loadHA();
-    if (!url || !token) return;
-    try {
-      const res = await fetch(`/api/home-assistant?url=${encodeURIComponent(url)}&token=${encodeURIComponent(token)}&path=/api/states`);
-      if (!res.ok) return;
-      const states = await res.json() as HAEntity[];
-      const found = states.find((e) => e.entity_id.startsWith('media_player.'));
-      if (found) {
-        setTv(found);
-        if (found.attributes.volume_level != null) setVolume(Math.round((found.attributes.volume_level as number) * 100));
-      }
-    } catch {}
-  }, []);
-
-  useEffect(() => { fetchTV(); pollRef.current = setInterval(fetchTV, 5000); return () => { if (pollRef.current) clearInterval(pollRef.current); }; }, [fetchTV]);
+  useEffect(() => {
+    if (tv?.attributes.volume_level != null) {
+      setVolume(Math.round(tv.attributes.volume_level * 100));
+    }
+  }, [tv]);
 
   const callService = async (domain: string, service: string, data: Record<string, unknown> = {}) => {
-    const { url, token } = loadHA();
     if (!url || !token || !tv) return;
-    await fetch('/api/home-assistant', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url, token, domain, service, entity_id: tv.entity_id, ...data }) });
-    setTimeout(fetchTV, 600);
+    await serviceMutation.mutateAsync({ domain, service, entityId: tv.entity_id, serviceData: data });
   };
 
   const isOn = tv && !['off', 'unavailable', 'unknown', 'standby'].includes(tv.state);

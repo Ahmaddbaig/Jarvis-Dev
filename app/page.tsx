@@ -12,7 +12,7 @@ import { HomeAssistantPage } from "@/frontend/components/pages/HomeAssistantPage
 import { PrinterPage } from "@/frontend/components/pages/PrinterPage";
 import { MusicPage } from "@/frontend/components/pages/MusicPage";
 import { AnimatePresence } from 'framer-motion';
-import { loadServerSettings } from '@/frontend/lib/serverSettings';
+import { useServerSettings } from '@/frontend/hooks/queries/useServerSettings';
 
 // MapLibre GL JS accesses browser APIs on import — must be client-only (no SSR)
 const MapPage = dynamic(
@@ -25,6 +25,7 @@ type JarvisPage = 'home' | 'news' | 'map' | 'calendar' | 'home-assistant' | '3d-
 const VALID_PAGES: JarvisPage[] = ['home', 'news', 'map', 'calendar', 'home-assistant', '3d-printers', 'music'];
 
 export default function Home() {
+  useServerSettings();
   const [showIntro, setShowIntro]         = useState(false);
   const [contentReady, setContentReady]   = useState(false);
   // Always start on 'home' so server and client render the same HTML (no
@@ -62,10 +63,6 @@ export default function Home() {
     if (saved && VALID_PAGES.includes(saved) && saved !== 'home') {
       setCurrentPage(saved);
     }
-
-    // Pre-warm the server settings cache so all child components can read
-    // getCachedSetting() synchronously before their own effects run.
-    loadServerSettings();
 
     const seen = sessionStorage.getItem('jarvis_intro_done');
     if (!seen) {
