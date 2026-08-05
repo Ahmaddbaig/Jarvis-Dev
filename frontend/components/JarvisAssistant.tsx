@@ -28,12 +28,15 @@ import {
   migrateLegacyVoiceboxMode,
 } from '@/frontend/lib/voiceEngineMode';
 import {
+  acquireMicrophone,
   buildAssistantInstructions,
   buildTranscriptionPrompt,
   createLocalAIRealtimeAdapter,
   createOpenAIRealtimeAdapter,
+  probeMicrophonePermission,
   hasJarvisWakeWord,
   releaseRealtimeTransport,
+  setMicrophoneStreamMuted,
   useVoiceSessionState,
 } from '@/frontend/lib/voiceSession';
 
@@ -1102,34 +1105,14 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
       voiceSession.starting();
       
       // Get microphone access
-      const microphoneId = currentSettings.microphoneDeviceId?.trim();
-      const audioConstraints: MediaTrackConstraints = {
-        ...(microphoneId ? { deviceId: { exact: microphoneId } } : {}),
-        channelCount: 1,
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: false,
-      };
-
-      let stream: MediaStream;
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
-      } catch (error) {
-        if (!microphoneId) throw error;
-        console.warn('[Jarvis] Selected microphone is unavailable; falling back to the system default.', error);
-        stream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            channelCount: 1,
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: false,
-          },
-        });
-      }
-      localAudioStreamRef.current = stream;
-      stream.getAudioTracks().forEach((track) => {
-        track.enabled = !micMutedRef.current;
+      const { stream } = await acquireMicrophone({
+        deviceId: currentSettings.microphoneDeviceId,
+        muted: micMutedRef.current,
+        onFallback: (error) => {
+          console.warn('[Jarvis] Selected microphone is unavailable; falling back to the system default.', error);
+        },
       });
+      localAudioStreamRef.current = stream;
 
       const pc = new RTCPeerConnection();
       peerConnectionRef.current = pc;
@@ -1445,7 +1428,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
       releaseRealtimeResources();
       voiceSession.starting();
 
-      await navigator.mediaDevices.getUserMedia({ audio: true });
+      await probeMicrophonePermission();
 
       const agentId = currentSettings.elevenLabsAgentId?.trim();
       if (!agentId) {
@@ -1538,9 +1521,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     micMutedRef.current = muted;
     voiceSession.setMicrophoneMuted(muted);
 
-    localAudioStreamRef.current?.getAudioTracks().forEach((track) => {
-      track.enabled = !muted;
-    });
+    setMicrophoneStreamMuted(localAudioStreamRef.current, muted);
     peerConnectionRef.current?.getSenders().forEach((sender) => {
       if (sender.track?.kind === 'audio') sender.track.enabled = !muted;
     });

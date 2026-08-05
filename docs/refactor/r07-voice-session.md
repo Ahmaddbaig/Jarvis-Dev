@@ -16,11 +16,13 @@ Status: provider-neutral lifecycle slice implemented and locally verified on 202
 - `frontend/lib/voiceSession/instructions.ts` now owns shared speech vocabulary normalization, transcription priming, wake-word gating, browser safety, music routing, and navigation constraints used across providers.
 - OpenAI and LocalAI now implement one realtime provider adapter for readiness, signaling, ICE requirements, and session-update translation; the controller injects configuration and credentials rather than either adapter reading browser storage.
 - Provider failures expose stable, redacted codes and never include upstream response bodies.
+- `frontend/lib/voiceSession/audio-input.ts` owns microphone constraints, selected-device fallback, initial mute application, permission probing, and stream track state.
+- The ElevenLabs permission check now stops its temporary tracks immediately; the SDK remains the sole owner of session audio.
 - Microphone mute state remains independent from connection lifecycle, matching current compact-mode and desktop-overlay behavior.
 - Starting or connecting clears stale visible errors; a provider error without details preserves the last known detail, matching the existing data-channel error path.
 
 ## Deliberate compatibility limit
 
-These slices do not yet move WebRTC construction, the realtime event loop, tool calls, music ducking, or visualizer ownership. Existing orchestration still runs inside `JarvisAssistant`; lifecycle writes, provider signaling/configuration, shared instructions, and transport teardown now sit behind tested boundaries.
+These slices do not yet move WebRTC construction, the realtime event loop, tool calls, music ducking, or visualizer ownership. Existing orchestration still runs inside `JarvisAssistant`; lifecycle writes, provider signaling/configuration, microphone input, shared instructions, and transport teardown now sit behind tested boundaries.
 
-Local evidence: 11 test files and 106 tests pass. Reducer characterizations cover all seven phases, stale callbacks, repeated failure, mute, and no-op transitions; provider tests cover both signaling formats, shared configuration, credential injection, readiness, missing models, malformed SDP, and response-body redaction. Resource and instruction suites retain their earlier lifecycle and safety coverage. TypeScript, the unchanged 67-warning lint ratchet, all 48 inventoried routes, and the production Next.js build remain required gates.
+Local evidence: 12 test files and 111 tests pass. Reducer characterizations cover all seven phases, stale callbacks, repeated failure, mute, and no-op transitions; provider tests cover both signaling formats, shared configuration, credential injection, readiness, missing models, malformed SDP, and response-body redaction. Microphone tests cover constraints, mute, one-shot fallback, failure without reconnect loops, and permission-probe cleanup. Resource and instruction suites retain their earlier lifecycle and safety coverage. TypeScript, the unchanged 67-warning lint ratchet, all 48 inventoried routes, and the production Next.js build remain required gates.
