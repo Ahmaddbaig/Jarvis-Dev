@@ -4,6 +4,9 @@
   "description": "Jarvis V5 - AI Desktop Assistant",
   "main": "dist-electron/main.js",
   "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
   "allowScripts": {
     "electron@36.9.5": true
   },
