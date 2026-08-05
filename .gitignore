@@ -13,6 +13,10 @@ out/
 dist-electron/
 release/
 scripts/dist/
+services/ai-engine/.venv/
+services/ai-engine/dist/
+apps/companion/dist/
+jarvis-ai-engine-session.json
 
 # VAD runtime assets (copied from node_modules by scripts/copy-vad-assets.js)
 public/vad/
@@ -39,3 +43,7 @@ migration-quarantine/
 # Logs
 *.log
 npm-debug.log*
+
+# Python bytecode
+__pycache__/
+*.py[cod]

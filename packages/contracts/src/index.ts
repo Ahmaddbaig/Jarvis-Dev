@@ -1,4 +1,5 @@
 export * from './audit';
+export * from './ai-engine';
 export * from './command';
 export * from './credentials';
 export * from './errors';
@@ -7,5 +8,6 @@ export * from './json-value';
 export * from './lan-gateway';
 export * from './policy';
 export * from './protocol';
+export * from './remote-control';
 export * from './settings';
 export * from './tasks';

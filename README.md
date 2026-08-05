@@ -6,7 +6,7 @@ Electron + Next.js desktop assistant with voice, HUD widgets, and smart-home int
 
 ## Refactor program
 
-The whole-codebase refactor starts with a behavior-preserving baseline. The current gate status and reproducibility evidence are in [docs/refactor/baseline-2026-08-05.md](docs/refactor/baseline-2026-08-05.md), with the [initial threat model](docs/refactor/threat-model.md), source-validated [API route inventory](docs/refactor/route-inventory.json), [typed Electron build notes](docs/refactor/r02-electron-build.md), [test/CI foundation](docs/refactor/r03-test-ci.md), [shared contract protocol](docs/refactor/r04-contracts.md), [capability policy foundation](docs/refactor/r05-policy.md), [static tool catalog and dispatcher](docs/refactor/r06-tool-catalog.md), [voice-session extraction](docs/refactor/r07-voice-session.md), [UI/settings decomposition](docs/refactor/r08-ui-settings.md), [renderer server-state ownership](docs/refactor/r09-server-state.md), [SQLite persistence/recovery](docs/refactor/r10-sqlite-persistence.md), [OS-vault credential migration](docs/refactor/r11-os-vault.md), and [internal/LAN gateway hardening](docs/refactor/r12-gateway-hardening.md). Run `npm run check` for the local quality gate, `npm run refactor:baseline` for the full baseline suite, and `npm run refactor:routes -- --check` to detect unclassified route changes.
+The whole-codebase refactor starts with a behavior-preserving baseline. The current gate status and reproducibility evidence are in [docs/refactor/baseline-2026-08-05.md](docs/refactor/baseline-2026-08-05.md), with the [initial threat model](docs/refactor/threat-model.md), source-validated [API route inventory](docs/refactor/route-inventory.json), [typed Electron build notes](docs/refactor/r02-electron-build.md), [test/CI foundation](docs/refactor/r03-test-ci.md), [shared contract protocol](docs/refactor/r04-contracts.md), [capability policy foundation](docs/refactor/r05-policy.md), [static tool catalog and dispatcher](docs/refactor/r06-tool-catalog.md), [voice-session extraction](docs/refactor/r07-voice-session.md), [UI/settings decomposition](docs/refactor/r08-ui-settings.md), [renderer server-state ownership](docs/refactor/r09-server-state.md), [SQLite persistence/recovery](docs/refactor/r10-sqlite-persistence.md), [OS-vault credential migration](docs/refactor/r11-os-vault.md), [internal/LAN gateway hardening](docs/refactor/r12-gateway-hardening.md), [supervised FastAPI sidecar](docs/refactor/r13-fastapi-ai-engine.md), [LocalAI lifecycle](docs/refactor/r14-local-model-lifecycle.md), and [remote-client protocol unification](docs/refactor/r15-remote-protocols.md). Run `npm run check` for the local quality gate, `npm run refactor:baseline` for the full baseline suite, `npm run refactor:routes -- --check` to detect unclassified route changes, and `npm run refactor:resources` to validate packaged remote resources.
 
 ## Running in development
 
@@ -15,6 +15,8 @@ Double-click `RUN-JARVIS-DEV.command`, or:
 ```bash
 npm run dev:desktop
 ```
+
+The launcher creates the pinned AI-engine environment on first use. For manual setup and verification use `npm run ai:setup`, `npm run ai:test`, and `npm run build:ai`.
 
 ## Voice engines
 
@@ -69,7 +71,7 @@ the user.
 │   ├── layout.tsx        #   root layout + global CSS
 │   ├── desktop-overlay/  #   /desktop-overlay page
 │   └── api/              #   BACKEND ENDPOINTS — one folder per HTTP API
-│       ├── settings/     #     reads/writes jarvis-server-settings.json
+│       ├── settings/     #     reads/writes validated Core settings
 │       ├── bambu/        #     3D printer (login, status, telemetry, commands)
 │       ├── mcp/          #     MCP servers + Google services auth
 │       └── ...           #     weather, music, shell, web-search, xray, etc.
@@ -85,6 +87,7 @@ the user.
 │   │                     #   definitions for the voice model, error bus)
 │   └── assets/           #   images imported by components
 │
+├── apps/                 # Electron desktop and independently packaged Companion
 ├── backend/              # BACKEND — server-side logic used by app/api routes
 │   ├── bambu/            #   Bambu Lab MQTT connection manager
 │   ├── mcp/              #   MCP server manager + Google service runtime
@@ -92,7 +95,8 @@ the user.
 │   ├── search/           #   DuckDuckGo search + datasheet ranking
 │   └── media/            #   Windows media session helper
 │
-├── shared/               # types/config used by BOTH frontend and backend
+├── packages/             # runtime contracts, policy, persistence, secrets, and Core packages
+├── services/ai-engine/   # authenticated Python/FastAPI provider sidecar
 │
 ├── dist-electron/        # Electron main + preload (compiled)
 ├── scripts/              # Python computer-use helper + compiled binary

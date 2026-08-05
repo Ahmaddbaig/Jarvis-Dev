@@ -77,6 +77,9 @@ export const queryKeys = {
     all: ['models'] as const,
     health: (provider: string) => ['models', 'health', provider] as const,
     voiceProfiles: () => ['models', 'voice-profiles'] as const,
+    aiEngineHealth: () => ['models', 'ai-engine-health'] as const,
+    aiEngineProfiles: () => ['models', 'ai-engine-profiles'] as const,
+    aiEngineJob: (id: string | null) => ['models', 'ai-engine-job', id] as const,
   },
   music: {
     all: ['music'] as const,

@@ -117,6 +117,9 @@ done
 cp "$pipeline_source" "$models_dir/${pipeline_model}.yaml"
 print -r -- "$requested_profile" > "$localai_root/installed-profile"
 
+echo "Hashing the selected profile and writing its activation manifest..."
+python3 "$repo_root/services/ai-engine/generate_manifest.py" "$localai_root" "$requested_profile"
+
 echo
 echo "Jarvis Local AI $profile_description is installed."
 echo "Start Jarvis with RUN-JARVIS-DEV.command, then choose Local AI > ${requested_profile:u} Local in Settings."

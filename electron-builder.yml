@@ -25,6 +25,10 @@ extraResources:
     to: buildfiles
     filter:
       - "icon.png"
+  - from: services/ai-engine/dist/jarvis-ai-engine
+    to: ai-engine
+    filter:
+      - "**/*"
 
 mac:
   category: public.app-category.productivity

@@ -12,6 +12,10 @@ export interface ChromeControlStatus {
   lastSeen?: string;
   extensionPath: string;
   supportedEndpoints: string[];
+  protocol: number;
+  compatible: boolean;
+  extensionVersion?: string;
+  capabilities: string[];
 }
 
 export interface ChromePairing {

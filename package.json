@@ -5,10 +5,13 @@
   "main": "dist-electron/main.js",
   "private": true,
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "apps/companion"
   ],
   "allowScripts": {
-    "electron@36.9.5": true
+    "electron@36.9.5": true,
+    "@jitsi/robotjs@0.6.24": true,
+    "sharp@0.34.5": true
   },
   "scripts": {
     "dev": "ELECTRON_RUN_AS_NODE=1 ./node_modules/electron/dist/Electron.app/Contents/MacOS/Electron ./node_modules/next/dist/bin/next dev --webpack -H 127.0.0.1 -p 3100",
@@ -17,23 +20,29 @@
     "serve": "next build && next start -H 127.0.0.1 -p 3000",
     "build:next": "next build",
     "build:electron": "tsc -p tsconfig.electron.json",
-    "build:python": "node electron-scripts/build-python.js",
-    "build": "npm run build:python && npm run build:next && node electron-scripts/postbuild.js && npm run build:electron",
+    "ai:setup": "node electron-scripts/ai-engine.js setup",
+    "ai:test": "node electron-scripts/ai-engine.js test",
+    "ai:dev": "node electron-scripts/ai-engine.js dev",
+    "build:ai": "node electron-scripts/ai-engine.js build",
+    "build:python": "node electron-scripts/build-python.js && npm run build:ai",
+    "build": "npm run build:python && npm run build:next && node electron-scripts/postbuild.js && npm run build:electron && npm run build:companion",
     "dist:mac": "npm run build && electron-builder --mac --publish never",
     "dist:win": "npm run build && electron-builder --win --publish never",
     "dist:linux": "npm run build && electron-builder --linux --publish never",
     "dist": "npm run build && electron-builder --mac --win --publish never",
-    "companion": "npm --prefix scripts/companion start",
-    "companion:server": "node scripts/companion/server.cjs",
+    "companion": "npm run start --workspace jarvis-companion",
+    "companion:server": "npm run server --workspace jarvis-companion",
+    "build:companion": "npm run build --workspace jarvis-companion",
     "refactor:baseline": "node scripts/refactor/check-baseline.mjs",
     "refactor:routes": "node scripts/refactor/validate-route-inventory.mjs",
     "refactor:voice-benchmark": "node scripts/refactor/voice-benchmark.mjs",
+    "refactor:resources": "node scripts/refactor/validate-packaged-resources.mjs",
     "prestart": "npm run build:electron",
     "start": "electron .",
     "lint": "node scripts/refactor/check-lint-budget.mjs",
     "lint:report": "eslint",
     "typecheck": "tsc --noEmit --incremental false",
-    "check": "npm run lint && npm test && npm run typecheck && npm run refactor:routes -- --check",
+    "check": "npm run lint && npm test && npm run ai:test && npm run typecheck && npm run refactor:routes -- --check && npm run refactor:resources",
     "test": "vitest run",
     "postinstall": "node scripts/copy-vad-assets.js"
   },

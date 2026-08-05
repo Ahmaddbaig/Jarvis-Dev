@@ -18,6 +18,7 @@ function setupText(info) {
     .map((address) => `Address: https://${address}:${info.port}`);
   return [
     `Device: ${info.deviceName}`,
+    `Protocol: ${info.protocol} / Companion ${info.componentVersion} (${info.buildId})`,
     ...addresses,
     `Pairing code: ${info.pairingCode}`,
     `Fingerprint: ${info.fingerprintShort}`,
@@ -77,7 +78,9 @@ function refreshMenu() {
 
 app.whenReady().then(async () => {
   if (process.platform === 'darwin') app.dock?.hide();
-  const iconPath = path.join(__dirname, '..', '..', 'buildfiles', 'icon.png');
+  const iconPath = app.isPackaged
+    ? path.join(process.resourcesPath, 'icon.png')
+    : path.join(__dirname, '..', '..', 'buildfiles', 'icon.png');
   let icon = nativeImage.createFromPath(iconPath);
   if (process.platform === 'darwin' && !icon.isEmpty()) icon = icon.resize({ width: 18, height: 18 });
   tray = new Tray(icon);

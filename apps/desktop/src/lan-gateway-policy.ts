@@ -13,6 +13,8 @@ function allowed(requiredScope: LanGatewayScope, consequential = false): LanRout
 }
 
 const LAN_API_ALLOWLIST = new Map<string, LanRouteDecision>([
+    ['GET /api/ai-engine/health', allowed('read')],
+    ['GET /api/ai-engine/models', allowed('read')],
     ['GET /api/bambu/printers', allowed('read')],
     ['GET /api/bambu/status', allowed('read')],
     ['GET /api/bambu/tasks', allowed('read')],

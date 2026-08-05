@@ -5,6 +5,7 @@ import type { JarvisSettings } from '@jarvis/contracts';
 import { sfx } from '@/frontend/lib/sfx';
 import { ChromeSettingsSection } from './ChromeSettingsSection';
 import { LanGatewaySettingsSection } from './LanGatewaySettingsSection';
+import { AIEngineSettingsSection } from './AIEngineSettingsSection';
 import { useSystemDiagnostics } from '@/frontend/hooks/queries/useSystemDiagnostics';
 import {
   useCreateRecoveryExport,
@@ -120,6 +121,8 @@ export function SystemSettingsSection({ settings, onChange }: SystemSettingsSect
       )}
 
       <ChromeSettingsSection />
+
+      <AIEngineSettingsSection />
 
       <LanGatewaySettingsSection />
 

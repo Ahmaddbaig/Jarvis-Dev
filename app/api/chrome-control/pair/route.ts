@@ -34,6 +34,9 @@ export async function POST(req: NextRequest) {
       code: String(body.code || ''),
       extensionId,
       extensionName: typeof body.extensionName === 'string' ? body.extensionName : undefined,
+      protocol: body.protocol,
+      extensionVersion: body.extensionVersion,
+      capabilities: body.capabilities,
     });
     return NextResponse.json(paired, { headers: extensionCorsHeaders(origin) });
   } catch (error) {

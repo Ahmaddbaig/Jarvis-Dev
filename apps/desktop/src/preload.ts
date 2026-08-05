@@ -16,6 +16,7 @@ const electronBridge = {
     overlayClick: () => ipcRenderer.send('desktop-mode:overlay-clicked'),
     getDesktopControlToken: () => ipcRenderer.invoke('desktop-control-token:get') as Promise<string>,
     getLanGatewayInfo: () => ipcRenderer.invoke('lan-gateway:info'),
+    getAIEngineStatus: () => ipcRenderer.invoke('ai-engine:status'),
     getAudioSourceId: () => ipcRenderer.invoke('get-audio-source-id') as Promise<string | null>,
     getMacPermissions: () => ipcRenderer.invoke('macos-permissions:get'),
     requestMacPermission: (permission: DesktopPermission) => ipcRenderer.invoke('macos-permissions:request', permission),

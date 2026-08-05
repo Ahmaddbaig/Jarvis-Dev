@@ -41,10 +41,16 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
-          cache-dependency-path: scripts/computer-use-requirements.txt
+          cache-dependency-path: |
+            scripts/computer-use-requirements.txt
+            services/ai-engine/requirements-runtime.txt
+            services/ai-engine/requirements-dev.txt
 
       - name: Install Node dependencies
         run: npm ci
+
+      - name: Install AI engine dependencies
+        run: npm run ai:setup
 
       - name: Run quality gate
         run: npm run check
@@ -60,6 +66,7 @@ jobs:
           test -f .next/standalone/server.js
           test -f .next/standalone/scripts/computer_use.py
           test -f .next/standalone/scripts/dist/computer_use || test -f .next/standalone/scripts/dist/computer_use.exe
+          test -f services/ai-engine/dist/jarvis-ai-engine/jarvis-ai-engine || test -f services/ai-engine/dist/jarvis-ai-engine/jarvis-ai-engine.exe
           test ! -e .next/standalone/jarvis-server-settings.json
           test ! -e .next/standalone/jarvis-companions.json
           test ! -e .next/standalone/.jarvis-desktop-token

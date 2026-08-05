@@ -7,6 +7,10 @@ export interface CompanionDevice {
   platform: string;
   arch: string;
   pairedAt: string;
+  protocol?: number;
+  companionVersion?: string;
+  buildId?: string;
+  capabilities?: string[];
 }
 
 export interface CompanionPublicDevice {
@@ -31,10 +35,17 @@ export interface CompanionPublicDevice {
     height?: number;
   }>;
   error?: string;
+  compatible?: boolean;
+  protocol?: number;
+  companionVersion?: string;
+  capabilities?: string[];
 }
 
 export interface CompanionStatus {
-  protocol: number;
+  protocol: typeof JARVIS_REMOTE_PROTOCOL_VERSION;
+  componentVersion: string;
+  buildId: string;
+  capabilities: string[];
   deviceId: string;
   deviceName: string;
   platform: string;
@@ -73,3 +84,4 @@ export interface CompanionRemoteConfig {
   fingerprint: string;
   platform: string;
 }
+import type { JARVIS_REMOTE_PROTOCOL_VERSION } from '@jarvis/contracts';

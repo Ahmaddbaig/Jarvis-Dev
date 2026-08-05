@@ -42,7 +42,7 @@ export function ChromeSettingsSection() {
           </p>
         </div>
         <span className={`text-[10px] uppercase tracking-wider ${status?.connected ? 'text-emerald-400' : status?.paired ? 'text-amber-400' : 'text-cyan-700'}`}>
-          {status?.connected ? 'Connected' : status?.paired ? 'Paired / Offline' : 'Not paired'}
+          {status?.paired && status.compatible === false ? 'Update / re-pair' : status?.connected ? 'Connected' : status?.paired ? 'Paired / Offline' : 'Not paired'}
         </span>
       </div>
 
@@ -107,6 +107,11 @@ export function ChromeSettingsSection() {
 
       {status?.lastSeen && (
         <p className="text-[9px] text-cyan-800">Last extension contact: {new Date(status.lastSeen).toLocaleString()}</p>
+      )}
+      {status?.paired && (
+        <p className="text-[9px] text-cyan-800 font-mono">
+          Remote protocol {status.protocol} · extension {status.extensionVersion || 'legacy'} · {status.capabilities.length} capabilities
+        </p>
       )}
       {error && <p className="text-[10px] text-red-400 font-mono">{error}</p>}
     </div>

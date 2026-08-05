@@ -10,6 +10,9 @@ const selfsigned = require('selfsigned');
 const robot = require('@jitsi/robotjs');
 const screenshot = require('screenshot-desktop');
 const sharp = require('sharp');
+const remoteProtocol = require('./remote-protocol.json');
+const { ResultLedger } = require('./result-ledger.cjs');
+const companionPackage = require('./package.json');
 
 const DEFAULT_PORT = 45831;
 const MAX_JSON_BYTES = 1024 * 1024;
@@ -19,6 +22,8 @@ const PAIR_CODE_MS = 5 * 60_000;
 const PAIR_ATTEMPTS_PER_WINDOW = 5;
 const PREVIEW_MIN_INTERVAL_MS = 500;
 const PREVIEW_MAX_WIDTH = 960;
+const COMPONENT_VERSION = companionPackage.version;
+const BUILD_ID = process.env.JARVIS_COMPANION_BUILD_ID || COMPONENT_VERSION;
 
 function defaultDataDir() {
   if (process.platform === 'darwin') {
@@ -89,13 +94,14 @@ function freshPairingCode() {
   return String(crypto.randomInt(100000, 1_000_000));
 }
 
-function jsonResponse(res, status, body) {
+function jsonResponse(res, status, body, extraHeaders = {}) {
   const payload = Buffer.from(JSON.stringify(body));
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': payload.length,
     'Cache-Control': 'no-store',
     'X-Content-Type-Options': 'nosniff',
+    ...extraHeaders,
   });
   res.end(payload);
 }
@@ -505,6 +511,10 @@ async function startCompanion(options = {}) {
   const host = options.host || process.env.JARVIS_COMPANION_HOST || '0.0.0.0';
   const dataDir = options.dataDir || process.env.JARVIS_COMPANION_DATA_DIR || defaultDataDir();
   const state = await createIdentity(dataDir, options.deviceName || process.env.JARVIS_COMPANION_NAME);
+  const resultLedger = new ResultLedger({
+    retentionMs: remoteProtocol.resultRetentionMs,
+    filePath: path.join(dataDir, 'command-results.json'),
+  });
   let pairingCode = freshPairingCode();
   let pairingExpiresAt = Date.now() + PAIR_CODE_MS;
   let paused = false;
@@ -514,6 +524,9 @@ async function startCompanion(options = {}) {
 
   const saveIdentity = () => writePrivateJson(state.identityPath, state.identity);
   const pairingInfo = () => ({
+    protocol: remoteProtocol.protocol,
+    componentVersion: COMPONENT_VERSION,
+    buildId: BUILD_ID,
     deviceId: state.identity.deviceId,
     deviceName: state.identity.deviceName,
     port,
@@ -555,7 +568,10 @@ async function startCompanion(options = {}) {
     const pathname = requestUrl.pathname;
     if (req.method === 'GET' && pathname === '/v1/identity') {
       jsonResponse(res, 200, {
-        protocol: 2,
+        protocol: remoteProtocol.protocol,
+        componentVersion: COMPONENT_VERSION,
+        buildId: BUILD_ID,
+        capabilities: remoteProtocol.companionCapabilities,
         deviceId: state.identity.deviceId,
         deviceName: state.identity.deviceName,
         platform: process.platform,
@@ -578,6 +594,14 @@ async function startCompanion(options = {}) {
       recent.push(now);
       pairAttempts.set(remote, recent);
       const body = await readJson(req);
+      if (body.protocol !== remoteProtocol.protocol) {
+        jsonResponse(res, 409, { error: `Controller protocol ${String(body.protocol)} is incompatible with companion protocol ${remoteProtocol.protocol}.` });
+        return;
+      }
+      if (typeof body.controllerVersion !== 'string' || !Array.isArray(body.capabilities)) {
+        jsonResponse(res, 400, { error: 'Controller build and capability identity is required.' });
+        return;
+      }
       if (Date.now() >= pairingExpiresAt) {
         rotatePairingCode();
         jsonResponse(res, 403, { error: 'Pairing code expired. Copy the new code from the companion tray.' });
@@ -601,6 +625,10 @@ async function startCompanion(options = {}) {
       saveIdentity();
       rotatePairingCode();
       jsonResponse(res, 201, {
+        protocol: remoteProtocol.protocol,
+        componentVersion: COMPONENT_VERSION,
+        buildId: BUILD_ID,
+        capabilities: remoteProtocol.companionCapabilities,
         token,
         deviceId: state.identity.deviceId,
         deviceName: state.identity.deviceName,
@@ -615,6 +643,47 @@ async function startCompanion(options = {}) {
     if (!controller) {
       jsonResponse(res, 401, { error: 'A valid paired-controller token is required.' });
       return;
+    }
+
+    if (req.method === 'POST' && pathname === '/v1/results/ack') {
+      const body = await readJson(req);
+      const keys = Array.isArray(body.idempotencyKeys)
+        ? body.idempotencyKeys.filter((key) => typeof key === 'string').slice(0, 100)
+        : [];
+      if (keys.length === 0) {
+        jsonResponse(res, 400, { error: 'At least one idempotency key is required.' });
+        return;
+      }
+      jsonResponse(res, 200, { acknowledged: resultLedger.acknowledge(controller.id, keys) });
+      return;
+    }
+
+    const idempotentPath = req.method === 'POST' && [
+      '/v1/control/claim',
+      '/v1/control/release',
+      '/v1/input',
+      '/v1/apps/launch',
+    ].includes(pathname);
+    let commandBody = null;
+    let commandContext = null;
+    if (idempotentPath) {
+      commandBody = await readJson(req);
+      commandContext = resultLedger.prepare({
+        controllerId: controller.id,
+        idempotencyKey: req.headers['x-jarvis-idempotency-key'],
+        deadline: req.headers['x-jarvis-deadline'],
+        method: req.method,
+        pathname,
+        body: commandBody,
+      });
+      if (commandContext.kind === 'error') {
+        jsonResponse(res, commandContext.status, { error: commandContext.error });
+        return;
+      }
+      if (commandContext.kind === 'replay') {
+        jsonResponse(res, commandContext.status, commandContext.body, { 'X-Jarvis-Idempotent-Replay': '1' });
+        return;
+      }
     }
 
     // Read-only live preview uses authentication but deliberately does not
@@ -664,7 +733,10 @@ async function startCompanion(options = {}) {
         displays = (await displayLayout()).map(({ captureSelector: _captureSelector, ...display }) => display);
       } catch { /* capture will report a useful error */ }
       jsonResponse(res, 200, {
-        protocol: 2,
+        protocol: remoteProtocol.protocol,
+        componentVersion: COMPONENT_VERSION,
+        buildId: BUILD_ID,
+        capabilities: remoteProtocol.companionCapabilities,
         deviceId: state.identity.deviceId,
         deviceName: state.identity.deviceName,
         platform: process.platform,
@@ -697,7 +769,9 @@ async function startCompanion(options = {}) {
         expiresAt: Date.now() + LEASE_MS,
       };
       notify();
-      jsonResponse(res, 200, { leaseToken, expiresAt: new Date(lease.expiresAt).toISOString() });
+      const result = { leaseToken, expiresAt: new Date(lease.expiresAt).toISOString() };
+      resultLedger.record(commandContext, 200, result, false);
+      jsonResponse(res, 200, result);
       return;
     }
 
@@ -708,7 +782,9 @@ async function startCompanion(options = {}) {
       }
       lease = null;
       notify();
-      jsonResponse(res, 200, { released: true });
+      const result = { released: true };
+      resultLedger.record(commandContext, 200, result, false);
+      jsonResponse(res, 200, result);
       return;
     }
 
@@ -732,7 +808,7 @@ async function startCompanion(options = {}) {
     }
 
     if (req.method === 'POST' && pathname === '/v1/input') {
-      const body = await readJson(req);
+      const body = commandBody;
       if (!Array.isArray(body.actions) || body.actions.length < 1 || body.actions.length > 50) {
         jsonResponse(res, 400, { error: 'Input requires between one and 50 actions.' });
         return;
@@ -741,18 +817,22 @@ async function startCompanion(options = {}) {
       for (const action of body.actions) {
         await executeInputAction(action, display.width, display.height, display.left, display.top);
       }
-      jsonResponse(res, 200, {
+      const result = {
         success: true,
         actionsExecuted: body.actions.length,
         screen: display.jarvisScreen,
-      });
+      };
+      resultLedger.record(commandContext, 200, result, true);
+      jsonResponse(res, 200, result);
       return;
     }
 
     if (req.method === 'POST' && pathname === '/v1/apps/launch') {
-      const body = await readJson(req);
+      const body = commandBody;
       await launchApplication(body.application);
-      jsonResponse(res, 200, { success: true, application: body.application });
+      const result = { success: true, application: body.application };
+      resultLedger.record(commandContext, 200, result, true);
+      jsonResponse(res, 200, result);
       return;
     }
 

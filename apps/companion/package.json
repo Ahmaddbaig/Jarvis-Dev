@@ -1,0 +1,34 @@
+{
+  "name": "jarvis-companion",
+  "version": "1.0.0",
+  "description": "Small cross-platform remote-control companion for Jarvis",
+  "main": "app.cjs",
+  "private": true,
+  "scripts": {
+    "start": "electron app.cjs",
+    "server": "node server.cjs",
+    "build": "electron-builder --dir --publish never",
+    "dist": "electron-builder --publish never"
+  },
+  "dependencies": {
+    "@jitsi/robotjs": "^0.6.22",
+    "screenshot-desktop": "^1.15.4",
+    "selfsigned": "^5.5.0",
+    "sharp": "^0.34.5"
+  },
+  "devDependencies": {
+    "electron": "36.9.5",
+    "electron-builder": "26.0.20"
+  },
+  "build": {
+    "appId": "com.jarvis.companion",
+    "productName": "Jarvis Companion",
+    "asar": true,
+    "files": ["app.cjs", "server.cjs", "result-ledger.cjs", "remote-protocol.json", "package.json"],
+    "extraResources": [{ "from": "../../buildfiles/icon.png", "to": "icon.png" }],
+    "directories": { "output": "dist" },
+    "mac": { "category": "public.app-category.utilities", "target": ["dmg", "zip"] },
+    "win": { "target": ["nsis", "zip"] },
+    "linux": { "category": "Utility", "target": ["AppImage"] }
+  }
+}

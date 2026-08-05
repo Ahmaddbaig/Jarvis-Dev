@@ -22,6 +22,7 @@ import {
     startLanGateway,
     type LanGatewayController,
 } from './lan-gateway';
+import { AIEngineSupervisor } from './ai-engine-supervisor';
 
 type DesktopPanelPosition = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
 type DesktopWindowKind = 'visual' | 'hitbox';
@@ -173,6 +174,7 @@ let mainWindow: BrowserWindow | null = null;
 let desktopVisualWindow: BrowserWindow | null = null;
 let desktopHitboxWindow: BrowserWindow | null = null;
 let nextServer: ChildProcess | null = null;
+let aiEngine: AIEngineSupervisor | null = null;
 // Set to true only after the Next.js server is confirmed ready and the first
 // window has been created. Guards activate/reopen handlers from firing early.
 let appReady = false;
@@ -459,6 +461,15 @@ function setupDesktopModeIpc(): void {
         catch { /* Reject non-Jarvis renderer URLs below. */ }
         throw new Error('LAN gateway details are available only to the local Jarvis renderer.');
     });
+    ipcMain.handle('ai-engine:status', (event) => {
+        try {
+            const sender = new URL(event.senderFrame?.url || event.sender.getURL());
+            if (sender.protocol === 'http:' && sender.hostname === '127.0.0.1' && Number(sender.port) === PORT)
+                return aiEngine?.status() ?? { state: 'stopped' };
+        }
+        catch { /* Reject non-Jarvis renderer URLs below. */ }
+        throw new Error('AI engine diagnostics are available only to the local Jarvis renderer.');
+    });
     ipcMain.handle('desktop-mode:set', (_event, options: DesktopModeOptions) => {
         return setDesktopMode(options);
     });
@@ -732,6 +743,18 @@ app.whenReady().then(async () => {
             systemPreferences.isTrustedAccessibilityClient(true);
         }, 1000);
     }
+    aiEngine = new AIEngineSupervisor({
+        isPackaged: app.isPackaged,
+        appPath: app.getAppPath(),
+        resourcesPath: process.resourcesPath,
+        dataDir: CORE_DATA_DIR,
+        localAIRoot: isDev ? path.join(app.getAppPath(), '.local-ai') : path.join(CORE_DATA_DIR, '.local-ai'),
+        buildSha: process.env.JARVIS_BUILD_SHA || app.getVersion(),
+    });
+    const aiStatus = await aiEngine.start();
+    if (aiStatus.state !== 'ready') {
+        console.error('[jarvis] AI engine is unavailable; the interface will open in diagnostic mode:', aiStatus.error);
+    }
     if (isDev) {
         createWindow();
         startHttpsProxy();
@@ -776,7 +799,15 @@ app.on('activate', () => {
         createWindow();
     }
 });
-app.on('before-quit', () => {
+let shutdownStarted = false;
+app.on('before-quit', (event) => {
+    if (shutdownStarted)
+        return;
+    shutdownStarted = true;
+    event.preventDefault();
     nextServer?.kill();
+    nextServer = null;
     lanGateway?.close();
+    lanGateway = null;
+    void (aiEngine?.stop() ?? Promise.resolve()).finally(() => app.quit());
 });

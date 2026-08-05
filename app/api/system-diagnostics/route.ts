@@ -4,6 +4,48 @@ import fs from 'fs';
 import { execFileSync } from 'child_process';
 import { getDeskflowStatus } from '@/backend/deskflow/config';
 
+function readJsonFile(filePath: string): Record<string, unknown> | null {
+  try {
+    const value = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
+}
+
+function remoteClientDiagnostics() {
+  const extensionPath = process.env.JARVIS_CHROME_EXTENSION_PATH && path.isAbsolute(process.env.JARVIS_CHROME_EXTENSION_PATH)
+    ? process.env.JARVIS_CHROME_EXTENSION_PATH
+    : path.join(process.cwd(), 'chrome-extension');
+  const extensionManifestPath = path.join(extensionPath, 'manifest.json');
+  const extensionProtocolPath = path.join(extensionPath, 'remote-protocol.json');
+  const extensionManifest = readJsonFile(extensionManifestPath);
+  const extensionProtocol = readJsonFile(extensionProtocolPath);
+  const companionPackagePath = path.join(process.cwd(), 'apps', 'companion', 'package.json');
+  const companionPackage = readJsonFile(companionPackagePath);
+  const aiSessionPath = path.join(process.env.JARVIS_DATA_DIR || process.cwd(), 'jarvis-ai-engine-session.json');
+  let aiSessionPrivate: boolean | null = null;
+  try { aiSessionPrivate = process.platform === 'win32' || (fs.statSync(aiSessionPath).mode & 0o077) === 0; } catch { /* unavailable */ }
+  return {
+    remoteProtocol: extensionProtocol?.protocol ?? null,
+    chrome: {
+      path: extensionPath,
+      manifestExists: fs.existsSync(extensionManifestPath),
+      manifestVersion: extensionManifest?.manifest_version ?? null,
+      extensionVersion: extensionManifest?.version ?? null,
+      protocolDescriptorExists: fs.existsSync(extensionProtocolPath),
+    },
+    companion: {
+      workspaceExists: fs.existsSync(companionPackagePath),
+      version: companionPackage?.version ?? null,
+      sourceServerExists: fs.existsSync(path.join(process.cwd(), 'apps', 'companion', 'server.cjs')),
+      packagedMacAppExists: fs.existsSync(path.join(process.cwd(), 'apps', 'companion', 'dist', 'mac-arm64', 'Jarvis Companion.app')),
+      packagedWindowsAppExists: fs.existsSync(path.join(process.cwd(), 'apps', 'companion', 'dist', 'win-unpacked', 'Jarvis Companion.exe')),
+    },
+    aiEngineSession: { present: fs.existsSync(aiSessionPath), privatePermissions: aiSessionPrivate },
+  };
+}
+
 function normalizeWindowsCmdPath(raw: string): string {
   return raw.trim().replace(/^["']+|["']+$/g, '');
 }
@@ -156,5 +198,6 @@ export async function GET() {
     deskflow: getDeskflowStatus(),
     macAccessibility: probeMacAccessibility(),
     python,
+    remoteClients: remoteClientDiagnostics(),
   });
 }

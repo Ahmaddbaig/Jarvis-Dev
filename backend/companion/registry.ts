@@ -22,6 +22,10 @@ interface StoredCompanionDevice {
   platform: string;
   arch: string;
   pairedAt: string;
+  protocol?: number;
+  companionVersion?: string;
+  buildId?: string;
+  capabilities?: string[];
 }
 
 let legacyRegistryChecked = false;
@@ -62,6 +66,10 @@ function storedDevice(device: CompanionDevice): StoredCompanionDevice {
     platform: device.platform,
     arch: device.arch,
     pairedAt: device.pairedAt,
+    protocol: device.protocol,
+    companionVersion: device.companionVersion,
+    buildId: device.buildId,
+    capabilities: device.capabilities,
   };
 }
 
@@ -84,7 +92,14 @@ function putMetadata(device: StoredCompanionDevice): void {
     kind: 'companion',
     friendlyName: device.name,
     platform: device.platform,
-    metadata: { address: device.address, arch: device.arch },
+    metadata: {
+      address: device.address,
+      arch: device.arch,
+      protocol: device.protocol ?? 0,
+      companionVersion: device.companionVersion ?? 'legacy',
+      buildId: device.buildId ?? 'legacy',
+      capabilities: device.capabilities ?? [],
+    },
   });
   store.database.pairings.put({
     id: `companion:${device.id}`,
@@ -92,7 +107,7 @@ function putMetadata(device: StoredCompanionDevice): void {
     certificateFingerprint: device.fingerprint,
     state: 'paired',
     pairedAt: device.pairedAt,
-    metadata: { protocol: 1 },
+    metadata: { protocol: device.protocol ?? 0 },
   });
 }
 
@@ -143,6 +158,16 @@ function requiredMetadata(metadata: Readonly<Record<string, unknown>>, key: 'add
   return value;
 }
 
+function optionalString(metadata: Readonly<Record<string, unknown>>, key: string): string | undefined {
+  const value = metadata[key];
+  return typeof value === 'string' && value ? value : undefined;
+}
+
+function optionalCapabilities(metadata: Readonly<Record<string, unknown>>): string[] | undefined {
+  const value = metadata.capabilities;
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string').slice(0, 100) : undefined;
+}
+
 function readDatabaseRegistry(): LegacyCompanionRegistry {
   const store = getCoreStore();
   const credentials = getCredentialService();
@@ -165,6 +190,10 @@ function readDatabaseRegistry(): LegacyCompanionRegistry {
       platform: device.platform,
       arch: requiredMetadata(device.metadata, 'arch'),
       pairedAt: pairing.pairedAt,
+      protocol: typeof device.metadata.protocol === 'number' ? device.metadata.protocol : undefined,
+      companionVersion: optionalString(device.metadata, 'companionVersion'),
+      buildId: optionalString(device.metadata, 'buildId'),
+      capabilities: optionalCapabilities(device.metadata),
     }];
   });
   return { version: 1, devices };

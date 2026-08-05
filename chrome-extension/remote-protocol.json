@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "protocol": 2,
+  "resultRetentionMs": 300000,
+  "chromeCapabilities": [
+    "browser.tabs",
+    "browser.navigate",
+    "browser.page.read",
+    "browser.page.capture",
+    "browser.page.click",
+    "browser.page.type",
+    "browser.page.scroll",
+    "result.replay"
+  ],
+  "companionCapabilities": [
+    "device.status",
+    "screen.capture",
+    "screen.preview",
+    "input.constrained",
+    "application.launch.allowlisted",
+    "control.lease",
+    "control.pause",
+    "controller.revoke",
+    "result.replay"
+  ]
+}
