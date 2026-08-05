@@ -19,11 +19,17 @@
     "dist:win": "npm run build && electron-builder --win --publish never",
     "dist:linux": "npm run build && electron-builder --linux --publish never",
     "dist": "npm run build && electron-builder --mac --win --publish never",
+    "companion": "npm --prefix scripts/companion start",
+    "companion:server": "node scripts/companion/server.cjs",
     "start": "electron .",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "vitest run",
+    "postinstall": "node scripts/copy-vad-assets.js"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.115.0",
     "@elevenlabs/react": "^1.4.0",
+    "@ricky0123/vad-web": "^0.0.30",
     "@types/leaflet": "^1.9.21",
     "leaflet": "^1.9.4",
     "mqtt": "^5.15.1",
@@ -58,6 +64,7 @@
     "three": "^0.182.0",
     "three-stdlib": "^2.36.1",
     "typescript": "^5",
+    "vitest": "^4.1.10",
     "wait-on": "^8.0.0"
   }
 }

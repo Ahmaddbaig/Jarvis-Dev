@@ -1,5 +1,7 @@
 # Jarvis V5 — AI Desktop Assistant
 
+Cross-computer setup is documented in [COMPANION_SETUP.md](COMPANION_SETUP.md). Deskflow keyboard/mouse switching is documented in [DESKFLOW_INTEGRATION.md](DESKFLOW_INTEGRATION.md).
+
 Electron + Next.js desktop assistant with voice, HUD widgets, and smart-home integrations.
 
 ## Running in development
@@ -9,6 +11,40 @@ Double-click `RUN-JARVIS-DEV.command`, or:
 ```bash
 npm run dev:desktop
 ```
+
+## Voice engines
+
+Four engines are selectable in Settings:
+
+- **OpenAI Realtime** — GPT speech-to-speech over WebRTC (needs OpenAI API key).
+- **Local AI** — free on-device LocalAI speech pipeline with profiles tuned for
+  M2, M3, and M5 Macs.
+- **ElevenLabs** — Conversational AI agent over WebRTC (needs agent id).
+- **Voicebox** — the movie JARVIS voice: Silero VAD → whisper.cpp STT →
+  API chat brain → Voicebox TTS with a cloned voice profile. The brain
+  provider is a dropdown in Settings: OpenAI (same API key as Realtime,
+  default `gpt-4o-mini`) or Claude (own Anthropic API key, default
+  `claude-haiku-4-5`). Both providers use the same selected Voicebox profile
+  for spoken and typed-chat replies. Voicebox playback defaults to a slower, pitch-preserving
+  `0.80×` speed and can be adjusted in Settings.
+
+The Voicebox engine expects:
+
+```bash
+brew install whisper-cpp
+curl -L -o ~/.cache/whisper-cpp/ggml-tiny.en.bin \
+  https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin
+# plus the Voicebox app running on http://127.0.0.1:17493
+```
+
+## Map services
+
+The map uses CartoDB tiles, OpenStreetMap Nominatim geocoding, and OSRM routing
+without API keys. Geocoding is cached and rate-limited by Jarvis. To use
+self-hosted providers, set `JARVIS_NOMINATIM_URL` and `JARVIS_OSRM_URL` before
+starting the app.
+
+## Local AI installation
 
 For free on-device voice AI, including the separate M2, M3, and M5 profiles,
 see [LOCAL_AI_INSTALL.md](LOCAL_AI_INSTALL.md). Install only the profile matching

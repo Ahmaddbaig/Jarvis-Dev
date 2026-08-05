@@ -425,8 +425,9 @@ function TVPanel({ entities, onCallService }: {
 
 async function geocodeCity(query: string): Promise<{ lat: number; lon: number; display: string } | null> {
   try {
-    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=1`;
-    const res = await fetch(url, { headers: { 'Accept-Language': 'en', 'User-Agent': 'JarvisClient/1.0' } });
+    const url = `/api/geocode?q=${encodeURIComponent(query)}&limit=1`;
+    const res = await fetch(url);
+    if (!res.ok) return null;
     const data = await res.json() as Array<{ lat: string; lon: string; display_name: string }>;
     if (!data.length) return null;
     const parts = data[0].display_name.split(',');

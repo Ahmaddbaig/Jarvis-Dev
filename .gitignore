@@ -8,9 +8,16 @@ node_modules/
 .next/
 out/
 
+# VAD runtime assets (copied from node_modules by scripts/copy-vad-assets.js)
+public/vad/
+
 # Local settings & secrets (contains API keys)
 jarvis-server-settings.json
 jarvis-chrome-control.json
+jarvis-companions.json
+jarvis-companions.json.tmp
+jarvis-companions.json.*.tmp
+.jarvis-desktop-token
 .bambu-token.json
 .env
 .env.*

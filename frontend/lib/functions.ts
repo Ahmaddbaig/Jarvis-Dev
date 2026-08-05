@@ -1,5 +1,6 @@
 import { getCachedSetting, loadServerSettings } from './serverSettings';
 import { chromeControlFetch } from './chromeControlClient';
+import { desktopControlFetch } from './desktopControlClient';
 
 /** Paths from Settings → System — sent with shell / computer-use API calls. */
 export function readToolkitOverrides(): {
@@ -223,13 +224,22 @@ export const FUNCTION_REGISTRY: JarvisFunction[] = [
       type: 'function',
       name: 'computer_use',
       description:
-        'Control the user\'s computer to complete a task. Use this when the user asks you to open an app, click something, type something, or perform any action on their screen.',
+        'Control the local computer or a paired Jarvis Companion computer when completing the task requires screenshots and visual interpretation. ' +
+        'Set target when the user names another computer, such as Windows or Mac. For simple remote app launching, typing, or keypresses, use companion_control instead.',
       parameters: {
         type: 'object',
         properties: {
           task: {
             type: 'string',
             description: 'A clear description of what to do on the computer, e.g. "Open Discord"',
+          },
+          target: {
+            type: 'string',
+            description: 'Optional paired companion name or OS alias such as Windows or Mac. Omit for this computer.',
+          },
+          screen: {
+            type: 'number',
+            description: 'Remote monitor number, starting at 0 for the primary display. Use companion_control list/status to see displays.',
           },
         },
         required: ['task'],
@@ -240,8 +250,9 @@ export const FUNCTION_REGISTRY: JarvisFunction[] = [
       if (!task) return { error: 'No task provided.' };
 
       // Platform context so the computer-use AI knows the exact OS
+      const target = typeof args.target === 'string' ? args.target.trim() : '';
       const platform = typeof navigator !== 'undefined' ? navigator.platform : 'unknown';
-      const platformHint = `[Platform: ${platform}] `;
+      const platformHint = target ? '' : `[Platform: ${platform}] `;
       const enrichedTask = platformHint + task;
 
       const stored = localStorage.getItem('jarvis_settings');
@@ -249,14 +260,209 @@ export const FUNCTION_REGISTRY: JarvisFunction[] = [
       if (!apiKey) return { error: 'No API key found in settings.' };
 
       try {
-        const res = await fetch('/api/computer-use', {
+        const requestBody = {
+          task: enrichedTask,
+          target: target || undefined,
+          screen: Number.isInteger(args.screen) ? args.screen : 0,
+          apiKey,
+          ...readToolkitOverrides(),
+        };
+        let res = await desktopControlFetch('/api/computer-use', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ task: enrichedTask, apiKey, ...readToolkitOverrides() }),
+          body: JSON.stringify(requestBody),
         });
-        return await res.json();
+        let data = await res.json() as Record<string, unknown>;
+        let approvals = 0;
+        while (data.confirmationRequired === true && typeof data.confirmationId === 'string' && approvals < 5) {
+          const approved = window.confirm(
+            typeof data.confirmationMessage === 'string'
+              ? data.confirmationMessage
+              : 'Approve this potentially consequential Computer Use action?'
+          );
+          if (!approved) return { cancelled: true, result: 'The user declined the Computer Use action.' };
+          res = await desktopControlFetch('/api/computer-use', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              ...requestBody,
+              confirmationId: data.confirmationId,
+              confirmed: true,
+            }),
+          });
+          data = await res.json() as Record<string, unknown>;
+          approvals += 1;
+        }
+        if (data.confirmationRequired === true) {
+          return { error: 'Computer Use paused after too many consecutive safety confirmations.' };
+        }
+        return data;
       } catch (err) {
         return { error: String(err) };
+      }
+    },
+  },
+  {
+    name: 'companion_control',
+    label: 'Companion Computers',
+    description: 'List, view, and perform explicit actions on paired computers',
+    tool: {
+      type: 'function',
+      name: 'companion_control',
+      description:
+        'List or check paired Jarvis Companion computers, show or hide a live remote-display window, reliably launch/focus an application, type text, press keys, or click exact coordinates. ' +
+        'Prefer launch_and_type when the user asks to open an app and enter text. Use computer_use with a target for tasks that require seeing and interpreting the remote screen.',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: ['list', 'status', 'show_display', 'hide_display', 'launch', 'launch_and_type', 'type', 'keypress', 'click'],
+          },
+          target: {
+            type: 'string',
+            description: 'Paired device name or unique OS alias such as Windows or Mac.',
+          },
+          application: { type: 'string', description: 'Application name for launch.' },
+          text: { type: 'string', description: 'Text to type.' },
+          keys: { type: 'array', items: { type: 'string' }, description: 'Keys for keypress, e.g. ["CTRL", "L"].' },
+          x: { type: 'number', description: 'Selected-display X coordinate for click.' },
+          y: { type: 'number', description: 'Selected-display Y coordinate for click.' },
+          button: { type: 'string', enum: ['left', 'right', 'middle'] },
+          screen: {
+            type: 'number',
+            description: 'Monitor number starting at 0 for the primary display. Use list/status to see all displays.',
+          },
+        },
+        required: ['action'],
+      },
+    },
+    handler: async (args) => {
+      const action = typeof args.action === 'string' ? args.action : 'list';
+      try {
+        if (action === 'list') {
+          const res = await desktopControlFetch('/api/companions', { cache: 'no-store' });
+          return await res.json();
+        }
+        if (action === 'hide_display') {
+          window.dispatchEvent(new CustomEvent('jarvis:hud', {
+            detail: { command: 'close', widget: 'companion-display' },
+          }));
+          return { success: true, result: 'The companion display window is closed.' };
+        }
+        const target = typeof args.target === 'string' ? args.target : '';
+        if (!target) return { error: 'A companion target is required.' };
+        const screen = Number.isInteger(args.screen) ? Number(args.screen) : 0;
+        if (action === 'show_display') {
+          window.dispatchEvent(new CustomEvent('jarvis:hud', {
+            detail: {
+              command: 'open',
+              widget: 'companion-display',
+              title: `${target} Display`,
+              widget_config: { target, name: target, screen },
+            },
+          }));
+          return { success: true, result: `Showing screen ${screen} from ${target}.` };
+        }
+        if (action === 'launch_and_type') {
+          if (typeof args.application !== 'string' || !args.application.trim()) {
+            return { error: 'An application name is required.' };
+          }
+          const launchResponse = await desktopControlFetch('/api/companions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'command',
+              target,
+              command: 'launch',
+              payload: { application: args.application },
+            }),
+          });
+          const launchData = await launchResponse.json();
+          if (!launchResponse.ok || launchData.error) return launchData;
+          const inputResponse = await desktopControlFetch('/api/companions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'command',
+              target,
+              command: 'input',
+              payload: { screen, actions: [{ type: 'wait' }, { type: 'type', text: args.text }] },
+            }),
+          });
+          return await inputResponse.json();
+        }
+        let command: 'status' | 'launch' | 'input' = 'status';
+        let payload: Record<string, unknown> = {};
+        if (action === 'launch') {
+          if (typeof args.application !== 'string' || !args.application.trim()) {
+            return { error: 'An application name is required.' };
+          }
+          command = 'launch';
+          payload = { application: args.application };
+        } else if (action === 'type') {
+          command = 'input';
+          payload = { screen, actions: [{ type: 'type', text: args.text }] };
+        } else if (action === 'keypress') {
+          command = 'input';
+          payload = { screen, actions: [{ type: 'keypress', keys: args.keys }] };
+        } else if (action === 'click') {
+          command = 'input';
+          payload = { screen, actions: [{ type: 'click', x: args.x, y: args.y, button: args.button ?? 'left' }] };
+        }
+        const res = await desktopControlFetch('/api/companions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'command', target, command, payload }),
+        });
+        return await res.json();
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+  },
+  {
+    name: 'deskflow_control',
+    label: 'Deskflow Control',
+    description: 'Check connected Deskflow computers and move keyboard/mouse control between them',
+    tool: {
+      type: 'function',
+      name: 'deskflow_control',
+      description:
+        'Check Deskflow status or switch the shared keyboard and mouse to another configured computer. ' +
+        'Use this only when the user explicitly wants their physical keyboard/mouse moved between machines. Use action="status" first if the computer names are unknown. ' +
+        'This does not perform a task or let computer_use see a remote screen; use companion_control or computer_use for remote work.',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: ['status', 'switch'],
+            description: 'Read Deskflow status or switch to a computer.',
+          },
+          target: {
+            type: 'string',
+            description: 'For switch: a Deskflow screen name, or “Mac” / “Windows” when there is one of each.',
+          },
+        },
+        required: ['action'],
+      },
+    },
+    handler: async (args) => {
+      const action = args.action === 'switch' ? 'switch' : 'status';
+      try {
+        const res = await desktopControlFetch('/api/deskflow', action === 'switch'
+          ? {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action, target: args.target }),
+            }
+          : { cache: 'no-store' });
+        const data = await res.json();
+        if (!res.ok && !data.error) return { error: `Deskflow request failed with HTTP ${res.status}.` };
+        return data;
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : String(error) };
       }
     },
   },
@@ -530,7 +736,7 @@ export const FUNCTION_REGISTRY: JarvisFunction[] = [
       const task = `${description}. Open Bambu Studio, go to the online models tab. Find a model matching the user's description. Pick a relevant one. Load the model. Check the available printers using the device tab at the top. Find one not in use. Set the printer. Slice the file, and send it to the correct printer. If you get stuck with an incompatible printer error, then select the drop down and choose the printer you selected. Do not ask follow-up questions unless the file is missing or there are zero available printers. Make reasonable choices and complete the print job. If there are multiple idle printers, choose the first idle one. Stop only after the print job has been successfully sent, or if the file cannot be found, no printer is available, or Bambu Studio blocks the job with an error that cannot be resolved.`;
 
       try {
-        const res = await fetch('/api/computer-use', {
+        const res = await desktopControlFetch('/api/computer-use', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ task, apiKey, ...readToolkitOverrides() }),
@@ -838,7 +1044,7 @@ export const FUNCTION_REGISTRY: JarvisFunction[] = [
         'Do not stop after merely opening Spotify or displaying search results. Verify from the Spotify UI that playback has started.';
 
       try {
-        const res = await fetch('/api/computer-use', {
+        const res = await desktopControlFetch('/api/computer-use', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ task, apiKey, ...readToolkitOverrides() }),

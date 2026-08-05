@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import path from 'path';
 import fs from 'fs';
 import { execFileSync } from 'child_process';
+import { getDeskflowStatus } from '@/backend/deskflow/config';
 
 function normalizeWindowsCmdPath(raw: string): string {
   return raw.trim().replace(/^["']+|["']+$/g, '');
@@ -152,6 +153,7 @@ export async function GET() {
       binaryPath: BINARY_PATH,
       binaryExists: fs.existsSync(BINARY_PATH),
     },
+    deskflow: getDeskflowStatus(),
     macAccessibility: probeMacAccessibility(),
     python,
   });

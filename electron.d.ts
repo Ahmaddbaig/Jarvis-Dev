@@ -11,6 +11,7 @@ declare global {
       setDesktopPanelMuted?: (muted: boolean) => void;
       setDesktopPanelMousePassthrough?: (passthrough: boolean) => void;
       overlayClick?: () => void;
+      getDesktopControlToken?: () => Promise<string>;
       getAudioSourceId?: () => Promise<string | null>;
       getMacPermissions?: () => Promise<MacPermissionStatus>;
       requestMacPermission?: (permission: 'accessibility' | 'screen' | 'microphone') => Promise<MacPermissionStatus>;

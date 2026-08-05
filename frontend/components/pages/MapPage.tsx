@@ -59,6 +59,7 @@ export function MapPage({ onNavigateHome, pendingCommand, onPendingCommandConsum
   const mapRef = useRef<L.Map | null>(null);
   const markersRef = useRef<L.Layer[]>([]);
   const routeRef = useRef<L.Polyline | null>(null);
+  const routeGlowRef = useRef<L.Polyline | null>(null);
 
   const [ready, setReady] = useState(false);
   const [sidePanel, setSidePanel] = useState<SidePanelData | null>(null);
@@ -66,6 +67,7 @@ export function MapPage({ onNavigateHome, pendingCommand, onPendingCommandConsum
   const [searching, setSearching] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [routeInfo, setRouteInfo] = useState<{ distanceMi: string; durationMin: number } | null>(null);
+  const [mapError, setMapError] = useState<string | null>(null);
 
   // ── Map init ──────────────────────────────────────────────────────────────
 
@@ -123,13 +125,13 @@ export function MapPage({ onNavigateHome, pendingCommand, onPendingCommandConsum
   // ── Geocode helper ─────────────────────────────────────────────────────────
 
   const geocode = useCallback(async (q: string): Promise<GeoResult | null> => {
-    try {
-      const res = await fetch(`/api/geocode?q=${encodeURIComponent(q)}`);
-      const data = (await res.json()) as GeoResult[];
-      return data?.[0] ?? null;
-    } catch {
-      return null;
+    const res = await fetch(`/api/geocode?q=${encodeURIComponent(q)}`);
+    const data = (await res.json().catch(() => null)) as GeoResult[] | { error?: string } | null;
+    if (!res.ok) {
+      throw new Error(!Array.isArray(data) && data?.error ? data.error : `Location search failed (${res.status}).`);
     }
+    if (!Array.isArray(data)) throw new Error('Location search returned an invalid response.');
+    return data[0] ?? null;
   }, []);
 
   // ── Add marker helper ──────────────────────────────────────────────────────
@@ -152,14 +154,21 @@ export function MapPage({ onNavigateHome, pendingCommand, onPendingCommandConsum
         iconAnchor: [7, 7],
       });
 
+      const popup = document.createElement('div');
+      popup.style.cssText = 'font-family:monospace;font-size:11px;color:#fff;background:#0a0e1a;padding:6px 10px;border-radius:4px;min-width:120px;border:1px solid rgba(34,211,238,0.25)';
+      const title = document.createElement('div');
+      title.style.cssText = 'color:#22d3ee;font-weight:bold;margin-bottom:2px';
+      title.textContent = label;
+      popup.appendChild(title);
+      if (description) {
+        const detail = document.createElement('div');
+        detail.style.cssText = 'color:rgba(255,255,255,0.5);font-size:10px';
+        detail.textContent = description;
+        popup.appendChild(detail);
+      }
+
       const marker = L.marker([lat, lng], { icon })
-        .bindPopup(
-          `<div style="font-family:monospace;font-size:11px;color:#fff;background:#0a0e1a;padding:6px 10px;border-radius:4px;min-width:120px;border:1px solid rgba(34,211,238,0.25)">
-            <div style="color:#22d3ee;font-weight:bold;margin-bottom:2px">${label}</div>
-            ${description ? `<div style="color:rgba(255,255,255,0.5);font-size:10px">${description}</div>` : ''}
-          </div>`,
-          { className: 'jarvis-popup' }
-        )
+        .bindPopup(popup, { className: 'jarvis-popup' })
         .addTo(map);
 
       marker.on('click', () => {
@@ -178,11 +187,15 @@ export function MapPage({ onNavigateHome, pendingCommand, onPendingCommandConsum
       const map = mapRef.current;
       if (!map) return;
       setSearching(true);
+      setMapError(null);
       try {
         const place = await geocode(locationName);
-        if (!place) return;
+        if (!place) throw new Error(`No location found for “${locationName}”.`);
         const lat = parseFloat(place.lat);
         const lng = parseFloat(place.lon);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+          throw new Error('Location search returned invalid coordinates.');
+        }
         map.flyTo([lat, lng], zoom, { animate: true, duration: 1.4 });
         setSidePanel({
           label: place.display_name.split(',')[0],
@@ -190,6 +203,8 @@ export function MapPage({ onNavigateHome, pendingCommand, onPendingCommandConsum
           lat,
           lng,
         });
+      } catch (error) {
+        setMapError(error instanceof Error ? error.message : 'Location search failed.');
       } finally {
         setSearching(false);
       }
@@ -203,42 +218,52 @@ export function MapPage({ onNavigateHome, pendingCommand, onPendingCommandConsum
     async (startName: string, endName: string) => {
       const map = mapRef.current;
       if (!map) return;
+      setSearching(true);
+      setMapError(null);
+      try {
+        // Keep public Nominatim requests sequential. The server also applies a
+        // global queue and cache so voice commands and UI searches share the
+        // provider's one-request-per-second allowance.
+        const startGeo = await geocode(startName);
+        if (!startGeo) throw new Error(`No location found for “${startName}”.`);
+        const endGeo = await geocode(endName);
+        if (!endGeo) throw new Error(`No location found for “${endName}”.`);
 
-      const [startGeo, endGeo] = await Promise.all([geocode(startName), geocode(endName)]);
-      if (!startGeo || !endGeo) return;
+        const res = await fetch(
+          `/api/osrm-route?slng=${encodeURIComponent(startGeo.lon)}&slat=${encodeURIComponent(startGeo.lat)}&elng=${encodeURIComponent(endGeo.lon)}&elat=${encodeURIComponent(endGeo.lat)}`
+        );
+        const data = (await res.json().catch(() => null)) as {
+          geometry?: { type: string; coordinates: [number, number][] };
+          distanceMi?: string;
+          durationMin?: number;
+          error?: string;
+        } | null;
+        if (!res.ok) throw new Error(data?.error || `Route request failed (${res.status}).`);
+        if (!data?.geometry?.coordinates?.length) throw new Error('No driving route was found.');
 
-      const res = await fetch(
-        `/api/osrm-route?slng=${startGeo.lon}&slat=${startGeo.lat}&elng=${endGeo.lon}&elat=${endGeo.lat}`
-      );
-      const data = (await res.json()) as {
-        geometry?: { type: string; coordinates: [number, number][] };
-        distanceMi?: string;
-        durationMin?: number;
-        error?: string;
-      };
+        const latlngs = data.geometry.coordinates.map(([lng, lat]) => [lat, lng] as L.LatLngTuple);
+        if (latlngs.some(([lat, lng]) => !Number.isFinite(lat) || !Number.isFinite(lng))) {
+          throw new Error('Routing service returned invalid coordinates.');
+        }
 
-      if (!data.geometry) return;
+        routeRef.current?.remove();
+        routeGlowRef.current?.remove();
+        routeGlowRef.current = L.polyline(latlngs, { color: '#22d3ee', weight: 10, opacity: 0.2 }).addTo(map);
+        const route = L.polyline(latlngs, { color: '#22d3ee', weight: 3, opacity: 0.9 }).addTo(map);
+        routeRef.current = route;
 
-      // Remove old route
-      routeRef.current?.remove();
+        if (data.distanceMi != null && data.durationMin != null) {
+          setRouteInfo({ distanceMi: data.distanceMi, durationMin: data.durationMin });
+        }
 
-      const latlngs = data.geometry.coordinates.map(([lng, lat]) => [lat, lng] as L.LatLngTuple);
-
-      // Glow layer
-      L.polyline(latlngs, { color: '#22d3ee', weight: 10, opacity: 0.2 }).addTo(map);
-
-      // Core line
-      const route = L.polyline(latlngs, { color: '#22d3ee', weight: 3, opacity: 0.9 }).addTo(map);
-      routeRef.current = route;
-
-      if (data.distanceMi && data.durationMin) {
-        setRouteInfo({ distanceMi: data.distanceMi, durationMin: data.durationMin });
+        map.fitBounds(route.getBounds(), { padding: [60, 60] });
+        addMarker(parseFloat(startGeo.lat), parseFloat(startGeo.lon), startName.split(',')[0], 'Start');
+        addMarker(parseFloat(endGeo.lat), parseFloat(endGeo.lon), endName.split(',')[0], 'End');
+      } catch (error) {
+        setMapError(error instanceof Error ? error.message : 'Route request failed.');
+      } finally {
+        setSearching(false);
       }
-
-      map.fitBounds(route.getBounds(), { padding: [60, 60] });
-
-      addMarker(parseFloat(startGeo.lat), parseFloat(startGeo.lon), startName.split(',')[0], 'Start');
-      addMarker(parseFloat(endGeo.lat), parseFloat(endGeo.lon), endName.split(',')[0], 'End');
     },
     [geocode, addMarker]
   );
@@ -265,11 +290,15 @@ export function MapPage({ onNavigateHome, pendingCommand, onPendingCommandConsum
           }
           break;
         case 'show_user_location':
-          navigator.geolocation.getCurrentPosition((pos) => {
-            const { latitude: lat, longitude: lng } = pos.coords;
-            addMarker(lat, lng, 'Your Location', undefined, true);
-            map?.flyTo([lat, lng], 14, { animate: true, duration: 1.4 });
-          });
+          navigator.geolocation.getCurrentPosition(
+            (pos) => {
+              const { latitude: lat, longitude: lng } = pos.coords;
+              setMapError(null);
+              addMarker(lat, lng, 'Your Location', undefined, true);
+              map?.flyTo([lat, lng], 14, { animate: true, duration: 1.4 });
+            },
+            (error) => setMapError(error.message || 'Location permission was denied.'),
+          );
           break;
         case 'draw_route':
           if (cmd.start && cmd.end) await drawRoute(cmd.start, cmd.end);
@@ -279,7 +308,10 @@ export function MapPage({ onNavigateHome, pendingCommand, onPendingCommandConsum
           markersRef.current = [];
           routeRef.current?.remove();
           routeRef.current = null;
+          routeGlowRef.current?.remove();
+          routeGlowRef.current = null;
           setRouteInfo(null);
+          setMapError(null);
           break;
         case 'search_nearby':
           if (cmd.location) await flyTo(cmd.location + (cmd.query ? ` ${cmd.query}` : ''));
@@ -355,6 +387,28 @@ export function MapPage({ onNavigateHome, pendingCommand, onPendingCommandConsum
             {searching ? '…' : '→'}
           </button>
         </form>
+
+        <AnimatePresence>
+          {mapError && (
+            <motion.div
+              initial={{ opacity: 0, y: -4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -4 }}
+              className="max-w-80 flex items-start gap-2 rounded-lg border border-red-400/30 bg-black/85 px-3 py-2 text-[10px] font-mono text-red-300 backdrop-blur-sm"
+              role="alert"
+            >
+              <span className="flex-1">{mapError}</span>
+              <button
+                type="button"
+                onClick={() => setMapError(null)}
+                className="text-red-300/50 hover:text-red-200"
+                aria-label="Dismiss map error"
+              >
+                ✕
+              </button>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
 
       {/* Top-right: quick actions */}
@@ -436,7 +490,8 @@ export function MapPage({ onNavigateHome, pendingCommand, onPendingCommandConsum
                 <button onClick={() => setSettingsOpen(false)} className="text-white/25 hover:text-white/60 transition-colors">✕</button>
               </div>
               <p className="text-white/40 text-[11px] font-mono">
-                Using CartoDB Dark Matter tiles — free, no API key required.
+                CartoDB tiles with OpenStreetMap geocoding and OSRM routing — no API key required.
+                Provider URLs can be changed with JARVIS_NOMINATIM_URL and JARVIS_OSRM_URL.
               </p>
               <div className="flex justify-end mt-7 pt-5 border-t border-white/5">
                 <button

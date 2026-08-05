@@ -139,6 +139,7 @@ open -n -a "$electron_app" \
   --env JARVIS_PORT=3100 \
   --env JARVIS_HTTPS_PORT=3543 \
   --env JARVIS_CHROME_UI_TOKEN="$jarvis_chrome_ui_token" \
+  --env JARVIS_PROJECT_DIR="$PWD" \
   --args "$PWD"
 
 wait "$jarvis_next_pid"
