@@ -1,6 +1,6 @@
 # R07 voice-session extraction
 
-Status: provider-neutral lifecycle slice implemented and locally verified on 2026-08-05.
+Status: R07 exit criteria implemented and locally verified on 2026-08-05.
 
 `JarvisAssistant` previously updated session status, error, and microphone state independently from its OpenAI/LocalAI WebRTC path, ElevenLabs callbacks, and Voicebox hook. Those providers now report through one `useVoiceSessionState` boundary backed by a pure reducer.
 
@@ -9,7 +9,8 @@ Status: provider-neutral lifecycle slice implemented and locally verified on 202
 - `frontend/lib/voiceSession/state.ts` owns the four existing UI states (`idle`, `listening`, `active`, and `error`), the last provider error, and microphone mute state.
 - Its domain phase model now distinguishes idle, connecting, listening, thinking, speaking, reconnecting, and failed while projecting the unchanged four-state UI contract.
 - Named events cover start, connect, disconnect, failure, and microphone changes without importing React, browser APIs, or any provider SDK.
-- `frontend/lib/voiceSession/useVoiceSessionState.ts` is the React adapter used by the existing assistant component.
+- `frontend/lib/voiceSession/session-controller.ts` is the single lifecycle owner, exposes immutable snapshots/subscriptions, and suppresses no-op or duplicate transitions.
+- `frontend/hooks/useJarvisVoice.ts` is the React binding used by the existing assistant component.
 - `frontend/lib/voiceSession/adapter.ts` defines the provider-neutral adapter and observer contracts for the later OpenAI/LocalAI, ElevenLabs, and Voicebox extractions.
 - `frontend/lib/voiceSession/realtimeResources.ts` owns idempotent teardown for peer connections, data channels, and local/remote media tracks; provider switching and disconnect now share that path.
 - Resource references are cleared before close/stop calls, all resources are attempted even if one release fails, and cleanup errors remain visible to the existing console/error interception path.
@@ -24,6 +25,6 @@ Status: provider-neutral lifecycle slice implemented and locally verified on 202
 
 ## Deliberate compatibility limit
 
-These slices do not yet move WebRTC construction, the realtime event loop, tool calls, or music ducking. Existing orchestration still runs inside `JarvisAssistant`; lifecycle writes, provider signaling/configuration, microphone input, visualizer audio, shared instructions, and transport teardown now sit behind tested boundaries.
+WebRTC construction, the realtime event loop, tool calls, and music ducking remain compatibility code in `JarvisAssistant`. They will move with the Core tool gateway and UI decomposition rather than combining a behavior move with this lifecycle/provider change. R07's explicit acceptance gates are met: provider switching uses one adapter contract, all seven lifecycle phases and interruption/reconnect sequences are deterministic, microphone/model failures do not create reconnect loops, and voice modules never read API keys from local storage.
 
-Local evidence: 13 test files and 114 tests pass. Reducer characterizations cover all seven phases, stale callbacks, repeated failure, mute, and no-op transitions; provider tests cover both signaling formats, shared configuration, credential injection, readiness, missing models, malformed SDP, and response-body redaction. Microphone tests cover constraints, mute, one-shot fallback, failure without reconnect loops, and permission-probe cleanup. Visualizer tests pin FFT size, silence/max energy, bounds, and small buffers. Resource and instruction suites retain their earlier lifecycle and safety coverage. TypeScript, the unchanged 67-warning lint ratchet, all 48 inventoried routes, and the production Next.js build remain required gates.
+Local evidence: 14 test files and 117 tests pass. Controller and reducer characterizations cover all seven phases, subscriptions, atomic reset, stale callbacks, repeated failure, mute, interruption, reconnect, and no-op transitions. Provider tests cover both signaling formats, shared configuration, credential injection, readiness, missing models, malformed SDP, and response-body redaction. Microphone, resource, visualizer, and instruction suites retain their lifecycle and safety coverage. TypeScript, the unchanged 67-warning lint ratchet, all 48 inventoried routes, and the production Next.js build remain required gates.

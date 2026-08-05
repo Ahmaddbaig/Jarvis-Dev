@@ -22,6 +22,7 @@ import {
   useVisualizerAudio,
   VISUALIZER_FFT_BARS,
 } from '@/frontend/hooks/useVisualizerAudio';
+import { useJarvisVoice } from '@/frontend/hooks/useJarvisVoice';
 import {
   DEFAULT_LOCAL_AI_BASE_URL,
   getLocalAIProfile,
@@ -41,7 +42,6 @@ import {
   hasJarvisWakeWord,
   releaseRealtimeTransport,
   setMicrophoneStreamMuted,
-  useVoiceSessionState,
 } from '@/frontend/lib/voiceSession';
 
 // Keep speaker bleed and song vocals below the activation point while still
@@ -222,7 +222,7 @@ function isDesktopPanelPosition(value: unknown): value is DesktopPanelPosition {
 }
 
 export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
-  const voiceSession = useVoiceSessionState();
+  const voiceSession = useJarvisVoice();
   const { status, lastError, micMuted } = voiceSession;
   const [chatText, setChatText] = useState('');
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
