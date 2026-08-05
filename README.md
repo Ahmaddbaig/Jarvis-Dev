@@ -6,7 +6,7 @@ Electron + Next.js desktop assistant with voice, HUD widgets, and smart-home int
 
 ## Refactor program
 
-The whole-codebase refactor starts with a behavior-preserving baseline. The current gate status and reproducibility evidence are in [docs/refactor/baseline-2026-08-05.md](docs/refactor/baseline-2026-08-05.md), with the [initial threat model](docs/refactor/threat-model.md), source-validated [API route inventory](docs/refactor/route-inventory.json), [typed Electron build notes](docs/refactor/r02-electron-build.md), [test/CI foundation](docs/refactor/r03-test-ci.md), and [shared contract protocol](docs/refactor/r04-contracts.md). Run `npm run check` for the local quality gate, `npm run refactor:baseline` for the full baseline suite, and `npm run refactor:routes -- --check` to detect unclassified route changes.
+The whole-codebase refactor starts with a behavior-preserving baseline. The current gate status and reproducibility evidence are in [docs/refactor/baseline-2026-08-05.md](docs/refactor/baseline-2026-08-05.md), with the [initial threat model](docs/refactor/threat-model.md), source-validated [API route inventory](docs/refactor/route-inventory.json), [typed Electron build notes](docs/refactor/r02-electron-build.md), [test/CI foundation](docs/refactor/r03-test-ci.md), [shared contract protocol](docs/refactor/r04-contracts.md), and [capability policy foundation](docs/refactor/r05-policy.md). Run `npm run check` for the local quality gate, `npm run refactor:baseline` for the full baseline suite, and `npm run refactor:routes -- --check` to detect unclassified route changes.
 
 ## Running in development
 
