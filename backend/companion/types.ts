@@ -55,6 +55,17 @@ export interface CompanionStatus {
   lease: { active: boolean; controllerName?: string; expiresAt?: string };
 }
 
+export interface CompanionPreview {
+  mimeType: 'image/jpeg';
+  width: number;
+  height: number;
+  displayWidth: number;
+  displayHeight: number;
+  screen: number;
+  capturedAt: string;
+  imageBase64: string;
+}
+
 export interface CompanionRemoteConfig {
   name: string;
   address: string;

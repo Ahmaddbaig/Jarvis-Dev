@@ -70,6 +70,8 @@ In Settings → Abilities, enable:
 Example requests:
 
 - “List my companion computers.”
+- “Show me the Windows display.”
+- “Hide the Windows display.”
 - “Open Notepad on the Windows computer.”
 - “Type hello from Jarvis on Windows.”
 - “Use the Windows computer to open Settings.”
@@ -78,11 +80,18 @@ Example requests:
 
 Monitor numbers start at `0` for the primary monitor. Ask “List my companion computers” to see the detected displays and their `jarvisScreen` numbers. Windows app launching understands friendly names including Chrome, Edge, Spotify, Discord, Notepad, Calculator, Settings, File Explorer, Command Prompt, and PowerShell. Jarvis launches the app, waits briefly, and attempts to focus its window before typing.
 
+You can also open Jarvis → Settings → **Computers** and select **View Display** beside an online computer. Jarvis opens a small movable/resizable HUD window that refreshes about once per second. Click the window to expand it, use **−** or **+** to change monitors, or use **Pause** to stop refreshes. The preview is sent only between the paired computers over the authenticated, certificate-pinned LAN connection; opening it does not send the image to an AI model.
+
 Direct companion commands work with the free Local AI voice option. The current visual Computer Use reasoning loop still requires an OpenAI API key; replacing that vision/reasoning model with a fast local model is a separate step.
+
+## Updating the companion after pulling changes
+
+The display preview and improved Windows app launcher require the current companion code. After pulling this branch on Windows, completely quit the old Jarvis Companion from its tray menu, run `git pull`, and double-click `RUN-JARVIS-COMPANION-WINDOWS.cmd` again. You do not need to pair the computer again unless you removed its saved companion data.
 
 ## Safety controls
 
 - Open the companion tray menu and choose **Emergency stop / pause control** to immediately reject control and end the active lease.
+- Live display refreshes are also rejected while the companion is paused.
 - Choose **Resume control** when ready.
 - Remove a pairing from Jarvis → Settings → Computers when it is no longer needed. Jarvis attempts to revoke the remote token, but an offline or lost computer can still be forgotten locally.
 - Remote Computer Use pauses before model-reported consequential actions and asks for a one-time confirmation bound to that exact task and computer.

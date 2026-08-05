@@ -304,19 +304,19 @@ export const FUNCTION_REGISTRY: JarvisFunction[] = [
   {
     name: 'companion_control',
     label: 'Companion Computers',
-    description: 'List paired computers and perform explicit non-visual actions on them',
+    description: 'List, view, and perform explicit actions on paired computers',
     tool: {
       type: 'function',
       name: 'companion_control',
       description:
-        'List or check paired Jarvis Companion computers, reliably launch/focus an application, type text, press keys, or click exact coordinates. ' +
+        'List or check paired Jarvis Companion computers, show or hide a live remote-display window, reliably launch/focus an application, type text, press keys, or click exact coordinates. ' +
         'Prefer launch_and_type when the user asks to open an app and enter text. Use computer_use with a target for tasks that require seeing and interpreting the remote screen.',
       parameters: {
         type: 'object',
         properties: {
           action: {
             type: 'string',
-            enum: ['list', 'status', 'launch', 'launch_and_type', 'type', 'keypress', 'click'],
+            enum: ['list', 'status', 'show_display', 'hide_display', 'launch', 'launch_and_type', 'type', 'keypress', 'click'],
           },
           target: {
             type: 'string',
@@ -343,10 +343,30 @@ export const FUNCTION_REGISTRY: JarvisFunction[] = [
           const res = await desktopControlFetch('/api/companions', { cache: 'no-store' });
           return await res.json();
         }
+        if (action === 'hide_display') {
+          window.dispatchEvent(new CustomEvent('jarvis:hud', {
+            detail: { command: 'close', widget: 'companion-display' },
+          }));
+          return { success: true, result: 'The companion display window is closed.' };
+        }
         const target = typeof args.target === 'string' ? args.target : '';
         if (!target) return { error: 'A companion target is required.' };
         const screen = Number.isInteger(args.screen) ? Number(args.screen) : 0;
+        if (action === 'show_display') {
+          window.dispatchEvent(new CustomEvent('jarvis:hud', {
+            detail: {
+              command: 'open',
+              widget: 'companion-display',
+              title: `${target} Display`,
+              widget_config: { target, name: target, screen },
+            },
+          }));
+          return { success: true, result: `Showing screen ${screen} from ${target}.` };
+        }
         if (action === 'launch_and_type') {
+          if (typeof args.application !== 'string' || !args.application.trim()) {
+            return { error: 'An application name is required.' };
+          }
           const launchResponse = await desktopControlFetch('/api/companions', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -374,6 +394,9 @@ export const FUNCTION_REGISTRY: JarvisFunction[] = [
         let command: 'status' | 'launch' | 'input' = 'status';
         let payload: Record<string, unknown> = {};
         if (action === 'launch') {
+          if (typeof args.application !== 'string' || !args.application.trim()) {
+            return { error: 'An application name is required.' };
+          }
           command = 'launch';
           payload = { application: args.application };
         } else if (action === 'type') {

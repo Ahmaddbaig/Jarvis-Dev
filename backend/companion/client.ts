@@ -11,6 +11,7 @@ import {
 } from './registry';
 import type {
   CompanionDevice,
+  CompanionPreview,
   CompanionPublicDevice,
   CompanionStatus,
 } from './types';
@@ -216,6 +217,25 @@ export async function companionStatus(device: CompanionDevice): Promise<Companio
     token: device.token,
     fingerprint: device.fingerprint,
   });
+  return assertSuccess(response);
+}
+
+export async function companionPreview(target: string, screen = 0): Promise<CompanionPreview> {
+  const device = resolveCompanionDevice(target);
+  if (!device) throw new Error(`Unknown or ambiguous companion computer "${target}".`);
+  if (!Number.isInteger(screen) || screen < 0 || screen > 15) {
+    throw new Error('Screen must be an integer from 0 to 15.');
+  }
+  const response = await companionRequest<CompanionPreview & { error?: string }>(
+    device.address,
+    'POST',
+    '/v1/preview',
+    {
+      token: device.token,
+      fingerprint: device.fingerprint,
+      body: { screen },
+    }
+  );
   return assertSuccess(response);
 }
 

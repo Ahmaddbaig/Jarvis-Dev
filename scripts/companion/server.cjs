@@ -17,6 +17,8 @@ const LEASE_MS = 60_000;
 const PAIR_WINDOW_MS = 5 * 60_000;
 const PAIR_CODE_MS = 5 * 60_000;
 const PAIR_ATTEMPTS_PER_WINDOW = 5;
+const PREVIEW_MIN_INTERVAL_MS = 500;
+const PREVIEW_MAX_WIDTH = 960;
 
 function defaultDataDir() {
   if (process.platform === 'darwin') {
@@ -216,14 +218,28 @@ function firstExistingFile(candidates) {
 
 function windowsApplication(application) {
   const requested = application.trim();
-  const normalized = requested.toLowerCase().replace(/\.exe$/, '').replace(/\s+/g, ' ');
+  const normalized = requested
+    .toLowerCase()
+    .replace(/\.exe$/, '')
+    .replace(/\s+/g, ' ')
+    .replace(/^(?:please\s+)?(?:open|launch|start|run)\s+(?:the\s+)?/, '')
+    .replace(/\s+(?:app|application)$/, '')
+    .trim();
   const root = process.env.SystemRoot || process.env.windir || 'C:\\Windows';
   const programFiles = process.env.ProgramFiles || 'C:\\Program Files';
   const programFilesX86 = process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)';
   const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
   const roamingAppData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+  const notepadExecutable = firstExistingFile([
+    path.join(root, 'System32', 'notepad.exe'),
+    path.join(root, 'notepad.exe'),
+    path.join(localAppData, 'Microsoft', 'WindowsApps', 'notepad.exe'),
+  ]) || 'notepad.exe';
   const aliases = {
-    notepad: { command: windowsSystemTool('notepad.exe'), args: [], title: 'Notepad' },
+    notepad: { command: notepadExecutable, args: [], title: 'Notepad' },
+    'microsoft notepad': { command: notepadExecutable, args: [], title: 'Notepad' },
+    'windows notepad': { command: notepadExecutable, args: [], title: 'Notepad' },
+    'text editor': { command: notepadExecutable, args: [], title: 'Notepad' },
     calculator: { command: windowsSystemTool('calc.exe'), args: [], title: 'Calculator' },
     calc: { command: windowsSystemTool('calc.exe'), args: [], title: 'Calculator' },
     settings: { command: windowsSystemTool('explorer.exe'), args: ['ms-settings:'], title: 'Settings' },
@@ -343,7 +359,10 @@ function launchApplication(application) {
     const child = spawn(command, args, {
       detached: process.platform === 'win32',
       stdio: 'ignore',
-      windowsHide: true,
+      // Apps launched by the companion are meant to be visible. Hiding the
+      // child window prevents GUI tools such as Notepad from appearing on some
+      // Windows builds.
+      windowsHide: false,
       shell: false,
       env: process.platform === 'win32' ? windowsChildEnvironment() : process.env,
     });
@@ -401,6 +420,28 @@ async function displayLayout() {
       captureSelector: process.platform === 'win32' ? display.id : detectedIndex,
     };
   });
+}
+
+async function captureDisplay(screen, preview = false) {
+  const displays = await displayLayout();
+  const display = selectedDisplay(displays, screen);
+  const capturedImage = await screenshot({ format: 'jpg', screen: display.captureSelector });
+  // Normalize Retina/high-DPI captures to RobotJS coordinates first. Preview
+  // frames are then reduced for responsive LAN streaming without changing the
+  // full-resolution frames used by Computer Use.
+  let pipeline = sharp(capturedImage).resize(display.width, display.height, { fit: 'fill' });
+  if (preview) {
+    pipeline = pipeline.resize({ width: PREVIEW_MAX_WIDTH, withoutEnlargement: true });
+  }
+  const encoded = await pipeline
+    .jpeg({ quality: preview ? 58 : 82 })
+    .toBuffer({ resolveWithObject: true });
+  return {
+    display,
+    image: encoded.data,
+    imageWidth: encoded.info.width,
+    imageHeight: encoded.info.height,
+  };
 }
 
 function selectedDisplay(displays, requested) {
@@ -469,6 +510,7 @@ async function startCompanion(options = {}) {
   let paused = false;
   let lease = null;
   const pairAttempts = new Map();
+  const previewRequestTimes = new Map();
 
   const saveIdentity = () => writePrivateJson(state.identityPath, state.identity);
   const pairingInfo = () => ({
@@ -513,7 +555,7 @@ async function startCompanion(options = {}) {
     const pathname = requestUrl.pathname;
     if (req.method === 'GET' && pathname === '/v1/identity') {
       jsonResponse(res, 200, {
-        protocol: 1,
+        protocol: 2,
         deviceId: state.identity.deviceId,
         deviceName: state.identity.deviceName,
         platform: process.platform,
@@ -575,6 +617,36 @@ async function startCompanion(options = {}) {
       return;
     }
 
+    // Read-only live preview uses authentication but deliberately does not
+    // claim the exclusive input lease. This lets Jarvis keep controlling the
+    // computer while its display is visible in the HUD.
+    if (req.method === 'POST' && pathname === '/v1/preview') {
+      if (paused) {
+        jsonResponse(res, 423, { error: 'Companion control is paused locally.' });
+        return;
+      }
+      const now = Date.now();
+      const previous = previewRequestTimes.get(controller.id) || 0;
+      if (now - previous < PREVIEW_MIN_INTERVAL_MS) {
+        jsonResponse(res, 429, { error: 'Preview refresh is too frequent.' });
+        return;
+      }
+      previewRequestTimes.set(controller.id, now);
+      const body = await readJson(req);
+      const captured = await captureDisplay(body.screen, true);
+      jsonResponse(res, 200, {
+        mimeType: 'image/jpeg',
+        width: captured.imageWidth,
+        height: captured.imageHeight,
+        displayWidth: captured.display.width,
+        displayHeight: captured.display.height,
+        screen: captured.display.jarvisScreen,
+        capturedAt: new Date().toISOString(),
+        imageBase64: captured.image.toString('base64'),
+      });
+      return;
+    }
+
     if (req.method === 'POST' && pathname === '/v1/controllers/revoke-self') {
       state.identity.trustedControllers = state.identity.trustedControllers.filter((entry) => entry.id !== controller.id);
       if (lease?.controllerId === controller.id) lease = null;
@@ -592,7 +664,7 @@ async function startCompanion(options = {}) {
         displays = (await displayLayout()).map(({ captureSelector: _captureSelector, ...display }) => display);
       } catch { /* capture will report a useful error */ }
       jsonResponse(res, 200, {
-        protocol: 1,
+        protocol: 2,
         deviceId: state.identity.deviceId,
         deviceName: state.identity.deviceName,
         platform: process.platform,
@@ -648,21 +720,13 @@ async function startCompanion(options = {}) {
 
     if (req.method === 'POST' && pathname === '/v1/capture') {
       const body = await readJson(req);
-      const displays = await displayLayout();
-      const display = selectedDisplay(displays, body.screen);
-      const capturedImage = await screenshot({ format: 'jpg', screen: display.captureSelector });
-      // macOS captures Retina pixels while RobotJS uses logical coordinates.
-      // Normalize every screenshot so model coordinates exactly match input.
-      const image = await sharp(capturedImage)
-        .resize(display.width, display.height, { fit: 'fill' })
-        .jpeg({ quality: 82 })
-        .toBuffer();
+      const captured = await captureDisplay(body.screen, false);
       jsonResponse(res, 200, {
         mimeType: 'image/jpeg',
-        width: display.width,
-        height: display.height,
-        screen: display.jarvisScreen,
-        imageBase64: image.toString('base64'),
+        width: captured.display.width,
+        height: captured.display.height,
+        screen: captured.display.jarvisScreen,
+        imageBase64: captured.image.toString('base64'),
       });
       return;
     }

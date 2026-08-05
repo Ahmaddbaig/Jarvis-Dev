@@ -19,9 +19,10 @@ import { TVWidget } from './widgets/TVWidget';
 import { PrinterWidget } from './widgets/PrinterWidget';
 import { WeatherHomeWidget } from './widgets/WeatherHomeWidget';
 import { HADeviceWidget } from './widgets/HADeviceWidget';
+import { CompanionDisplayWidget } from './widgets/CompanionDisplayWidget';
 import { getCachedSetting, loadServerSettings } from '@/frontend/lib/serverSettings';
 
-type WidgetType = 'system' | 'network' | 'map' | 'clock' | 'suit' | 'music' | 'text' | 'pdf' | 'image' | 'terminal' | 'tv' | 'printer' | 'weather-home' | 'ha-device' | 'ha-toggle';
+type WidgetType = 'system' | 'network' | 'map' | 'clock' | 'suit' | 'music' | 'text' | 'pdf' | 'image' | 'terminal' | 'tv' | 'printer' | 'weather-home' | 'ha-device' | 'ha-toggle' | 'companion-display';
 
 interface ModuleData {
   id: string;
@@ -63,6 +64,7 @@ const WIDGET_META: Record<WidgetType, { title: string; width: number; height: nu
   'weather-home': { title: 'WEATHER',       width: 280, height: 140 },
   'ha-device':  { title: 'DEVICES',         width: 280, height: 260 },
   'ha-toggle':  { title: 'TOGGLE',          width: 80,  height: 80  },
+  'companion-display': { title: 'REMOTE DISPLAY', width: 420, height: 290 },
 };
 
 /** Scan the screen in a grid and return the first (x,y) where a rect of
@@ -193,12 +195,17 @@ export function HUDLayer({ scanReady = true }: { scanReady?: boolean }) {
           type === 'image' && module_id?.trim() ? module_id.trim() : String(Date.now());
         setModules(prev => {
           const multiInstance = ['text', 'pdf', 'image', 'printer', 'ha-device', 'ha-toggle'].includes(type);
-          if (!multiInstance && prev.some(m => m.type === type)) return prev;
           const meta = WIDGET_META[type];
-          const { x: newX, y: newY } = findOpenSpot(meta.width, meta.height, prev);
           const moduleTitle = title?.trim()
             ? title.trim().toUpperCase()
             : meta.title;
+          if (!multiInstance && prev.some(m => m.type === type)) {
+            if (type !== 'companion-display') return prev;
+            return prev.map((module) => module.type === type
+              ? { ...module, title: moduleTitle, widgetConfig: widget_config }
+              : module);
+          }
+          const { x: newX, y: newY } = findOpenSpot(meta.width, meta.height, prev);
           const textContent = type === 'text' ? (text ?? '') : undefined;
           const pdfSource = type === 'pdf' ? (pdf_source ?? '').trim() : undefined;
           if (type === 'pdf' && !pdfSource) return prev;
@@ -300,8 +307,8 @@ export function HUDLayer({ scanReady = true }: { scanReady?: boolean }) {
           onToggleExpand={toggleExpand}
           onResize={handleResize}
           scanReady={scanReady}
-          expandedSize={module.type === 'pdf' ? 'large' : 'standard'}
-          embedContent={module.type === 'image'}
+          expandedSize={module.type === 'pdf' || module.type === 'companion-display' ? 'large' : 'standard'}
+          embedContent={module.type === 'image' || module.type === 'companion-display'}
         >
           {module.type === 'clock' && <ClockWidget />}
           {module.type === 'system' && <SystemStatusWidget />}
@@ -327,6 +334,12 @@ export function HUDLayer({ scanReady = true }: { scanReady?: boolean }) {
           {module.type === 'printer' && <PrinterWidget config={module.widgetConfig} />}
           {module.type === 'weather-home' && <WeatherHomeWidget />}
           {module.type === 'ha-device' && <HADeviceWidget config={module.widgetConfig} />}
+          {module.type === 'companion-display' && (
+            <CompanionDisplayWidget
+              key={`${String(module.widgetConfig?.target ?? '')}:${String(module.widgetConfig?.screen ?? 0)}`}
+              config={module.widgetConfig}
+            />
+          )}
         </HUDModule>
       ))}
     </div>

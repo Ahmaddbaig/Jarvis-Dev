@@ -268,6 +268,19 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
     }
   }
 
+  function viewComputer(device: CompanionView) {
+    sfx('click_sfx', 0.5);
+    window.dispatchEvent(new CustomEvent('jarvis:hud', {
+      detail: {
+        command: 'open',
+        widget: 'companion-display',
+        title: `${device.name} Display`,
+        widget_config: { target: device.id, name: device.name, screen: 0 },
+      },
+    }));
+    onClose();
+  }
+
   useEffect(() => {
     if (isOpen && activeTab === 'computers') void refreshCompanions();
   // refreshCompanions is intentionally triggered only when this tab opens.
@@ -819,6 +832,14 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
                           ? 'Online — control paused from the companion tray'
                           : `Ready${device.screen ? ` — ${device.screen.width}×${device.screen.height}` : ''}`}
                     </p>
+                    <button
+                      type="button"
+                      onClick={() => viewComputer(device)}
+                      disabled={!device.online || device.paused}
+                      className="rounded border border-cyan-500/30 bg-cyan-500/5 px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest text-cyan-300 hover:bg-cyan-500/15 disabled:cursor-not-allowed disabled:opacity-35"
+                    >
+                      View Display
+                    </button>
                   </div>
                 ))}
               </div>
@@ -826,7 +847,7 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
               <p className="text-[10px] leading-relaxed text-cyan-700 border border-cyan-500/20 bg-cyan-950/20 rounded px-3 py-2">
                 In Abilities, enable <span className="text-cyan-400">Companion Computers</span> for launch, typing,
                 keypress, and click commands. Enable <span className="text-cyan-400">Computer Use</span> for visual control.
-                The current visual agent uses OpenAI; the direct companion commands also work with Local AI.
+                The live display and direct companion commands work with Local AI. The current visual Computer Use agent uses OpenAI.
               </p>
             </div>
           )}

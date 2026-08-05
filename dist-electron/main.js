@@ -14,7 +14,11 @@ const os_1 = require("os");
 const isDev = !electron_1.app.isPackaged;
 const PORT = Number.parseInt(process.env.JARVIS_PORT || (isDev ? '3100' : '3000'), 10);
 const HTTPS_PORT = Number.parseInt(process.env.JARVIS_HTTPS_PORT || (isDev ? '3543' : '3443'), 10);
-const DESKTOP_TOKEN_PATH = path_1.default.join(process.cwd(), '.jarvis-desktop-token');
+// Finder/open launches Electron with `/` as its working directory. Resolve the
+// development token beside the Jarvis source instead of relying on cwd, which
+// would otherwise try to write `/jarvis-desktop-token` on macOS.
+const DESKTOP_TOKEN_DIR = process.env.JARVIS_PROJECT_DIR || electron_1.app.getAppPath();
+const DESKTOP_TOKEN_PATH = path_1.default.join(DESKTOP_TOKEN_DIR, '.jarvis-desktop-token');
 function loadDesktopControlToken() {
     const environmentToken = process.env.JARVIS_DESKTOP_TOKEN?.trim();
     if (/^[A-Za-z0-9_-]{43}$/.test(environmentToken || ''))
