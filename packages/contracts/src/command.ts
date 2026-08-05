@@ -20,8 +20,10 @@ const SECURITY_OWNED_ARGUMENTS = new Set([
   'risk',
 ]);
 
+export const operationIdSchema = z.string().min(1).max(128).regex(/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/);
+
 export const operationSchema = z.object({
-  kind: z.string().min(1).max(128).regex(/^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/),
+  kind: operationIdSchema,
   version: z.number().int().min(1).max(65_535),
   args: jsonObjectSchema,
 }).strict().superRefine((operation, context) => {

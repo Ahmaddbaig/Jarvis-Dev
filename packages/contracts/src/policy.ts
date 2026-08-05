@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { actorSchema, targetSchema } from './command';
+import { actorSchema, operationIdSchema, targetSchema } from './command';
 import { opaqueIdSchema, requestIdSchema, traceIdSchema } from './identifiers';
 
 export const RISK_CLASSES = [
@@ -21,7 +21,7 @@ export type Capability = z.infer<typeof capabilitySchema>;
 export const confirmationModeSchema = z.enum(['never', 'always', 'when-model']);
 
 export const capabilityDefinitionSchema = z.object({
-  operation: z.string().min(1).max(128).regex(/^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/),
+  operation: operationIdSchema,
   capability: capabilitySchema,
   risk: riskClassSchema,
   ability: z.string().min(1).max(128).regex(/^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/),

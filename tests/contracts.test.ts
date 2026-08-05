@@ -72,6 +72,13 @@ describe('command envelope contract', () => {
     }).success).toBe(false);
     expect(commandEnvelopeSchema.safeParse({ ...validCommand(), deadline: 'tomorrow' }).success).toBe(false);
   });
+
+  it('accepts normalized numeric-leading operation IDs used by existing tools', () => {
+    expect(commandEnvelopeSchema.safeParse({
+      ...validCommand(),
+      operation: { ...validCommand().operation, kind: '3d_printing' },
+    }).success).toBe(true);
+  });
 });
 
 describe('bounded JSON values', () => {

@@ -1,6 +1,10 @@
 import { getCachedSetting, loadServerSettings } from './serverSettings';
 import { chromeControlFetch } from './chromeControlClient';
 import { desktopControlFetch } from './desktopControlClient';
+import { attachStaticToolPolicies } from './tools/compatibility';
+import type { JarvisFunction, LegacyJarvisFunction } from './tools/types';
+
+export type { JarvisFunction } from './tools/types';
 
 /** Paths from Settings → System — sent with shell / computer-use API calls. */
 export function readToolkitOverrides(): {
@@ -27,19 +31,6 @@ export function readToolkitOverrides(): {
   } catch {
     return {};
   }
-}
-
-export interface JarvisFunction {
-  name: string;
-  label: string;
-  description: string;
-  tool: {
-    type: 'function';
-    name: string;
-    description: string;
-    parameters: Record<string, unknown>;
-  };
-  handler: (args: Record<string, unknown>) => unknown | Promise<unknown>;
 }
 
 type DesktopPanelPosition = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
@@ -123,7 +114,7 @@ async function fetchUpcomingCalendarEvents(): Promise<CalendarEventSummary[]> {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const FUNCTION_REGISTRY: JarvisFunction[] = [
+const LEGACY_FUNCTION_REGISTRY: LegacyJarvisFunction[] = [
   {
     name: 'get_date',
     label: 'Get Date',
@@ -2477,6 +2468,8 @@ export const FUNCTION_REGISTRY: JarvisFunction[] = [
     },
   },
 ];
+
+export const FUNCTION_REGISTRY: JarvisFunction[] = attachStaticToolPolicies(LEGACY_FUNCTION_REGISTRY);
 
 export function getFunctionByName(name: string): JarvisFunction | undefined {
   return FUNCTION_REGISTRY.find((f) => f.name === name);
