@@ -12,6 +12,7 @@ Status: provider-neutral lifecycle slice implemented and locally verified on 202
 - `frontend/lib/voiceSession/adapter.ts` defines the provider-neutral adapter and observer contracts for the later OpenAI/LocalAI, ElevenLabs, and Voicebox extractions.
 - `frontend/lib/voiceSession/realtimeResources.ts` owns idempotent teardown for peer connections, data channels, and local/remote media tracks; provider switching and disconnect now share that path.
 - Resource references are cleared before close/stop calls, all resources are attempted even if one release fails, and cleanup errors remain visible to the existing console/error interception path.
+- `frontend/lib/voiceSession/instructions.ts` now owns shared speech vocabulary normalization, transcription priming, wake-word gating, browser safety, music routing, and navigation constraints used across providers.
 - Microphone mute state remains independent from connection lifecycle, matching current compact-mode and desktop-overlay behavior.
 - Starting or connecting clears stale visible errors; a provider error without details preserves the last known detail, matching the existing data-channel error path.
 
@@ -19,4 +20,4 @@ Status: provider-neutral lifecycle slice implemented and locally verified on 202
 
 These slices do not yet move transport construction, model events, tool calls, music ducking, or reconnect timers. Existing provider code still runs inside `JarvisAssistant`; lifecycle writes and transport teardown now sit behind shared boundaries. Provider adapters will be extracted incrementally with connection/disconnection and resource-cleanup parity tests.
 
-Local evidence: 9 test files and 93 tests pass. Five reducer characterizations cover lifecycle, error, mute, and no-op transitions; three resource tests cover complete release, repeated cleanup, and partial cleanup failure. TypeScript, the unchanged 67-warning lint ratchet, all 48 inventoried routes, and the production Next.js build remain required gates.
+Local evidence: 10 test files and 98 tests pass. Reducer characterizations cover lifecycle, error, mute, and no-op transitions; resource tests cover complete release, repeated cleanup, and partial cleanup failure; instruction tests pin vocabulary limits, provider-wide safety rules, transcription guidance, and wake-word matching. TypeScript, the unchanged 67-warning lint ratchet, all 48 inventoried routes, and the production Next.js build remain required gates.
