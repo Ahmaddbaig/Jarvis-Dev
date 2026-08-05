@@ -5,3 +5,4 @@ export * from './identifiers';
 export * from './json-value';
 export * from './policy';
 export * from './protocol';
+export * from './settings';

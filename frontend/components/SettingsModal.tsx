@@ -6,12 +6,19 @@ import { FUNCTION_REGISTRY, JarvisFunction } from '@/frontend/lib/functions';
 import { sfx } from '@/frontend/lib/sfx';
 import { chromeControlFetch } from '@/frontend/lib/chromeControlClient';
 import { desktopControlFetch } from '@/frontend/lib/desktopControlClient';
+import type {
+  JarvisGrid,
+  JarvisLogo,
+  JarvisPosition,
+  JarvisSettings,
+  JarvisTheme,
+  JarvisVisualizer,
+  RealtimeModel,
+} from '@jarvis/contracts';
 import {
   DEFAULT_LOCAL_AI_BASE_URL,
   LOCAL_AI_PROFILES,
-  LocalAIProfile,
 } from '@/frontend/lib/localAIProfiles';
-import type { VoiceEngineMode } from '@/frontend/lib/voiceEngineMode';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -31,48 +38,7 @@ interface ChromeControlStatus {
   supportedEndpoints: string[];
 }
 
-export type JarvisTheme = 'arc-reactor' | 'midnight' | 'crimson' | 'matrix';
-export type JarvisGrid = 'off' | 'small' | 'medium' | 'large';
-export type JarvisVisualizer = 'frequency-ring' | 'arc-reactor' | 'sphere-nodes' | 'quarter-rings' | 'original';
-export type JarvisLogo = 'logo' | 'logo2';
-export type JarvisPosition = 'center' | 'bottom-left' | 'bottom-right' | 'top-left' | 'top-right';
-
-export type RealtimeModel = 'gpt-realtime-2' | 'gpt-realtime-1.5' | 'gpt-realtime-mini';
-
-export interface JarvisSettings {
-  apiMode: VoiceEngineMode;
-  apiKey: string;
-  realtimeModel?: RealtimeModel;
-  localAIProfile?: LocalAIProfile;
-  localAIBaseUrl?: string;
-  microphoneDeviceId?: string;
-  speechVocabulary?: string;
-  elevenLabsAgentId?: string;
-  elevenLabsFirstMessage?: string;
-  /** Brain provider for the Voicebox engine: OpenAI or Claude (Anthropic). */
-  brainProvider?: 'openai' | 'claude';
-  /** Chat model for the Voicebox engine's brain (e.g. gpt-4o-mini, claude-opus-5). */
-  chatModel?: string;
-  /** Anthropic API key, used when brainProvider is 'claude'. */
-  claudeApiKey?: string;
-  /** Voicebox voice profile id; empty = auto-created "Jarvis" preset voice. */
-  voiceboxProfileId?: string;
-  /** Pitch-preserving Voicebox playback rate. */
-  voicePlaybackRate?: number;
-  localFirstMessage?: string;
-  voice: 'alloy' | 'ash' | 'ballad' | 'coral' | 'echo' | 'sage' | 'shimmer' | 'verse' | 'marin' | 'cedar';
-  initialPrompt: string;
-  enabledFunctions: string[];
-  theme: JarvisTheme;
-  grid: JarvisGrid;
-  visualizer: JarvisVisualizer;
-  logo: JarvisLogo;
-  position: JarvisPosition;
-  /** Full path to shell (cmd.exe, PowerShell, /bin/zsh). Empty = auto-detect. */
-  shellPathOverride?: string;
-  /** Full path to python.exe for Computer Use. Empty = bundled binary or PATH. */
-  pythonPathOverride?: string;
-}
+export type { JarvisSettings } from '@jarvis/contracts';
 
 const VISUALIZERS: { id: JarvisVisualizer; name: string; desc: string }[] = [
   { id: 'frequency-ring', name: 'Frequency Ring', desc: 'FFT bars radiating from the logo rings' },

@@ -4,7 +4,12 @@ import { useEffect, useRef, useState } from 'react';
 import { useConversation } from '@elevenlabs/react';
 import Image from 'next/image';
 import { AnimatePresence, motion } from 'framer-motion';
-import { SettingsModal, JarvisSettings } from './SettingsModal';
+import { SettingsModal } from './SettingsModal';
+import {
+  jarvisSettingsPatchSchema,
+  jarvisSettingsSchema,
+  type JarvisSettings,
+} from '@jarvis/contracts';
 import { FUNCTION_REGISTRY, getFunctionByName, JarvisFunction } from '@/frontend/lib/functions';
 import { loadDynamicFunctions, createGetFunctionByName, DynamicFunctionState } from '@/frontend/lib/dynamic-functions';
 import { XrayWidget } from './XrayWidget';
@@ -67,6 +72,7 @@ const DEFAULT_OPENAI_CHAT_MODEL = 'gpt-4o-mini';
 const DEFAULT_CLAUDE_CHAT_MODEL = 'claude-haiku-4-5';
 
 const DEFAULT_SETTINGS: JarvisSettings = {
+  schemaVersion: 1,
   apiMode: 'openai',
   apiKey: '',
   localAIProfile: 'm5',
@@ -801,8 +807,13 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
 
         const parseConfig = (raw: string | null): Partial<JarvisSettings> | null => {
           try {
-            const parsed = JSON.parse(raw ?? '{}') as Partial<JarvisSettings>;
-            return migrateLegacyVoiceboxMode(parsed);
+            const parsed = migrateLegacyVoiceboxMode(JSON.parse(raw ?? '{}'));
+            const result = jarvisSettingsPatchSchema.safeParse(parsed);
+            if (!result.success) {
+              console.warn('[Jarvis] Ignored invalid settings source:', result.error.issues);
+              return null;
+            }
+            return result.data;
           } catch {
             return null;
           }
@@ -835,7 +846,11 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
               ...DEFAULT_SETTINGS.enabledFunctions,
               ...(parsed.enabledFunctions ?? []),
             ]));
-            const nextSettings = { ...DEFAULT_SETTINGS, ...parsed, enabledFunctions };
+            const nextSettings = jarvisSettingsSchema.parse({
+              ...DEFAULT_SETTINGS,
+              ...parsed,
+              enabledFunctions,
+            });
             setSettings(nextSettings);
 
             // Back-fill localStorage so offline / Electron still works
