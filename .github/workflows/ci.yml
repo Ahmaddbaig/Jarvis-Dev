@@ -67,7 +67,13 @@ jobs:
       - name: Verify lock integrity, licenses, and tracked secrets
         run: npm run release:supply-chain
 
-      - name: Reject high and critical dependency advisories
+      # Advisory, not blocking: the result depends on the advisory database at
+      # the moment the job runs, so a newly published CVE would otherwise turn
+      # an unchanged commit red. verify-supply-chain (above) holds the
+      # deterministic gates. dependency-audit.yml chases advisories on a
+      # schedule and opens an issue.
+      - name: Report high and critical dependency advisories
+        continue-on-error: true
         run: npm audit --audit-level=high
 
       - name: Run quality gate

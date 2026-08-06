@@ -16,6 +16,8 @@ import {
 } from './lan-gateway-policy';
 
 const SESSION_COOKIE = LAN_SESSION_COOKIE;
+// Mirrors SESSION_IDLE_TTL_MS in backend/gateway/lan-session-service.
+const SESSION_IDLE_TTL_SECONDS = 30 * 24 * 60 * 60;
 const PAIRING_PATH = '/__jarvis/pair';
 const MAX_BODY_BYTES = 8_192;
 const MAX_INTERNAL_RESPONSE_BYTES = 1_048_576;
@@ -310,7 +312,9 @@ export async function startLanGateway(options: StartLanGatewayOptions): Promise<
                 res.writeHead(303, {
                     Location: '/',
                     'Cache-Control': 'no-store',
-                    'Set-Cookie': `${SESSION_COOKIE}=${response.body.token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=31536000`,
+                    // Matches the server-side idle TTL, so the browser stops
+                    // presenting a cookie the gateway would reject anyway.
+                    'Set-Cookie': `${SESSION_COOKIE}=${response.body.token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${SESSION_IDLE_TTL_SECONDS}`,
                 });
                 res.end();
             }

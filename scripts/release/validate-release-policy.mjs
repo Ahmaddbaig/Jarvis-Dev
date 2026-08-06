@@ -59,9 +59,16 @@ const legacyStorageReaders = new Set([
   'frontend/components/pages/CalendarPage.tsx',
   'frontend/components/pages/HomeAssistantPage.tsx',
 ]);
+// A write that strips secrets out of a legacy document is the opposite of
+// storing durable state, so it is exempt when annotated at the call site.
+// Marking the line rather than the file keeps the exemption from silently
+// widening to future writes in the same file.
+const REDACTION_MARKER = 'legacy-redaction';
 for (const relative of rendererFiles) {
   const source = readFileSync(path.join(root, relative), 'utf8');
-  if (/\blocalStorage\.setItem\s*\(/.test(source)) failures.push(`${relative} writes durable renderer state to localStorage.`);
+  const writes = source.split(/\r?\n/)
+    .filter((line) => /\blocalStorage\.setItem\s*\(/.test(line) && !line.includes(REDACTION_MARKER));
+  if (writes.length) failures.push(`${relative} writes durable renderer state to localStorage.`);
   if (/\blocalStorage\b/.test(source) && !legacyStorageReaders.has(relative)) failures.push(`${relative} introduced an unapproved localStorage reader.`);
 }
 

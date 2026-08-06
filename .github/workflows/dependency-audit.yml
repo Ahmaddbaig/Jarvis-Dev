@@ -1,0 +1,88 @@
+name: Dependency audit
+
+# Advisories are time-dependent: a CVE published today would fail a build of
+# code that has not changed. Chasing them on a schedule keeps that signal
+# without making a release depend on when it was cut.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 6 * * 1'
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  audit:
+    name: Audit dependencies
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Audit
+        id: audit
+        run: |
+          if npm audit --audit-level=high --json > audit.json; then
+            echo "clean=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "clean=false" >> "$GITHUB_OUTPUT"
+          fi
+          node -e "
+            const report = require('./audit.json');
+            const counts = report.metadata?.vulnerabilities ?? {};
+            const summary = Object.entries(counts)
+              .filter(([, total]) => total > 0)
+              .map(([level, total]) => level + ': ' + total)
+              .join(', ') || 'none';
+            require('node:fs').appendFileSync(process.env.GITHUB_OUTPUT, 'summary=' + summary + '\n');
+          "
+
+      - name: Open an issue for high and critical advisories
+        if: steps.audit.outputs.clean == 'false'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const summary = '${{ steps.audit.outputs.summary }}';
+            const title = 'Dependency advisories: high or critical';
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'dependencies',
+            });
+            const open = existing.data.find((issue) => issue.title === title);
+            const body = [
+              '`npm audit --audit-level=high` reported advisories.',
+              '',
+              'Counts: ' + summary,
+              '',
+              'Run: ' + context.serverUrl + '/' + context.repo.owner + '/' + context.repo.repo
+                + '/actions/runs/' + context.runId,
+            ].join('\n');
+            if (open) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: open.number,
+                body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+                labels: ['dependencies'],
+              });
+            }

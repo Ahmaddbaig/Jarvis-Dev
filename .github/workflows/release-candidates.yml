@@ -64,7 +64,8 @@ jobs:
           npm ci
           npm run ai:setup
           npm run release:supply-chain
-          npm audit --audit-level=high
+          # Advisory only; see the note in ci.yml.
+          npm audit --audit-level=high || echo 'Dependency advisories reported; see dependency-audit.yml.'
 
       - name: Run release quality gate
         run: npm run check

@@ -14,6 +14,13 @@ const MAX_PAIRING_ATTEMPTS = 5;
 const COMMAND_WINDOW_MS = 60_000;
 const MAX_CONSEQUENTIAL_COMMANDS = 30;
 const LAST_SEEN_WRITE_INTERVAL_MS = 5 * 60_000;
+/**
+ * A paired client that has not been seen for this long must pair again.
+ * Sliding, not absolute: any authorized request refreshes lastSeenAt, so a
+ * phone in daily use is never logged out, while one that is lost or retired
+ * stops being a live credential.
+ */
+export const SESSION_IDLE_TTL_MS = 30 * 24 * 60 * 60_000;
 const PAIRING_PREFIX = 'lan-pairing:';
 const DEVICE_PREFIX = 'lan-client:';
 
@@ -210,6 +217,12 @@ export class LanSessionService {
     if (!pairing || !metadata || !device || !pairing.pairedAt) {
       this.auditDenied(null, 'lan.request', input.path, 'SESSION_INVALID', remoteHash);
       throw new LanGatewayAuthError('This LAN client is not paired with Jarvis.', 401, 'SESSION_INVALID');
+    }
+    const idleSinceMs = Date.parse(metadata.lastSeenAt ?? pairing.pairedAt);
+    if (Number.isFinite(idleSinceMs) && Date.now() - idleSinceMs >= SESSION_IDLE_TTL_MS) {
+      this.revoke(device.id);
+      this.auditDenied(device.id, 'lan.request', input.path, 'SESSION_EXPIRED', remoteHash);
+      throw new LanGatewayAuthError('This LAN session expired. Pair this device again.', 401, 'SESSION_EXPIRED');
     }
     if (input.requiredScope && !metadata.scopes.includes(input.requiredScope)) {
       this.auditDenied(device.id, 'lan.request', input.path, 'SCOPE_DENIED', remoteHash, {

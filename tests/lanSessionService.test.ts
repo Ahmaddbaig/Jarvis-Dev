@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { LanGatewayAuthError, LanSessionService } from '../backend/gateway/lan-session-service';
+import { LanGatewayAuthError, LanSessionService, SESSION_IDLE_TTL_MS } from '../backend/gateway/lan-session-service';
 import { CoreStore } from '../backend/persistence/core-store';
 
 const directories: string[] = [];
@@ -82,6 +82,42 @@ describe('paired LAN sessions', () => {
       userAgent: '',
     })).toThrow(/Too many pairing attempts/);
     expect(JSON.stringify(fixture.store.database.securityAudit.list())).not.toMatch(/999999/);
+    fixture.store.close();
+  });
+
+  it('expires a session left idle past the TTL and keeps an active one alive', () => {
+    const fixture = service();
+    const pairing = fixture.service.createPairing(['read']);
+    const exchanged = fixture.service.exchange({
+      code: pairing.code,
+      clientName: 'Forgotten phone',
+      remoteAddress: '192.168.1.60',
+      userAgent: 'synthetic-agent',
+    });
+    const request = {
+      token: exchanged.token,
+      method: 'GET',
+      path: '/api/tasks',
+      requiredScope: 'read' as const,
+      consequential: false,
+      remoteAddress: '192.168.1.60',
+    };
+    expect(fixture.service.authorize(request)).toMatchObject({ name: 'Forgotten phone' });
+
+    // Backdate the stored activity past the idle window.
+    const stored = fixture.store.database.pairings.list('paired')
+      .find((candidate) => candidate.id.startsWith('lan-pairing:'))!;
+    const staleAt = new Date(Date.now() - (SESSION_IDLE_TTL_MS + 60_000)).toISOString();
+    fixture.store.database.pairings.put({
+      ...stored,
+      metadata: { ...(stored.metadata as Record<string, unknown>), lastSeenAt: staleAt },
+    });
+
+    expect(() => fixture.service.authorize(request)).toThrow(/expired/i);
+    // The lapse is recorded and the pairing is revoked, so the same token
+    // cannot be replayed once the clock rolls forward again.
+    expect(JSON.stringify(fixture.store.database.securityAudit.list())).toContain('SESSION_EXPIRED');
+    expect(() => fixture.service.authorize(request)).toThrow();
     fixture.store.close();
   });
 });
