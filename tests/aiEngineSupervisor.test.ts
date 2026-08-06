@@ -8,6 +8,15 @@ import { requestAIEngine } from '../backend/ai-engine/client';
 const originalDataDir = process.env.JARVIS_DATA_DIR;
 const temporaryDirectories: string[] = [];
 
+// This spawns the real AI engine out of services/ai-engine/.venv. Without the
+// guard, `npm test` fails for anyone who has not run `npm run ai:setup`.
+const enginePython = path.join(
+  process.cwd(), 'services', 'ai-engine', '.venv',
+  process.platform === 'win32' ? 'Scripts' : 'bin',
+  process.platform === 'win32' ? 'python.exe' : 'python',
+);
+const describeWithEngine = fs.existsSync(enginePython) ? describe : describe.skip;
+
 afterEach(() => {
   if (originalDataDir === undefined) delete process.env.JARVIS_DATA_DIR;
   else process.env.JARVIS_DATA_DIR = originalDataDir;
@@ -16,7 +25,7 @@ afterEach(() => {
   }
 });
 
-describe('AI engine supervision', () => {
+describeWithEngine('AI engine supervision', () => {
   it('verifies a token-authenticated sidecar and wipes the ephemeral session on stop', async () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-ai-engine-test-'));
     temporaryDirectories.push(dataDir);

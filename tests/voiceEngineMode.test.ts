@@ -25,8 +25,8 @@ describe('migrateLegacyVoiceboxMode', () => {
 
 describe('hasUsableVoiceEngineConfig', () => {
   test('allows LocalAI only on the machine where it is installed', () => {
-    expect(hasUsableVoiceEngineConfig({ apiMode: 'local' }, true)).toBe(true);
-    expect(hasUsableVoiceEngineConfig({ apiMode: 'local' }, false)).toBe(false);
+    expect(hasUsableVoiceEngineConfig({ apiMode: 'local' }, true, {})).toBe(true);
+    expect(hasUsableVoiceEngineConfig({ apiMode: 'local' }, false, {})).toBe(false);
   });
 
   test('checks the key belonging to the selected Voicebox brain', () => {

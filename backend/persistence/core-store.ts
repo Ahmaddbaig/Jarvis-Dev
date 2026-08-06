@@ -1,6 +1,6 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { jarvisSettingsPatchSchema } from '@jarvis/contracts';
+import { jarvisSettingsPatchSchema, NON_SECRET_SERVER_SETTING_KEYS } from '@jarvis/contracts';
 import { JarvisDatabase, migrateLegacyJson, type DatabaseDiagnostics } from '@jarvis/persistence';
 
 const SERVER_SCOPE = 'server';
@@ -9,17 +9,7 @@ const DATABASE_FILE = 'jarvis-core.sqlite3';
 const LEGACY_SOURCE_ID = 'jarvis-server-settings-v1';
 const MAX_SETTING_LENGTH = 1_048_576;
 
-const NON_SECRET_SERVER_KEYS = new Set([
-  'jarvis_ha_url',
-  'jarvis_weather_location',
-  'jarvis_weather_lat',
-  'jarvis_weather_lon',
-  'bambu_email',
-  'bambu_token_exp',
-  'jarvis_news_settings',
-  'jarvis_voicebox_url',
-  'jarvis_gcal_wizard_skipped',
-]);
+const NON_SECRET_SERVER_KEYS = new Set<string>(NON_SECRET_SERVER_SETTING_KEYS);
 
 const ALL_SERVER_KEYS = new Set([
   'jarvis_settings',

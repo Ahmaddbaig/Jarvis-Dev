@@ -7,14 +7,14 @@ export interface SecretVault {
   has(account: string): boolean;
 }
 
-export interface CommandResult {
+export interface VaultCommandResult {
   readonly status: number | null;
   readonly stdout: string;
   readonly stderr: string;
   readonly error?: Error;
 }
 
-export type CommandRunner = (command: string, args: readonly string[], input?: string) => CommandResult;
+export type CommandRunner = (command: string, args: readonly string[], input?: string) => VaultCommandResult;
 
 export const runCredentialCommand: CommandRunner = (command, args, input) => {
   const result = spawnSync(command, [...args], {
@@ -44,7 +44,7 @@ function assertSecret(value: string): void {
   if (value.includes('\0')) throw new Error('Secret values cannot contain null bytes.');
 }
 
-function commandFailure(operation: string, result: CommandResult): Error {
+function commandFailure(operation: string, result: VaultCommandResult): Error {
   const detail = result.error?.message || result.stderr.trim() || `exit status ${String(result.status)}`;
   return new Error(`Credential vault ${operation} failed: ${detail}`);
 }

@@ -99,6 +99,28 @@ export const jarvisSettingsPatchSchema = jarvisSettingsBaseSchema
   requireUniqueFunctions(settings.enabledFunctions, context);
 });
 
+/**
+ * Server settings stored beside the `jarvis_settings` document.
+ *
+ * These are the envelope keys, not fields of the settings document itself.
+ * Both the persistence layer and the renderer validate against this list, so
+ * it lives here rather than being maintained on each side: a key added to one
+ * copy but not the other makes the write fail as "Unsupported settings".
+ */
+export const NON_SECRET_SERVER_SETTING_KEYS = [
+  'jarvis_ha_url',
+  'jarvis_weather_location',
+  'jarvis_weather_lat',
+  'jarvis_weather_lon',
+  'bambu_email',
+  'bambu_token_exp',
+  'jarvis_news_settings',
+  'jarvis_voicebox_url',
+  'jarvis_gcal_wizard_skipped',
+] as const;
+
+export type NonSecretServerSettingKey = (typeof NON_SECRET_SERVER_SETTING_KEYS)[number];
+
 export type VoiceEngineMode = z.infer<typeof voiceEngineModeSchema>;
 export type LocalAIProfile = z.infer<typeof localAIProfileSchema>;
 export type JarvisTheme = z.infer<typeof jarvisThemeSchema>;

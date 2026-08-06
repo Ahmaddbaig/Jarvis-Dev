@@ -6,6 +6,9 @@ import { spawnSync } from 'node:child_process';
 const root = process.cwd();
 const required = process.argv.includes('--required');
 const preflight = process.argv.includes('--preflight');
+// Set by jobs that just produced the bundles: "nothing to check" is a build
+// failure there, not a skip.
+const expectBundles = process.argv.includes('--expect-bundles');
 const requestedPlatform = process.argv.find((argument) => argument.startsWith('--platform='))?.split('=')[1];
 const platform = requestedPlatform === 'mac' ? 'darwin' : requestedPlatform === 'win' ? 'win32' : process.platform;
 
@@ -71,7 +74,7 @@ if (platform === 'darwin') {
     ...findBundles(path.join(root, 'apps', 'companion', 'dist'), new Set(['Jarvis Companion.app'])),
   ];
   if (!bundles.length) {
-    if (required) fail('No macOS application bundles were found.');
+    if (required || expectBundles) fail('No macOS application bundles were found.');
     console.log('No macOS application bundles found; signature check skipped.');
     process.exit(0);
   }
@@ -98,7 +101,7 @@ if (platform === 'darwin') {
     ...findFiles(path.join(root, 'apps', 'companion', 'dist'), new Set(['Jarvis Companion.exe'])),
   ];
   if (!candidates.length) {
-    if (required) fail('No Windows application executables were found.');
+    if (required || expectBundles) fail('No Windows application executables were found.');
     console.log('No Windows application executables found; signature check skipped.');
     process.exit(0);
   }

@@ -1,12 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { jarvisVoiceSchema, realtimeModelSchema } from '@jarvis/contracts';
+import { jarvisVoiceSchema, realtimeAudioInput, realtimeModelSchema } from '@jarvis/contracts';
 import { isAuthenticatedDesktopRequest } from '@/backend/desktop-auth';
 import { getCredentialService } from '@/backend/secrets/credential-service';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-
-const REALTIME_VAD_THRESHOLD = 0.7;
 
 export async function POST(req: NextRequest) {
   if (!isAuthenticatedDesktopRequest(req)) {
@@ -28,22 +26,7 @@ export async function POST(req: NextRequest) {
       type: 'realtime',
       model: model.data,
       audio: {
-        input: {
-          noise_reduction: { type: 'far_field' },
-          transcription: {
-            model: 'gpt-4o-mini-transcribe',
-            language: 'en',
-            prompt: 'The speaker may address an assistant named Jarvis. Spell the wake word as Jarvis.',
-          },
-          turn_detection: {
-            type: 'server_vad',
-            threshold: REALTIME_VAD_THRESHOLD,
-            prefix_padding_ms: 500,
-            silence_duration_ms: 650,
-            create_response: false,
-            interrupt_response: true,
-          },
-        },
+        input: realtimeAudioInput(),
         output: { voice: voice.data },
       },
     }));

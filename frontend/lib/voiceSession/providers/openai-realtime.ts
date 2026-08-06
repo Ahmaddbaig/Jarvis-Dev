@@ -1,11 +1,10 @@
+import { realtimeAudioInput } from '@jarvis/contracts';
 import {
   RealtimeProviderError,
   type RealtimeFetch,
   type RealtimeProviderAdapter,
   type RealtimeSessionContext,
 } from './realtime';
-
-const REALTIME_VAD_THRESHOLD = 0.7;
 
 export interface OpenAIRealtimeOptions {
   model: string;
@@ -42,22 +41,7 @@ export function createOpenAIRealtimeAdapter(options: OpenAIRealtimeOptions): Rea
           instructions: context.instructions,
           tool_choice: 'auto',
           audio: {
-            input: {
-              noise_reduction: { type: 'far_field' },
-              transcription: {
-                model: 'gpt-4o-mini-transcribe',
-                language: 'en',
-                prompt: 'The speaker may address an assistant named Jarvis. Spell the wake word as Jarvis.',
-              },
-              turn_detection: {
-                type: 'server_vad',
-                threshold: REALTIME_VAD_THRESHOLD,
-                prefix_padding_ms: 500,
-                silence_duration_ms: 650,
-                create_response: false,
-                interrupt_response: true,
-              },
-            },
+            input: realtimeAudioInput(),
           },
           tools: [...context.tools],
         },

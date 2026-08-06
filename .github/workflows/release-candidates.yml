@@ -3,9 +3,11 @@ name: Native release candidates
 on:
   workflow_dispatch:
   push:
+    # Packaging repeats the whole ci.yml gate before it builds, so running it
+    # on every branch push pays for that gate twice. Release candidates are
+    # cut from develop and from tags.
     branches:
       - develop
-      - refactor
     tags:
       - 'v*'
 
@@ -132,7 +134,7 @@ jobs:
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
 
       - name: Verify native signatures
-        run: node scripts/release/verify-signing.mjs ${{ github.ref_type == 'tag' && '--required' || '' }} --platform=${{ matrix.platform }}
+        run: node scripts/release/verify-signing.mjs ${{ github.ref_type == 'tag' && '--required' || '' }} --expect-bundles --platform=${{ matrix.platform }}
 
       - name: Smoke-test packaged desktop lifecycle
         run: npm run release:desktop-smoke

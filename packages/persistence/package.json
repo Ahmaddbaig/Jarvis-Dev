@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "sideEffects": false,
+  "engines": {
+    "node": ">=22.16.0"
+  },
   "dependencies": {
     "@jarvis/contracts": "0.1.0"
   },

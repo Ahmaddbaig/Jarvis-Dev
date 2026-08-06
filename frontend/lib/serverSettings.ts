@@ -1,4 +1,4 @@
-import { jarvisSettingsPatchSchema, type CredentialStatus } from '@jarvis/contracts';
+import { jarvisSettingsPatchSchema, NON_SECRET_SERVER_SETTING_KEYS, type CredentialStatus } from '@jarvis/contracts';
 
 /**
  * Shared helper for reading / writing server-side settings.
@@ -48,17 +48,7 @@ let _loaded = false;
 
 type StringSettingKey = Exclude<keyof ServerSettings, 'credentialStatus'>;
 
-const LEGACY_NON_SECRET_KEYS: readonly StringSettingKey[] = [
-  'jarvis_ha_url',
-  'jarvis_weather_location',
-  'jarvis_weather_lat',
-  'jarvis_weather_lon',
-  'bambu_email',
-  'bambu_token_exp',
-  'jarvis_news_settings',
-  'jarvis_voicebox_url',
-  'jarvis_gcal_wizard_skipped',
-];
+const LEGACY_NON_SECRET_KEYS: readonly StringSettingKey[] = NON_SECRET_SERVER_SETTING_KEYS;
 
 function localNonSecretImport(serverSettings: ServerSettings): Partial<ServerSettings> {
   if (typeof window === 'undefined') return {};

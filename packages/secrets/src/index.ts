@@ -7,7 +7,7 @@ export {
   runCredentialCommand,
 } from './vault';
 export type {
-  CommandResult,
+  VaultCommandResult,
   CommandRunner,
   PlatformVaultOptions,
   SecretVault,

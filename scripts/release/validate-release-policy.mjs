@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 
@@ -48,7 +48,10 @@ for (const expectation of [
 }
 const rendererFiles = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', 'app', 'frontend'], { cwd: root, encoding: 'utf8' })
   .split(/\r?\n/)
-  .filter((relative) => /\.(?:js|jsx|ts|tsx)$/.test(relative));
+  .filter((relative) => /\.(?:js|jsx|ts|tsx)$/.test(relative))
+  // --cached still lists files deleted in the working tree; reading one
+  // throws and fails the gate for an unrelated reason.
+  .filter((relative) => existsSync(path.join(root, relative)));
 const legacyStorageReaders = new Set([
   'frontend/lib/serverSettings.ts',
   'frontend/components/JarvisAssistant.tsx',

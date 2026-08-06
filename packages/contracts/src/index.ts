@@ -8,6 +8,7 @@ export * from './json-value';
 export * from './lan-gateway';
 export * from './policy';
 export * from './protocol';
+export * from './realtime-audio';
 export * from './remote-control';
 export * from './settings';
 export * from './tasks';

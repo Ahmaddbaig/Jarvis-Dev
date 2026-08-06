@@ -34,7 +34,9 @@ export function migrateLegacyVoiceboxMode<T extends VoiceEngineConfig>(config: T
 export function hasUsableVoiceEngineConfig(
   config: VoiceEngineConfig | null,
   allowLocalAI: boolean,
-  credentialStatus: VoiceCredentialStatus = {},
+  // Required: defaulting to {} turns a forgotten argument into a silent
+  // "voice never starts" with no diagnostic.
+  credentialStatus: VoiceCredentialStatus,
 ): boolean {
   if (!config) return false;
   const mode = config.apiMode ?? 'openai';

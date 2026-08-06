@@ -4,6 +4,9 @@
   "description": "Jarvis V5 - AI Desktop Assistant",
   "main": "dist-electron/main.js",
   "private": true,
+  "engines": {
+    "node": ">=22.16.0"
+  },
   "workspaces": [
     "packages/*",
     "apps/companion"
@@ -27,7 +30,7 @@
     "build:ai": "node electron-scripts/ai-engine.js build",
     "build:python": "node electron-scripts/build-python.js && npm run build:ai",
     "ai:smoke": "node scripts/release/ai-frozen-smoke.mjs",
-    "build": "npm run build:python && npm run build:next && node electron-scripts/postbuild.js && npm run build:electron && npm run release:evidence && npm run build:companion && npm run release:evidence",
+    "build": "npm run build:python && npm run build:next && node electron-scripts/postbuild.js && npm run build:electron && npm run build:companion && npm run release:evidence",
     "dist:mac": "npm run build && electron-builder --mac --arm64 --publish never",
     "dist:win": "npm run build && electron-builder --win --x64 --publish never",
     "dist:linux": "npm run build && electron-builder --linux --x64 --publish never",
