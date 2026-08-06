@@ -26,6 +26,7 @@ class LocalAIProvider(AIProvider):
         self.last_validation: dict[str, Any] | None = None
         self._log_tasks: list[asyncio.Task[None]] = []
         self._lifecycle_lock = asyncio.Lock()
+        self._ready_cache: tuple[float, bool] | None = None
 
     def _installed_profile(self) -> str | None:
         try:
@@ -34,16 +35,22 @@ class LocalAIProvider(AIProvider):
         except OSError:
             return None
 
-    async def _ready(self) -> bool:
+    async def _ready(self, *, cached: bool = False) -> bool:
+        if cached and self._ready_cache is not None:
+            stamp, value = self._ready_cache
+            if time.monotonic() - stamp < 2.0:
+                return value
         try:
             # Windows takes ~1s to refuse a closed loopback port; a tight connect
             # timeout keeps /v1/health fast when LocalAI is not running.
             timeout = httpx.Timeout(1.5, connect=0.25)
             async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
                 response = await client.get(f"{self.config.local_ai_base_url}/readyz")
-                return response.is_success
+                ready = response.is_success
         except httpx.HTTPError:
-            return False
+            ready = False
+        self._ready_cache = (time.monotonic(), ready)
+        return ready
 
     async def health(self) -> dict[str, Any]:
         installed = self._installed_profile()
@@ -52,7 +59,7 @@ class LocalAIProvider(AIProvider):
             "id": "localai",
             "installed": installed is not None,
             "installedProfile": installed,
-            "ready": await self._ready(),
+            "ready": await self._ready(cached=True),
             "ownedProcess": self.owns_process,
             "processId": self.process.pid if self.process and self.process.returncode is None else None,
             "warmProfile": self.warm_profile,
@@ -240,3 +247,4 @@ class LocalAIProvider(AIProvider):
             await asyncio.gather(*self._log_tasks, return_exceptions=True)
         self.process = None
         self.owns_process = False
+        self._ready_cache = (time.monotonic(), False)
