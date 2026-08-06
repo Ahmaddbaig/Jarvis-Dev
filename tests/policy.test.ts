@@ -70,19 +70,19 @@ function harness() {
 }
 
 describe('capability catalog and grants', () => {
-  it('rejects invalid and duplicate server-owned definitions', () => {
+  it('rejects invalid and duplicate server-owned definitions', async () => {
     expect(() => new CapabilityCatalog([{ ...definitions[0], capability: 'INVALID' }])).toThrow();
     expect(() => new CapabilityCatalog([definitions[0], definitions[0]])).toThrow(/already exists/);
   });
 
-  it('cannot issue a capability grant from model output or without a user gesture', () => {
+  it('cannot issue a capability grant from model output or without a user gesture', async () => {
     const { grants } = harness();
     const input = { actorId: 'local-user', capability: 'shell.execute' } as const;
     expect(() => grants.grant(input, { source: 'model', userGesture: true })).toThrow();
     expect(() => grants.grant(input, { source: 'user', userGesture: false })).toThrow();
   });
 
-  it('runtime-validates grant capabilities, target scopes, and expiry', () => {
+  it('runtime-validates grant capabilities, target scopes, and expiry', async () => {
     const { grants } = harness();
     expect(() => grants.grant({ actorId: 'local-user', capability: 'INVALID' }, grantGesture)).toThrow();
     expect(() => grants.grant({
@@ -97,23 +97,23 @@ describe('capability catalog and grants', () => {
     }, grantGesture)).toThrow();
   });
 
-  it('allows enabled public reads but denies unknown or disabled operations', () => {
+  it('allows enabled public reads but denies unknown or disabled operations', async () => {
     const { policy } = harness();
-    expect(policy.evaluate({ command: command('weather.read'), context: context() }).allowed).toBe(true);
-    expect(policy.evaluate({ command: command('weather.read'), context: context({ enabledAbilities: new Set() }) }).error?.code)
+    expect((await policy.evaluate({ command: command('weather.read'), context: context() })).allowed).toBe(true);
+    expect((await policy.evaluate({ command: command('weather.read'), context: context({ enabledAbilities: new Set() }) })).error?.code)
       .toBe('POLICY.ABILITY_DISABLED');
-    expect(policy.evaluate({ command: command('unknown.read'), context: context() }).error?.code)
+    expect((await policy.evaluate({ command: command('unknown.read'), context: context() })).error?.code)
       .toBe('VALIDATION.UNKNOWN_OPERATION');
   });
 
-  it('requires visible feedback for reversible UI actions', () => {
+  it('requires visible feedback for reversible UI actions', async () => {
     const { policy } = harness();
-    expect(policy.evaluate({ command: command('ui.navigate'), context: context() }).error?.code)
+    expect((await policy.evaluate({ command: command('ui.navigate'), context: context() })).error?.code)
       .toBe('POLICY.VISIBLE_FEEDBACK_REQUIRED');
-    expect(policy.evaluate({ command: command('ui.navigate'), context: context({ visibleFeedback: true }) }).allowed).toBe(true);
+    expect((await policy.evaluate({ command: command('ui.navigate'), context: context({ visibleFeedback: true }) })).allowed).toBe(true);
   });
 
-  it('enforces actor, capability, target, and expiry scopes on grants', () => {
+  it('enforces actor, capability, target, and expiry scopes on grants', async () => {
     const { grants, policy, setNow } = harness();
     const calendar = command('calendar.read');
     grants.grant({
@@ -122,7 +122,7 @@ describe('capability catalog and grants', () => {
       targetType: calendar.target.type,
       targetId: 'different-calendar',
     }, grantGesture);
-    expect(policy.evaluate({ command: calendar, context: context() }).error?.code).toBe('POLICY.CAPABILITY_NOT_GRANTED');
+    expect((await policy.evaluate({ command: calendar, context: context() })).error?.code).toBe('POLICY.CAPABILITY_NOT_GRANTED');
 
     grants.grant({
       actorId: calendar.actor.id,
@@ -131,37 +131,37 @@ describe('capability catalog and grants', () => {
       targetId: calendar.target.id,
       expiresAt: '2026-08-05T12:00:01.000Z',
     }, grantGesture);
-    expect(policy.evaluate({ command: calendar, context: context() }).allowed).toBe(true);
+    expect((await policy.evaluate({ command: calendar, context: context() })).allowed).toBe(true);
     setNow(Date.parse('2026-08-05T12:00:02.000Z'));
-    expect(policy.evaluate({ command: calendar, context: context() }).allowed).toBe(false);
+    expect((await policy.evaluate({ command: calendar, context: context() })).allowed).toBe(false);
   });
 });
 
 describe('target-bound approvals', () => {
-  it('cannot be issued by a model or without a user gesture', () => {
+  it('cannot be issued by a model or without a user gesture', async () => {
     const { approvals, catalog } = harness();
     const shell = command('shell.execute');
     const definition = catalog.resolve(shell.operation.kind)!;
-    expect(() => approvals.issue(shell, definition, { source: 'model', userGesture: true })).toThrow();
-    expect(() => approvals.issue(shell, definition, { source: 'user', userGesture: false })).toThrow();
+    await expect(approvals.issue(shell, definition, { source: 'model', userGesture: true })).rejects.toThrow();
+    await expect(approvals.issue(shell, definition, { source: 'user', userGesture: false })).rejects.toThrow();
   });
 
-  it('allows a model proposal only after a valid one-time approval', () => {
+  it('allows a model proposal only after a valid one-time approval', async () => {
     const { approvals, catalog, grants, policy } = harness();
     const shell = command('shell.execute', { args: { argv0: 'date' } });
     const definition = catalog.resolve(shell.operation.kind)!;
     grants.grant({ actorId: shell.actor.id, capability: definition.capability }, grantGesture);
-    expect(policy.evaluate({ command: shell, context: context({ source: 'model' }) }).error?.code)
+    expect((await policy.evaluate({ command: shell, context: context({ source: 'model' }) })).error?.code)
       .toBe('POLICY.CONFIRMATION_REQUIRED');
 
-    const approval = approvals.issue(shell, definition, { source: 'user', userGesture: true });
-    expect(policy.evaluate({ command: shell, context: context({ source: 'model', approvalId: approval.approvalId }) }).allowed)
+    const approval = await approvals.issue(shell, definition, { source: 'user', userGesture: true });
+    expect((await policy.evaluate({ command: shell, context: context({ source: 'model', approvalId: approval.approvalId }) })).allowed)
       .toBe(true);
-    expect(policy.evaluate({ command: shell, context: context({ source: 'model', approvalId: approval.approvalId }) }).error?.code)
+    expect((await policy.evaluate({ command: shell, context: context({ source: 'model', approvalId: approval.approvalId }) })).error?.code)
       .toBe('POLICY.APPROVAL_INVALID');
   });
 
-  it('consumes and invalidates approval when arguments or target change', () => {
+  it('consumes and invalidates approval when arguments or target change', async () => {
     const { approvals, catalog, grants, policy } = harness();
     const original = command('calendar.create', {
       args: { title: 'Synthetic meeting' },
@@ -169,88 +169,88 @@ describe('target-bound approvals', () => {
     });
     const definition = catalog.resolve(original.operation.kind)!;
     grants.grant({ actorId: original.actor.id, capability: definition.capability }, grantGesture);
-    const receipt = approvals.issue(original, definition, { source: 'user', userGesture: true });
+    const receipt = await approvals.issue(original, definition, { source: 'user', userGesture: true });
     const changed = command('calendar.create', {
       args: { title: 'Changed destination' },
       requestId: original.requestId,
       target: { type: 'calendar', id: 'secondary', fingerprint: 'calendar:v1:secondary' },
     });
-    expect(policy.evaluate({ command: changed, context: context({ approvalId: receipt.approvalId }) }).error?.code)
+    expect((await policy.evaluate({ command: changed, context: context({ approvalId: receipt.approvalId }) })).error?.code)
       .toBe('POLICY.APPROVAL_BINDING_MISMATCH');
-    expect(policy.evaluate({ command: original, context: context({ approvalId: receipt.approvalId }) }).error?.code)
+    expect((await policy.evaluate({ command: original, context: context({ approvalId: receipt.approvalId }) })).error?.code)
       .toBe('POLICY.APPROVAL_INVALID');
   });
 
-  it('rejects expired and fabricated approval IDs', () => {
+  it('rejects expired and fabricated approval IDs', async () => {
     const { approvals, catalog, grants, policy, setNow } = harness();
     const operation = command('calendar.create');
     const definition = catalog.resolve(operation.operation.kind)!;
     grants.grant({ actorId: operation.actor.id, capability: definition.capability }, grantGesture);
-    const receipt = approvals.issue(operation, definition, { source: 'user', userGesture: true, ttlMs: 100 });
+    const receipt = await approvals.issue(operation, definition, { source: 'user', userGesture: true, ttlMs: 100 });
     setNow(Date.parse(receipt.expiresAt) + 1);
-    expect(policy.evaluate({ command: operation, context: context({ approvalId: receipt.approvalId }) }).error?.code)
+    expect((await policy.evaluate({ command: operation, context: context({ approvalId: receipt.approvalId }) })).error?.code)
       .toBe('POLICY.APPROVAL_EXPIRED');
-    expect(policy.evaluate({ command: operation, context: context({ approvalId: 'approval:fabricated-0001' }) }).error?.code)
+    expect((await policy.evaluate({ command: operation, context: context({ approvalId: 'approval:fabricated-0001' }) })).error?.code)
       .toBe('POLICY.APPROVAL_INVALID');
   });
 
-  it('treats untrusted observations like model proposals for confirmation', () => {
+  it('treats untrusted observations like model proposals for confirmation', async () => {
     const { grants, policy } = harness();
     const shell = command('shell.execute');
     grants.grant({ actorId: shell.actor.id, capability: 'shell.execute' }, grantGesture);
-    expect(policy.evaluate({ command: shell, context: context({ source: 'user', untrustedInput: true }) }).error?.code)
+    expect((await policy.evaluate({ command: shell, context: context({ source: 'user', untrustedInput: true }) })).error?.code)
       .toBe('POLICY.CONFIRMATION_REQUIRED');
   });
 });
 
 describe('privileged policy invariants', () => {
-  it('does not let a remote actor obtain desktop-local privilege', () => {
+  it('does not let a remote actor obtain desktop-local privilege', async () => {
     const { grants, policy } = harness();
     const remote = command('shell.execute', { actor: { type: 'companion', id: 'remote-device' } });
     grants.grant({ actorId: remote.actor.id, capability: 'shell.execute' }, grantGesture);
-    expect(policy.evaluate({ command: remote, context: context({ source: 'remote-client' }) }).error?.code)
+    expect((await policy.evaluate({ command: remote, context: context({ source: 'remote-client' }) })).error?.code)
       .toBe('POLICY.DESKTOP_ACTOR_REQUIRED');
   });
 
-  it('never permits model-authorized credential operations', () => {
+  it('never permits model-authorized credential operations', async () => {
     const { grants, policy } = harness();
     const credentials = command('credentials.save');
     grants.grant({ actorId: credentials.actor.id, capability: 'credentials.manage' }, grantGesture);
-    expect(policy.evaluate({ command: credentials, context: context({ source: 'model', userGesture: true }) }).error?.code)
+    expect((await policy.evaluate({ command: credentials, context: context({ source: 'model', userGesture: true }) })).error?.code)
       .toBe('POLICY.USER_GESTURE_REQUIRED');
-    expect(policy.evaluate({ command: credentials, context: context({ source: 'user', userGesture: true }) }).allowed).toBe(true);
+    expect((await policy.evaluate({ command: credentials, context: context({ source: 'user', userGesture: true }) })).allowed).toBe(true);
   });
 
-  it('requires fingerprint, pairing, lease, emergency-stop clearance, grant, and approval for remote control', () => {
+  it('requires fingerprint, pairing, lease, emergency-stop clearance, grant, and approval for remote control', async () => {
     const { approvals, catalog, grants, policy } = harness();
     const withoutFingerprint = command('companion.click', { target: { type: 'companion', id: 'device-1' } });
     grants.grant({ actorId: withoutFingerprint.actor.id, capability: 'computer.remote' }, grantGesture);
-    expect(policy.evaluate({ command: withoutFingerprint, context: context() }).error?.code)
+    expect((await policy.evaluate({ command: withoutFingerprint, context: context() })).error?.code)
       .toBe('VALIDATION.TARGET_FINGERPRINT_REQUIRED');
 
     const click = command('companion.click', {
       target: { type: 'companion', id: 'device-1', fingerprint: 'sha256:synthetic-device-fingerprint' },
     });
     const definition = catalog.resolve(click.operation.kind)!;
-    expect(policy.evaluate({ command: click, context: context({ targetPaired: false }) }).error?.code)
+    expect((await policy.evaluate({ command: click, context: context({ targetPaired: false }) })).error?.code)
       .toBe('AUTH.TARGET_NOT_PAIRED');
-    expect(policy.evaluate({ command: click, context: context({ targetPaired: true, activeLease: false }) }).error?.code)
+    expect((await policy.evaluate({ command: click, context: context({ targetPaired: true, activeLease: false }) })).error?.code)
       .toBe('CONFLICT.CONTROL_LEASE_REQUIRED');
-    expect(policy.evaluate({ command: click, context: context({ targetPaired: true, activeLease: true, emergencyStop: true }) }).error?.code)
+    expect((await policy.evaluate({ command: click, context: context({ targetPaired: true, activeLease: true, emergencyStop: true }) })).error?.code)
       .toBe('POLICY.EMERGENCY_STOP_ACTIVE');
 
-    const approval = approvals.issue(click, definition, { source: 'user', userGesture: true });
-    expect(policy.evaluate({
+    const approval = await approvals.issue(click, definition, { source: 'user', userGesture: true });
+    expect((await policy.evaluate({
       command: click,
       context: context({ targetPaired: true, activeLease: true, emergencyStop: false, approvalId: approval.approvalId }),
-    }).allowed).toBe(true);
+    })).allowed).toBe(true);
   });
 
-  it('emits schema-valid audit events for decisions and approvals', () => {
+  it('emits schema-valid audit events for decisions and approvals', async () => {
     const { approvals, audit, catalog, policy } = harness();
     const weather = command('weather.read');
-    policy.evaluate({ command: weather, context: context() });
-    approvals.issue(weather, catalog.resolve(weather.operation.kind)!, { source: 'user', userGesture: true });
+    await policy.evaluate({ command: weather, context: context() });
+    await approvals.issue(weather, catalog.resolve(weather.operation.kind)!, { source: 'user', userGesture: true });
     expect(audit.length).toBe(2);
     expect(audit.every((event) => auditEventSchema.safeParse(event).success)).toBe(true);
   });

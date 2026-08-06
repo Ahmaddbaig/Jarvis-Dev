@@ -194,7 +194,7 @@ export class StaticToolDispatcher {
       }) };
     }
 
-    const decision = this.#policy.evaluate({ command, context });
+    const decision = await this.#policy.evaluate({ command, context });
     if (!decision.allowed) {
       return { cacheable: false, result: this.#failure(command, startedAt, decision.error ?? {
         family: 'POLICY',

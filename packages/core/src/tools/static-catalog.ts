@@ -97,3 +97,33 @@ export function parseStaticToolInput(operation: string, input: unknown): unknown
 export function createStaticToolCatalog(): CapabilityCatalog {
   return new CapabilityCatalog(STATIC_TOOL_DEFINITIONS);
 }
+
+/**
+ * Translate the user's per-operation toggles into the ability set policy gates
+ * on.
+ *
+ * Settings track 31 operations; policy gates 21 coarser abilities, and several
+ * operations share one (six are `interface`). An ability is enabled when any
+ * operation under it is enabled — the finer per-operation choice is still
+ * enforced, because the caller resolves the tool against the enabled set
+ * before dispatching. Deriving the mapping here keeps the two vocabularies
+ * from being reconciled ad hoc at each call site.
+ */
+export function abilitiesForOperations(enabledOperations: Iterable<string>): Set<string> {
+  const abilities = new Set<string>();
+  for (const operation of enabledOperations) {
+    const declaration = declarationsByOperation.get(operation);
+    if (declaration) abilities.add(declaration.policy.ability);
+  }
+  return abilities;
+}
+
+/**
+ * Operations the user has enabled that carry a given ability. Used to explain
+ * a denial back to the user in terms of the toggle they actually control.
+ */
+export function operationsForAbility(ability: string): readonly string[] {
+  return declarations
+    .filter((declaration) => declaration.policy.ability === ability)
+    .map((declaration) => declaration.policy.operation);
+}

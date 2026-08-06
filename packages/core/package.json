@@ -7,6 +7,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./dispatcher": "./src/tools/dispatcher.ts",
+    "./policy": "./src/policy/index.ts",
     "./tool-catalog": "./src/tools/static-catalog.ts"
   },
   "dependencies": {

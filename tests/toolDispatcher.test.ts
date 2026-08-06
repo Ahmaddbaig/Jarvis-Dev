@@ -193,7 +193,7 @@ describe('static tool dispatcher', () => {
     const request = command('run_shell_command', { command: 'synthetic-command' });
     const definition = runtime.catalog.resolve(request.operation.kind)!;
     runtime.grants.grant({ actorId: request.actor.id, capability: definition.capability }, userGesture);
-    const approval = runtime.approvals.issue(request, definition, userGesture);
+    const approval = await runtime.approvals.issue(request, definition, userGesture);
     const context = { ...runtime.context, source: 'model', approvalId: approval.approvalId } as const;
 
     const failed = await runtime.dispatcher.dispatch(request, context);

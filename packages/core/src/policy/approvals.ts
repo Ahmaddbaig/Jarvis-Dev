@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomId, sha256Hex } from './crypto';
 import {
   approvalReceiptSchema,
   type ApprovalReceipt,
@@ -23,7 +23,7 @@ function canonicalJson(value: JsonValue): string {
   return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`;
 }
 
-function bindingHash(command: CommandEnvelope, definition: CapabilityDefinition): string {
+async function bindingHash(command: CommandEnvelope, definition: CapabilityDefinition): Promise<string> {
   const binding: JsonValue = {
     actor: command.actor,
     capability: definition.capability,
@@ -32,7 +32,7 @@ function bindingHash(command: CommandEnvelope, definition: CapabilityDefinition)
     sessionId: command.sessionId,
     target: command.target,
   };
-  return `sha256:${createHash('sha256').update(canonicalJson(binding)).digest('hex')}`;
+  return `sha256:${await sha256Hex(canonicalJson(binding))}`;
 }
 
 function policyError(code: string, message: string, traceId: string): JarvisError {
@@ -49,27 +49,27 @@ export class ApprovalService {
     this.#audit = options.audit;
   }
 
-  issue(command: CommandEnvelope, definition: CapabilityDefinition, context: ApprovalIssueContext): ApprovalReceipt {
+  async issue(command: CommandEnvelope, definition: CapabilityDefinition, context: ApprovalIssueContext): Promise<ApprovalReceipt> {
     if (context.source !== 'user' || !context.userGesture) {
       throw new Error('Approvals can be issued only from an explicit user gesture.');
     }
     const issuedAtMs = this.#clock.now();
     const ttlMs = Math.min(Math.max(context.ttlMs ?? 60_000, 1), MAX_APPROVAL_TTL_MS);
     const receipt = approvalReceiptSchema.parse({
-      approvalId: `approval:${randomUUID()}`,
+      approvalId: `approval:${randomId()}`,
       requestId: command.requestId,
       traceId: command.traceId,
       actor: command.actor,
       capability: definition.capability,
       risk: definition.risk,
       target: command.target,
-      bindingHash: bindingHash(command, definition),
+      bindingHash: await bindingHash(command, definition),
       issuedAt: new Date(issuedAtMs).toISOString(),
       expiresAt: new Date(issuedAtMs + ttlMs).toISOString(),
     });
     this.#approvals.set(receipt.approvalId, receipt);
     this.#audit?.({
-      eventId: `audit:${randomUUID()}`,
+      eventId: `audit:${randomId()}`,
       timestamp: receipt.issuedAt,
       traceId: command.traceId,
       requestId: command.requestId,
@@ -86,7 +86,7 @@ export class ApprovalService {
     return receipt;
   }
 
-  consume(approvalId: string, command: CommandEnvelope, definition: CapabilityDefinition): ApprovalConsumption {
+  async consume(approvalId: string, command: CommandEnvelope, definition: CapabilityDefinition): Promise<ApprovalConsumption> {
     const receipt = this.#approvals.get(approvalId);
     if (receipt) this.#approvals.delete(approvalId);
     let error: JarvisError | undefined;
@@ -94,11 +94,11 @@ export class ApprovalService {
       error = policyError('POLICY.APPROVAL_INVALID', 'The approval is missing, unknown, or already consumed.', command.traceId);
     } else if (Date.parse(receipt.expiresAt) <= this.#clock.now()) {
       error = policyError('POLICY.APPROVAL_EXPIRED', 'The approval has expired.', command.traceId);
-    } else if (receipt.requestId !== command.requestId || receipt.bindingHash !== bindingHash(command, definition)) {
+    } else if (receipt.requestId !== command.requestId || receipt.bindingHash !== await bindingHash(command, definition)) {
       error = policyError('POLICY.APPROVAL_BINDING_MISMATCH', 'The actor, operation, arguments, capability, risk, or target changed.', command.traceId);
     }
     this.#audit?.({
-      eventId: `audit:${randomUUID()}`,
+      eventId: `audit:${randomId()}`,
       timestamp: new Date(this.#clock.now()).toISOString(),
       traceId: command.traceId,
       requestId: command.requestId,

@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomId } from './crypto';
 import type { JarvisError } from '@jarvis/contracts';
 import { ApprovalService } from './approvals';
 import { CapabilityCatalog } from './catalog';
@@ -7,6 +7,21 @@ import type { AuditSink, CapabilityDefinition, PolicyContext, PolicyDecision, Po
 
 function error(family: JarvisError['family'], code: string, message: string, traceId: string): JarvisError {
   return { family, code, message, retryable: false, traceId };
+}
+
+/**
+ * Whether this command needs a one-time approval, without evaluating the rest
+ * of policy.
+ *
+ * Callers use this to raise the confirmation prompt *before* dispatching, so a
+ * command is evaluated once with its approval already in hand. Evaluating
+ * twice would double-count the audit trail and consume the approval on the
+ * first pass.
+ */
+export function confirmationRequiredFor(definition: CapabilityDefinition, context: PolicyContext): boolean {
+  if (definition.confirmation === 'always') return true;
+  return definition.confirmation === 'when-model'
+    && (context.source === 'model' || Boolean(context.untrustedInput));
 }
 
 export class CapabilityPolicyService {
@@ -27,7 +42,7 @@ export class CapabilityPolicyService {
     this.#audit = options.audit;
   }
 
-  evaluate({ command, context }: PolicyEvaluation): PolicyDecision {
+  async evaluate({ command, context }: PolicyEvaluation): Promise<PolicyDecision> {
     const definition = this.#catalog.resolve(command.operation.kind);
     if (!definition) return this.#deny(command, context, undefined, error('VALIDATION', 'VALIDATION.UNKNOWN_OPERATION', 'The operation is not registered.', command.traceId));
     if (!context.enabledAbilities.has(definition.ability)) {
@@ -56,13 +71,11 @@ export class CapabilityPolicyService {
       if (!context.activeLease) return this.#deny(command, context, definition, error('CONFLICT', 'CONFLICT.CONTROL_LEASE_REQUIRED', 'An active control lease is required.', command.traceId));
     }
 
-    const confirmationRequired = definition.confirmation === 'always' ||
-      (definition.confirmation === 'when-model' && (context.source === 'model' || context.untrustedInput));
-    if (confirmationRequired) {
+    if (confirmationRequiredFor(definition, context)) {
       if (!context.approvalId) {
         return this.#deny(command, context, definition, error('POLICY', 'POLICY.CONFIRMATION_REQUIRED', 'A target-bound one-time approval is required.', command.traceId));
       }
-      const consumption = this.#approvals.consume(context.approvalId, command, definition);
+      const consumption = await this.#approvals.consume(context.approvalId, command, definition);
       if (!consumption.ok && consumption.error) return this.#deny(command, context, definition, consumption.error);
     }
 
@@ -88,7 +101,7 @@ export class CapabilityPolicyService {
     context: PolicyContext,
   ): void {
     this.#audit?.({
-      eventId: `audit:${randomUUID()}`,
+      eventId: `audit:${randomId()}`,
       timestamp: new Date().toISOString(),
       traceId: command.traceId,
       requestId: command.requestId,

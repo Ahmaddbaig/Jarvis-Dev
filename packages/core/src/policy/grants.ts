@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomId } from './crypto';
 import {
   capabilityGrantInputSchema,
   capabilityGrantSchema,
@@ -24,13 +24,22 @@ export class CapabilityGrantStore {
       throw new Error('Capability grants can be issued only from an explicit user gesture.');
     }
     const parsed = capabilityGrantInputSchema.parse(input);
-    const grant = Object.freeze(capabilityGrantSchema.parse({ ...parsed, grantId: `grant:${randomUUID()}` }));
+    const grant = Object.freeze(capabilityGrantSchema.parse({ ...parsed, grantId: `grant:${randomId()}` }));
     this.#grants.set(grant.grantId, grant);
     return grant;
   }
 
   revoke(grantId: string): boolean {
     return this.#grants.delete(grantId);
+  }
+
+  /**
+   * Drop every grant. Callers that derive grants from user settings rebuild
+   * the whole set on change, so that disabling a tool revokes it at once
+   * rather than leaving a stale grant behind.
+   */
+  revokeAll(): void {
+    this.#grants.clear();
   }
 
   allows(command: CommandEnvelope, capability: Capability): boolean {

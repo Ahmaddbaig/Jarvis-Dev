@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useConversation } from '@elevenlabs/react';
 import Image from 'next/image';
 import { AnimatePresence, motion } from 'framer-motion';
@@ -13,6 +13,8 @@ import {
 } from '@jarvis/contracts';
 import { FUNCTION_REGISTRY, getFunctionByName, JarvisFunction } from '@/frontend/lib/functions';
 import { createGetFunctionByName, resolveEnabledFunction } from '@/frontend/lib/dynamic-functions';
+import { ToolRuntime, type ToolConfirmationRequest } from '@/frontend/lib/tools/runtime';
+import { ToolConfirmationModal } from './ToolConfirmationModal';
 import { XrayWidget } from './XrayWidget';
 import { CameraWidget } from './CameraWidget';
 import { ArcReactorVisualizer } from './visualizers/ArcReactorVisualizer';
@@ -340,6 +342,50 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     return resolveEnabledFunction(name, allFunctionsRef.current, enabledFunctionNamesRef.current);
   }
 
+  const [confirmationRequest, setConfirmationRequest] = useState<ToolConfirmationRequest | null>(null);
+  const confirmationResolverRef = useRef<((approved: boolean) => void) | null>(null);
+  const toolRuntimeRef = useRef<ToolRuntime | null>(null);
+
+  const requestToolConfirmation = useCallback((request: ToolConfirmationRequest) => {
+    // Only one prompt at a time: a second request while one is open is
+    // declined rather than silently replacing it on screen.
+    if (confirmationResolverRef.current) return Promise.resolve(false);
+    setConfirmationRequest(request);
+    return new Promise<boolean>((resolve) => {
+      confirmationResolverRef.current = resolve;
+    });
+  }, []);
+
+  const resolveToolConfirmation = useCallback((approved: boolean) => {
+    const resolver = confirmationResolverRef.current;
+    confirmationResolverRef.current = null;
+    setConfirmationRequest(null);
+    resolver?.(approved);
+  }, []);
+
+  /**
+   * Run a model-requested tool through policy.
+   *
+   * Returns the handler's result for catalog tools, or runs the legacy handler
+   * directly for MCP and skill tools, which have no server-owned policy yet.
+   */
+  // Stable across renders: every input is read through a ref, so effects that
+  // register tool callbacks do not need to re-run when unrelated state moves.
+  const executeToolCall = useCallback(async (
+    name: string,
+    args: Record<string, unknown>,
+    source: 'model' | 'user',
+  ): Promise<unknown> => {
+    const outcome = await toolRuntimeRef.current?.invoke({ name, args, source });
+    if (outcome) {
+      if (outcome.ok) return outcome.result;
+      return { error: outcome.error?.message ?? `${name} was not allowed.` };
+    }
+    const fn = resolveEnabledFunction(name, allFunctionsRef.current, enabledFunctionNamesRef.current);
+    if (!fn) return { error: `${name} is not available.` };
+    return fn.handler(args);
+  }, []);
+
   // Ref-based ElevenLabs clientTools so dynamic functions are included at runtime.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const elClientToolsRef = useRef<Record<string, (params: any) => any>>(
@@ -534,7 +580,10 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
   // already present in the OS vault or a vault write succeeds.
   useEffect(() => {
     if (!serverSettingsQuery.isSuccess || legacyCredentialMigrationStartedRef.current) return;
-    if (window.electron?.isElectron !== true) return;
+    // Runs in plain browsers too. Only the desktop app can write to the vault,
+    // so a browser never deletes a key it could not replace -- it removes
+    // plaintext only where the vault already holds that credential.
+    const isDesktop = window.electron?.isElectron === true;
 
     const configured = serverSettingsQuery.data?.credentialStatus;
     let parsed: Record<string, unknown> = {};
@@ -550,10 +599,12 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     const anthropic = typeof parsed.claudeApiKey === 'string' ? parsed.claudeApiKey.trim() : '';
     const homeAssistant = localStorage.getItem('jarvis_ha_token')?.trim() ?? '';
     const ical = localStorage.getItem('jarvis_ical_url')?.trim() ?? '';
-    if (openai && !configured?.openaiApiKey) patch.openaiApiKey = openai;
-    if (anthropic && !configured?.anthropicApiKey) patch.anthropicApiKey = anthropic;
-    if (homeAssistant && !configured?.homeAssistantToken) patch.homeAssistantToken = homeAssistant;
-    if (ical && !configured?.icalFeedUrl) patch.icalFeedUrl = ical;
+    if (isDesktop) {
+      if (openai && !configured?.openaiApiKey) patch.openaiApiKey = openai;
+      if (anthropic && !configured?.anthropicApiKey) patch.anthropicApiKey = anthropic;
+      if (homeAssistant && !configured?.homeAssistantToken) patch.homeAssistantToken = homeAssistant;
+      if (ical && !configured?.icalFeedUrl) patch.icalFeedUrl = ical;
+    }
 
     const hasLegacyPlaintext = Boolean(openai || anthropic || homeAssistant || ical);
     if (!hasLegacyPlaintext) return;
@@ -562,11 +613,32 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     void (async () => {
       try {
         if (Object.keys(patch).length > 0) await saveCredentials(patch);
-        // Non-secret settings were imported by fetchServerSettings before this
-        // credential cleanup runs, so the legacy document can now be removed.
-        localStorage.removeItem('jarvis_settings');
-        localStorage.removeItem('jarvis_ha_token');
-        localStorage.removeItem('jarvis_ical_url');
+        // A plaintext copy is safe to drop once the vault holds that value:
+        // either this run wrote it, or the server already reported it
+        // configured. Anything the vault does not have is left alone, because
+        // in a browser the plaintext copy may be the only one.
+        const secured = {
+          openai: Boolean(patch.openaiApiKey) || Boolean(configured?.openaiApiKey),
+          anthropic: Boolean(patch.anthropicApiKey) || Boolean(configured?.anthropicApiKey),
+          homeAssistant: Boolean(patch.homeAssistantToken) || Boolean(configured?.homeAssistantToken),
+          ical: Boolean(patch.icalFeedUrl) || Boolean(configured?.icalFeedUrl),
+        };
+        if (secured.homeAssistant) localStorage.removeItem('jarvis_ha_token');
+        if (secured.ical) localStorage.removeItem('jarvis_ical_url');
+
+        if (isDesktop) {
+          // fetchServerSettings has already imported the non-secret keys, so
+          // the desktop app has no further use for the legacy document.
+          localStorage.removeItem('jarvis_settings');
+        } else if ((openai && secured.openai) || (anthropic && secured.anthropic)) {
+          const remaining = { ...parsed };
+          if (secured.openai) delete remaining.apiKey;
+          if (secured.anthropic) delete remaining.claudeApiKey;
+          // Removes secrets from a legacy document rather than storing
+          // renderer state. The rest of the document is still the
+          // authoritative local config for a browser session.
+          localStorage.setItem('jarvis_settings', JSON.stringify(remaining)); // legacy-redaction
+        }
       } catch (error) {
         legacyCredentialMigrationStartedRef.current = false;
         emitError('app', error instanceof Error ? error.message : String(error));
@@ -967,6 +1039,23 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     enabledFunctionNamesRef.current = new Set(settings.enabledFunctions);
   }, [settings.enabledFunctions]);
 
+  // The runtime owns the dispatcher and its handler registrations, so it is
+  // rebuilt only when the tool set itself changes, not on every settings edit.
+  useEffect(() => {
+    const all = dynamicState.loaded ? dynamicState.allFunctions : FUNCTION_REGISTRY;
+    toolRuntimeRef.current = new ToolRuntime(all, {
+      actorId: 'desktop-user:local',
+      isDesktop: window.electron?.isElectron === true,
+      sessionId: 'session:renderer',
+      confirm: requestToolConfirmation,
+    });
+    toolRuntimeRef.current.syncEnabledOperations(enabledFunctionNamesRef.current);
+  }, [dynamicState.loaded, dynamicState.allFunctions, requestToolConfirmation]);
+
+  useEffect(() => {
+    toolRuntimeRef.current?.syncEnabledOperations(settings.enabledFunctions);
+  }, [settings.enabledFunctions]);
+
   // Keep elClientToolsRef in sync with dynamic function state
   useEffect(() => {
     const fns = (dynamicState.loaded ? dynamicState.allFunctions : FUNCTION_REGISTRY)
@@ -975,7 +1064,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
       fns.map((fn) => [
         fn.name,
         async (params: Record<string, unknown>) => {
-          const result = await fn.handler(params);
+          const result = await executeToolCall(fn.name, params, 'model');
           const r = result as Record<string, unknown> | null;
           if (typeof r?.error === 'string') {
             emitError('function', `${fn.name}(): ${r.error}`, 'error');
@@ -984,7 +1073,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
         },
       ]),
     );
-  }, [dynamicState.loaded, dynamicState.allFunctions, settings.enabledFunctions]);
+  }, [dynamicState.loaded, dynamicState.allFunctions, settings.enabledFunctions, executeToolCall]);
 
   // Continuous rotation for rings
   useEffect(() => {
@@ -1322,7 +1411,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
               return;
             }
 
-            const result = await fn.handler(parsedArgs);
+            const result = await executeToolCall(fnName, parsedArgs, 'model');
             if (fnName === 'play_spotify') {
               scheduleMusicRestore(MUSIC_PLAYBACK_RESTORE_FALLBACK_MS);
             }
@@ -1440,6 +1529,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
         playbackRate: currentSettings.voicePlaybackRate,
         enabledFunctionNames: currentSettings.enabledFunctions,
         getFunctions: () => (dynamicState.loaded ? dynamicState.allFunctions : FUNCTION_REGISTRY),
+        executeTool: (name, args) => executeToolCall(name, args, 'model'),
       });
     } catch (error) {
       // Status/error state is set by the hook's onError callback.
@@ -2004,6 +2094,12 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
               ? [...dynamicState.mcpFunctions, ...dynamicState.skillFunctions]
               : []}
           />
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {confirmationRequest && (
+          <ToolConfirmationModal request={confirmationRequest} onResolve={resolveToolConfirmation} />
         )}
       </AnimatePresence>
     </div>

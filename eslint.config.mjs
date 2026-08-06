@@ -23,16 +23,16 @@ export default defineConfig([
     },
   },
   {
-    // Package layering. @jarvis/contracts is the only dependency-free layer,
-    // and @jarvis/core's root barrel re-exports ./policy, which pulls in
-    // node:crypto — importing it from renderer code would drag a Node builtin
-    // into the browser bundle. Renderer code must use the subpath exports.
+    // Package layering. @jarvis/contracts and @jarvis/core are browser-safe
+    // (the policy layer uses Web Crypto precisely so the dispatcher can run in
+    // the renderer); persistence and secrets are not, and must never be
+    // reachable from a client bundle.
     files: ['frontend/**/*.{ts,tsx}', 'app/**/*.{ts,tsx}'],
     rules: {
       'no-restricted-imports': ['error', {
         paths: [{
           name: '@jarvis/core',
-          message: 'Import a @jarvis/core subpath (e.g. @jarvis/core/tool-catalog); the root barrel pulls node:crypto into the browser bundle.',
+          message: 'Import a @jarvis/core subpath (e.g. @jarvis/core/tool-catalog) so unused domains stay out of the bundle.',
         }, {
           name: '@jarvis/persistence',
           message: '@jarvis/persistence is server-only (node:sqlite). Reach it through backend/persistence instead.',
