@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -13,7 +14,7 @@ def fake_install(tmp_path: Path, profiles_root: Path) -> Path:
     root = tmp_path / ".local-ai"
     (root / "bin").mkdir(parents=True)
     (root / "models" / "weights").mkdir(parents=True)
-    (root / "bin" / "local-ai").write_bytes(b"binary")
+    (root / "bin" / ("local-ai.exe" if os.name == "nt" else "local-ai")).write_bytes(b"binary")
     (root / "installed-profile").write_text("m2\n", encoding="utf-8")
     definition = json.loads((profiles_root / "m2.json").read_text(encoding="utf-8"))
     for name in definition["models"].values():
