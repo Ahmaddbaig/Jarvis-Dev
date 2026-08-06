@@ -145,7 +145,7 @@ function migrateLegacyRegistry(): void {
     },
   });
 
-  if (result.state === 'imported') {
+  if (result.state === 'imported' && !result.alreadyProcessed) {
     const devices = readDatabaseRegistry().devices;
     writeSanitizedLegacyRegistry(devices);
   }

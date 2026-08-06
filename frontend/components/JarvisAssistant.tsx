@@ -12,7 +12,7 @@ import {
   type JarvisSettings,
 } from '@jarvis/contracts';
 import { FUNCTION_REGISTRY, getFunctionByName, JarvisFunction } from '@/frontend/lib/functions';
-import { createGetFunctionByName } from '@/frontend/lib/dynamic-functions';
+import { createGetFunctionByName, resolveEnabledFunction } from '@/frontend/lib/dynamic-functions';
 import { XrayWidget } from './XrayWidget';
 import { CameraWidget } from './CameraWidget';
 import { ArcReactorVisualizer } from './visualizers/ArcReactorVisualizer';
@@ -291,6 +291,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
       dataChannel: dataChannelRef,
       remoteStream: remoteStreamRef,
       localStream: localAudioStreamRef,
+      remoteAudio: remoteAudioRef,
     });
     if (errors.length > 0) console.warn('[Jarvis] Realtime resource cleanup had errors:', errors);
   }
@@ -330,6 +331,14 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     loadError: null,
   };
   const dynamicGetFunctionByNameRef = useRef<(name: string) => JarvisFunction | undefined>(getFunctionByName);
+  const allFunctionsRef = useRef<readonly JarvisFunction[]>(FUNCTION_REGISTRY);
+  const enabledFunctionNamesRef = useRef<ReadonlySet<string>>(new Set(DEFAULT_SETTINGS.enabledFunctions));
+
+  // Resolves a model-requested tool against the *enabled* set. Reads through
+  // refs so a toggle mid-session takes effect immediately.
+  function resolveCallableFunction(name: string): JarvisFunction | undefined {
+    return resolveEnabledFunction(name, allFunctionsRef.current, enabledFunctionNamesRef.current);
+  }
 
   // Ref-based ElevenLabs clientTools so dynamic functions are included at runtime.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -885,7 +894,8 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
         const localConfig = parseConfig(localRaw);
         // A 127.0.0.1 LocalAI URL belongs to this Mac, never to every LAN
         // browser that shares server settings.
-        const credentialStatus = serverSettings.credentialStatus;
+        // Absent status means "no keys confirmed", which fails closed.
+        const credentialStatus = serverSettings.credentialStatus ?? {};
         const serverHasConfig = hasUsableVoiceEngineConfig(serverConfig, false, credentialStatus);
         const localHasConfig = hasUsableVoiceEngineConfig(localConfig, localAIAllowedHere, credentialStatus);
         const localWantsLocal = localConfig?.apiMode === 'local' && localAIAllowedHere;
@@ -933,6 +943,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     const state = dynamicFunctionsQuery.data;
     if (!state || !serverSettingsQuery.isSuccess) return;
     dynamicGetFunctionByNameRef.current = createGetFunctionByName(state.allFunctions);
+    allFunctionsRef.current = state.allFunctions;
 
     // Seed enabledFunctions with new MCP/Skill tool names
     if (state.mcpFunctions.length > 0 || state.skillFunctions.length > 0) {
@@ -952,9 +963,14 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     }
   }, [dynamicFunctionsQuery.data, saveSettingsToServer, serverSettingsQuery.isSuccess]);
 
+  useEffect(() => {
+    enabledFunctionNamesRef.current = new Set(settings.enabledFunctions);
+  }, [settings.enabledFunctions]);
+
   // Keep elClientToolsRef in sync with dynamic function state
   useEffect(() => {
-    const fns = dynamicState.loaded ? dynamicState.allFunctions : FUNCTION_REGISTRY;
+    const fns = (dynamicState.loaded ? dynamicState.allFunctions : FUNCTION_REGISTRY)
+      .filter((fn) => settings.enabledFunctions.includes(fn.name));
     elClientToolsRef.current = Object.fromEntries(
       fns.map((fn) => [
         fn.name,
@@ -968,7 +984,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
         },
       ]),
     );
-  }, [dynamicState.loaded, dynamicState.allFunctions]);
+  }, [dynamicState.loaded, dynamicState.allFunctions, settings.enabledFunctions]);
 
   // Continuous rotation for rings
   useEffect(() => {
@@ -1026,15 +1042,17 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
             voice: currentSettings.voice ?? 'echo',
             fetch: desktopControlFetch,
           });
-      await realtimeProvider.prepare();
-
       console.log(
         `%c[Jarvis] startRealtime() called at ${new Date().toLocaleTimeString()} — model: ${isLocal ? localProfile.pipelineModel : (currentSettings.realtimeModel ?? 'gpt-realtime-2')}`,
         'background:#0d2137;color:#4fc3f7;font-weight:bold;padding:2px 6px;border-radius:3px'
       );
 
       disconnect(); // Ensure clean slate
+      // Enter 'starting' before readiness checks: the reducer drops failures
+      // raised while idle, which would silently swallow the provider's
+      // remediation messages (model not installed, engine unreachable).
       voiceSession.starting();
+      await realtimeProvider.prepare();
       
       // Get microphone access
       const { stream } = await acquireMicrophone({
@@ -1089,13 +1107,14 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
       // endpoint), so its offer must contain the gathered ICE candidates.
       if (realtimeProvider.requiresCompleteIce && pc.iceGatheringState !== 'complete') {
         await new Promise<void>((resolve) => {
-          const timeout = window.setTimeout(resolve, 10_000);
+          const finish = () => {
+            window.clearTimeout(timeout);
+            pc.removeEventListener('icegatheringstatechange', onStateChange);
+            resolve();
+          };
+          const timeout = window.setTimeout(finish, 10_000);
           const onStateChange = () => {
-            if (pc.iceGatheringState === 'complete') {
-              window.clearTimeout(timeout);
-              pc.removeEventListener('icegatheringstatechange', onStateChange);
-              resolve();
-            }
+            if (pc.iceGatheringState === 'complete') finish();
           };
           pc.addEventListener('icegatheringstatechange', onStateChange);
         });
@@ -1262,8 +1281,23 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
             const fnName = data.name as string;
             const rawArgs = data.arguments as string;
 
-            const fn = dynamicGetFunctionByNameRef.current(fnName);
-            if (!fn) return;
+            const fn = resolveCallableFunction(fnName);
+            if (!fn) {
+              // Unknown or disabled. Answer the call so the model is not left
+              // waiting on output that will never arrive.
+              console.warn(`[Jarvis] Refused tool call for unavailable function: ${fnName}`);
+              dc.send(JSON.stringify({
+                type: 'conversation.item.create',
+                item: {
+                  type: 'function_call_output',
+                  call_id: id,
+                  output: JSON.stringify({ error: `${fnName} is not available.` }),
+                },
+              }));
+              dc.send(JSON.stringify({ type: 'response.create' }));
+              delete pendingCalls[id];
+              return;
+            }
 
             let parsedArgs: Record<string, unknown> = {};
             try { parsedArgs = JSON.parse(rawArgs || '{}'); } catch { /* empty args */ }

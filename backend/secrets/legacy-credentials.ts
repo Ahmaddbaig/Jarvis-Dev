@@ -42,5 +42,5 @@ export function migrateLegacyCredentials(store: CoreStore, credentials: Credenti
     quarantineDirectory: `${store.dataDirectory}/migration-quarantine`,
     importRecord: (record) => credentials.setMany(credentialPatchFromLegacySettings(record)),
   });
-  if (result.state === 'imported') store.removeLegacyCredentialValues();
+  if (result.state === 'imported' && !result.alreadyProcessed) store.removeLegacyCredentialValues();
 }

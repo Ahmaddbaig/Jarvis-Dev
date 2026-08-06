@@ -171,7 +171,7 @@ CREATE TABLE security_audit (
   actor_id TEXT,
   action TEXT NOT NULL,
   resource TEXT NOT NULL,
-  decision TEXT NOT NULL CHECK (decision IN ('allowed', 'denied', 'issued', 'revoked', 'failed')),
+  decision TEXT NOT NULL CHECK (decision IN ('allowed', 'denied', 'issued', 'consumed', 'expired', 'revoked', 'failed')),
   reason TEXT NOT NULL,
   remote_hash TEXT,
   metadata_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata_json))

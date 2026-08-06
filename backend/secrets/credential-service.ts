@@ -136,8 +136,10 @@ export function getCredentialService(): CredentialService {
       store.database,
       createPlatformSecretVault({ service: JARVIS_VAULT_SERVICE }),
     );
-    globalThis.__jarvisCredentialService = service;
+    // Publish only after migration succeeds; caching a service whose migration
+    // threw would skip the legacy import for the life of the process.
     migrateLegacyCredentials(store, service);
+    globalThis.__jarvisCredentialService = service;
   }
   return globalThis.__jarvisCredentialService;
 }
