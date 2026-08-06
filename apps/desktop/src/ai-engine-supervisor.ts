@@ -223,7 +223,7 @@ export class AIEngineSupervisor {
                 path: '/v1/health',
                 method: 'GET',
                 headers: { Authorization: `Bearer ${this.token}` },
-                timeout: 1_000,
+                timeout: 4_000,
             }, (response) => {
                 const chunks: Buffer[] = [];
                 response.on('data', (chunk: Buffer) => chunks.push(chunk));

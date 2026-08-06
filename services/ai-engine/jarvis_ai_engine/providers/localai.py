@@ -36,7 +36,10 @@ class LocalAIProvider(AIProvider):
 
     async def _ready(self) -> bool:
         try:
-            async with httpx.AsyncClient(timeout=1.5, trust_env=False) as client:
+            # Windows takes ~1s to refuse a closed loopback port; a tight connect
+            # timeout keeps /v1/health fast when LocalAI is not running.
+            timeout = httpx.Timeout(1.5, connect=0.25)
+            async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
                 response = await client.get(f"{self.config.local_ai_base_url}/readyz")
                 return response.is_success
         except httpx.HTTPError:
