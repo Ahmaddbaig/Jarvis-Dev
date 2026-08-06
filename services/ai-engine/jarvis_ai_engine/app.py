@@ -35,7 +35,7 @@ def memory_bytes() -> int | None:
 
 
 def process_peak_rss_bytes() -> int | None:
-    if resource is None:
+    if sys.platform == "win32" or resource is None:
         return None
     try:
         peak = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
