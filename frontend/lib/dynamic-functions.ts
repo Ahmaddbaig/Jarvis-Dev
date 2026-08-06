@@ -192,3 +192,21 @@ export function createGetFunctionByName(allFunctions: JarvisFunction[]) {
     return allFunctions.find((f) => f.name === name);
   };
 }
+
+/**
+ * Resolve a tool the model asked for, honouring the user's enabled set.
+ *
+ * Filtering the tool list offered to a model only controls what it is told
+ * about; a hallucinated name, or one injected through tool output, still
+ * arrives as an ordinary call. Execution therefore resolves against the
+ * enabled set rather than the full registry, so a disabled ability stays
+ * unreachable.
+ */
+export function resolveEnabledFunction(
+  name: string,
+  allFunctions: readonly JarvisFunction[],
+  enabledNames: ReadonlySet<string>,
+): JarvisFunction | undefined {
+  const fn = allFunctions.find((f) => f.name === name);
+  return fn && enabledNames.has(fn.name) ? fn : undefined;
+}

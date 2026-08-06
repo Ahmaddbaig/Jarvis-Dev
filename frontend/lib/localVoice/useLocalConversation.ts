@@ -16,6 +16,7 @@ import {
   SentenceCoalescer,
 } from './chatTools';
 import { emitError } from '@/frontend/lib/errorBus';
+import { resolveEnabledFunction } from '@/frontend/lib/dynamic-functions';
 import type { JarvisFunction } from '@/frontend/lib/functions';
 
 /**
@@ -276,7 +277,7 @@ export function useLocalConversation(
 
       for (const call of toolCalls) {
         const name = call.function?.name ?? '';
-        const fn = options.getFunctions().find((f) => f.name === name);
+        const fn = resolveEnabledFunction(name, options.getFunctions(), new Set(options.enabledFunctionNames));
         let resultJson: string;
 
         if (!fn) {

@@ -48,6 +48,30 @@ function errorCode(error: unknown): string | undefined {
     return typeof error.code === 'string' ? error.code : undefined;
 }
 
+const EXTERNAL_URL_SCHEMES = new Set(['http:', 'https:', 'mailto:']);
+
+/**
+ * Hand a URL to the OS only when its scheme is one a link can legitimately
+ * use. Renderer content includes model output and LAN-supplied data, and
+ * shell.openExternal on an arbitrary scheme (file:, smb:, ms-msdt: …) invokes
+ * whatever handler the OS has registered for it.
+ */
+function openExternalIfSafe(url: string): void {
+    let scheme: string;
+    try {
+        scheme = new URL(url).protocol;
+    }
+    catch {
+        console.warn('[jarvis] Refused to open a malformed external URL.');
+        return;
+    }
+    if (!EXTERNAL_URL_SCHEMES.has(scheme)) {
+        console.warn(`[jarvis] Refused to open an external URL with scheme ${scheme}`);
+        return;
+    }
+    void shell.openExternal(url);
+}
+
 const CHROME_CONTROL_UI_TOKEN = process.env.JARVIS_CHROME_UI_TOKEN || crypto.randomBytes(32).toString('base64url');
 process.env.JARVIS_CHROME_UI_TOKEN = CHROME_CONTROL_UI_TOKEN;
 const isDev = !app.isPackaged;
@@ -245,6 +269,9 @@ function createDesktopWindow(kind: DesktopWindowKind): BrowserWindow {
             preload: path.join(__dirname, 'preload.js'),
             contextIsolation: true,
             nodeIntegration: false,
+            // Pinned rather than inherited: a preload that later reaches for a
+            // node: module would otherwise silently disable the sandbox.
+            sandbox: true,
             webSecurity: true,
             backgroundThrottling: false,
         },
@@ -684,6 +711,7 @@ function createWindow(): void {
             preload: path.join(__dirname, 'preload.js'),
             contextIsolation: true,
             nodeIntegration: false,
+            sandbox: true,
             webSecurity: true,
             backgroundThrottling: false,
         },
@@ -697,7 +725,7 @@ function createWindow(): void {
     });
     // Open external links in the default browser
     mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-        shell.openExternal(url);
+        openExternalIfSafe(url);
         return { action: 'deny' };
     });
     mainWindow.webContents.on('will-navigate', (event, url) => {
@@ -708,7 +736,7 @@ function createWindow(): void {
         }
         catch { /* Open malformed/external destinations outside Electron. */ }
         event.preventDefault();
-        void shell.openExternal(url);
+        openExternalIfSafe(url);
     });
     mainWindow.on('closed', () => {
         mainWindow = null;

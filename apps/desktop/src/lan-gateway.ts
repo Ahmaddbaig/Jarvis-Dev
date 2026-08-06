@@ -9,10 +9,13 @@ import selfsigned from 'selfsigned';
 import {
     isLanPageOrAsset,
     lanRouteDecision,
+    LAN_SESSION_COOKIE,
+    normalizeLanPath,
+    stripUntrustedGatewayHeaders,
     type LanGatewayScope,
 } from './lan-gateway-policy';
 
-const SESSION_COOKIE = '__Host-jarvis_lan';
+const SESSION_COOKIE = LAN_SESSION_COOKIE;
 const PAIRING_PATH = '/__jarvis/pair';
 const MAX_BODY_BYTES = 8_192;
 const MAX_INTERNAL_RESPONSE_BYTES = 1_048_576;
@@ -90,13 +93,6 @@ function parseCookies(header: string | undefined): Map<string, string> {
         cookies.set(item.slice(0, separator).trim(), item.slice(separator + 1).trim());
     }
     return cookies;
-}
-
-function withoutSessionCookie(header: string | undefined): string | undefined {
-    const retained = (header ?? '').split(';')
-        .map((item) => item.trim())
-        .filter((item) => item && !item.startsWith(`${SESSION_COOKIE}=`));
-    return retained.length ? retained.join('; ') : undefined;
 }
 
 function remoteAddress(req: http.IncomingMessage): string {
@@ -267,7 +263,13 @@ export async function startLanGateway(options: StartLanGatewayOptions): Promise<
     const handler = async (req: http.IncomingMessage, res: http.ServerResponse): Promise<void> => {
         let pathname: string;
         try {
-            pathname = new URL(req.url || '/', 'https://jarvis.local').pathname;
+            const parsed = new URL(req.url || '/', 'https://jarvis.local').pathname;
+            const normalized = normalizeLanPath(parsed);
+            if (normalized === null) {
+                json(res, 400, { error: 'Malformed request path.' });
+                return;
+            }
+            pathname = normalized;
         }
         catch {
             json(res, 400, { error: 'Malformed request path.' });
@@ -347,14 +349,7 @@ export async function startLanGateway(options: StartLanGatewayOptions): Promise<
             return;
         }
 
-        delete req.headers.authorization;
-        delete req.headers['x-jarvis-gateway-auth'];
-        delete req.headers['x-jarvis-lan-actor'];
-        delete req.headers['x-jarvis-lan-scopes'];
-        delete req.headers['x-jarvis-csrf-verified'];
-        const retainedCookie = withoutSessionCookie(req.headers.cookie);
-        if (retainedCookie) req.headers.cookie = retainedCookie;
-        else delete req.headers.cookie;
+        stripUntrustedGatewayHeaders(req.headers);
         req.headers['x-jarvis-gateway-auth'] = options.desktopToken;
         req.headers['x-jarvis-lan-actor'] = authorization.body.client.id;
         req.headers['x-jarvis-lan-scopes'] = authorization.body.client.scopes.join(',');

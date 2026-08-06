@@ -53,10 +53,23 @@ export async function POST(req: NextRequest) {
   };
 
   return new Promise<Response>((resolve) => {
-    const proc = spawn(service.command, service.authArgs, {
-      env,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    let proc: ReturnType<typeof spawn>;
+    try {
+      proc = spawn(service.command, service.authArgs, {
+        env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    }
+    catch (error) {
+      // The materialized client secret is plaintext on disk until a close or
+      // error handler removes it, and neither is attached yet.
+      removeMaterializedGoogleOAuthCredentials();
+      resolve(NextResponse.json(
+        { serviceId: service.id, error: error instanceof Error ? error.message : String(error) },
+        { status: 500 },
+      ));
+      return;
+    }
 
     activeAuthProcess = proc;
 

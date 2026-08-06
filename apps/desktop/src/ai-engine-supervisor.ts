@@ -8,6 +8,7 @@ import path from 'node:path';
 export const AI_ENGINE_PROTOCOL = 'jarvis.ai-engine/1';
 const SESSION_FILE = 'jarvis-ai-engine-session.json';
 const RESTART_DELAYS_MS = [500, 2_000, 5_000] as const;
+const HEALTHY_RUN_RESET_MS = 60_000;
 
 interface AIEngineHealth {
     ok: boolean;
@@ -85,6 +86,7 @@ export class AIEngineSupervisor {
     private stopping = false;
     private restartTimer: NodeJS.Timeout | null = null;
     private restartCount = 0;
+    private readySinceMs: number | null = null;
     private verifying = false;
     private currentStatus: AIEngineSupervisorStatus;
 
@@ -158,6 +160,9 @@ export class AIEngineSupervisor {
     }
 
     private async launchAndVerify(): Promise<void> {
+        // stop() may land while an earlier attempt is awaiting port reservation.
+        // Without this the spawn happens after app.quit() and orphans the child.
+        if (this.stopping) return;
         this.verifying = true;
         try {
         this.setStatus('starting');
@@ -190,7 +195,9 @@ export class AIEngineSupervisor {
         if (health.buildSha !== this.options.buildSha) {
             throw new Error(`AI engine build ${health.buildSha} does not match ${this.options.buildSha}.`);
         }
+        if (this.stopping) throw new Error('AI engine startup was cancelled by shutdown.');
         this.writeSessionDescriptor(child.pid!);
+        this.readySinceMs = Date.now();
         this.setStatus('ready');
         console.log(`[ai-engine] Ready on loopback (protocol ${health.protocol}, engine ${health.engineVersion}).`);
         } finally {
@@ -289,6 +296,14 @@ export class AIEngineSupervisor {
             return;
         }
         const error = `AI engine exited unexpectedly (code ${String(code)}, signal ${String(signal)}).`;
+        // An engine that ran healthily for a while earns a fresh restart
+        // budget; without this, three crashes spread across a whole session
+        // disable it permanently. Crash loops still exhaust the budget because
+        // they never stay ready for the full window.
+        if (this.readySinceMs !== null && Date.now() - this.readySinceMs >= HEALTHY_RUN_RESET_MS) {
+            this.restartCount = 0;
+        }
+        this.readySinceMs = null;
         if (this.restartCount >= RESTART_DELAYS_MS.length) {
             this.setStatus('unavailable', error);
             return;
