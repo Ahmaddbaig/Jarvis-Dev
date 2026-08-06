@@ -8,6 +8,9 @@ node_modules/
 .next/
 out/
 
+# TypeScript incremental build cache
+*.tsbuildinfo
+
 # Reproducible desktop build output
 .build/
 dist-electron/
