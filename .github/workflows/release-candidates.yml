@@ -94,6 +94,10 @@ jobs:
         if: matrix.platform == 'mac'
         shell: bash
         run: |
+          # electron-builder treats a defined-but-empty CSC_LINK as a certificate path; drop unset secrets.
+          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            [[ -z "${!name}" ]] && unset "$name"
+          done
           if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
             npx electron-builder --mac --arm64 --publish never --config.forceCodeSigning=true
             npx electron-builder --projectDir apps/companion --mac --arm64 --publish never --config.forceCodeSigning=true
@@ -112,6 +116,10 @@ jobs:
         if: matrix.platform == 'win'
         shell: bash
         run: |
+          # electron-builder treats a defined-but-empty WIN_CSC_LINK as a certificate path; drop unset secrets.
+          for name in WIN_CSC_LINK WIN_CSC_KEY_PASSWORD; do
+            [[ -z "${!name}" ]] && unset "$name"
+          done
           if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
             npx electron-builder --win --x64 --publish never --config.forceCodeSigning=true
             npx electron-builder --projectDir apps/companion --win --x64 --publish never --config.forceCodeSigning=true

@@ -121,14 +121,15 @@ describe.sequential('integration secret migrations', () => {
     expect(() => statSync(credentialsPath)).toThrow();
 
     const materialized = google.materializeGoogleOAuthCredentials();
-    expect(statSync(materialized).mode & 0o777).toBe(0o600);
+    // Windows does not implement POSIX permission bits; the user-data ACL remains authoritative.
+    if (process.platform !== 'win32') expect(statSync(materialized).mode & 0o777).toBe(0o600);
     google.removeMaterializedGoogleOAuthCredentials();
 
     const tokenPath = path.join(directory, 'google-calendar-mcp', 'tokens.json');
     mkdirSync(path.dirname(tokenPath), { recursive: true });
     writeFileSync(tokenPath, JSON.stringify({ refresh_token: 'synthetic-refresh-token' }), { mode: 0o644 });
     expect(google.googleServiceAuthenticated('calendar')).toBe(true);
-    expect(statSync(tokenPath).mode & 0o777).toBe(0o600);
+    if (process.platform !== 'win32') expect(statSync(tokenPath).mode & 0o777).toBe(0o600);
     expect(store.database.secretRefs.get('credential.google.calendar.provider-token')).toMatchObject({
       vaultService: 'provider-protected-file',
       vaultAccount: 'google.calendar.provider-token',

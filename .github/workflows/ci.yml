@@ -52,6 +52,12 @@ jobs:
       - name: Verify runner architecture
         run: node -e "if (process.arch !== '${{ matrix.arch }}') throw new Error('Expected ${{ matrix.arch }}, received ' + process.arch)"
 
+      - name: Install Linux native build prerequisites
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libx11-dev libxtst-dev libpng++-dev
+
       - name: Install Node dependencies
         run: npm ci
 

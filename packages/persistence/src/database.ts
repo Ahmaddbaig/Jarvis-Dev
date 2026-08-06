@@ -68,9 +68,14 @@ export class JarvisDatabase {
       if (!existsSync(filePath)) closeSync(openSync(filePath, 'wx', 0o600));
     }
     this.connection = new DatabaseSync(filePath, { timeout: 5_000 });
-    this.configure();
-    this.applyMigrations();
-    this.restrictDatabaseFiles();
+    try {
+      this.configure();
+      this.applyMigrations();
+      this.restrictDatabaseFiles();
+    } catch (error) {
+      this.close();
+      throw error;
+    }
     this.settings = new SettingsRepository(this.connection);
     this.tasks = new TasksRepository(this.connection);
     this.secretRefs = new SecretRefsRepository(this.connection);
