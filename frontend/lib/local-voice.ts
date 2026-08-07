@@ -53,6 +53,10 @@ export interface LocalVoiceCallbacks {
   ) => Promise<{ output: Record<string, unknown>; imageBase64?: string }>;
   /** Fired when a spoken response (or silent turn) fully completes. */
   onResponseDone: () => void;
+  /** Fired for every accepted user turn (mic transcript or typed text). */
+  onUserUtterance?: (text: string) => void;
+  /** Fired with the assistant's final reply text for each turn. */
+  onAssistantReply?: (text: string) => void;
 }
 
 const START_RMS = 0.015;      // speech onset threshold
@@ -242,9 +246,10 @@ export class LocalVoiceSession {
     this.busy = true;
     try {
       console.log(
-        `%c[Jarvis Local] Voicebox: "${trimmed}"`,
+        `%c[Jarvis Local] Typed: "${trimmed}"`,
         'background:#0d2137;color:#4fc3f7;padding:2px 6px;border-radius:3px',
       );
+      this.callbacks.onUserUtterance?.(trimmed);
       await this.respondTo(trimmed);
       this.callbacks.onResponseDone();
     } catch (e) {
@@ -331,6 +336,7 @@ export class LocalVoiceSession {
         `%c[Jarvis Local] Heard: "${transcript}"`,
         'background:#0d2137;color:#4fc3f7;padding:2px 6px;border-radius:3px',
       );
+      this.callbacks.onUserUtterance?.(transcript);
       await this.respondTo(transcript);
       this.callbacks.onResponseDone();
     } catch (e) {
@@ -371,7 +377,10 @@ export class LocalVoiceSession {
         const speech = cleanForSpeech(message.content ?? '');
         this.history.push({ role: 'assistant', content: message.content ?? '' });
         this.trimHistory();
-        if (speech) await this.speak(speech);
+        if (speech) {
+          this.callbacks.onAssistantReply?.(speech);
+          await this.speak(speech);
+        }
         return;
       }
 
