@@ -22,9 +22,17 @@ export type JarvisPosition = 'center' | 'bottom-left' | 'bottom-right' | 'top-le
 export type RealtimeModel = 'gpt-realtime-2' | 'gpt-realtime-1.5' | 'gpt-realtime-mini';
 
 export interface JarvisSettings {
-  apiMode: 'openai' | 'elevenlabs';
+  apiMode: 'openai' | 'elevenlabs' | 'local';
   apiKey: string;
   realtimeModel?: RealtimeModel;
+  /** Ollama model tag used when apiMode === 'local'. */
+  localModel?: string;
+  /** speechSynthesis voice name for local mode. Empty = best available. */
+  localVoice?: string;
+  /** Speech output for local mode: macOS voice or the Voicebox app. */
+  localTts?: 'system' | 'voicebox';
+  /** Voicebox voice profile name to speak with. */
+  voiceboxVoice?: string;
   elevenLabsAgentId?: string;
   elevenLabsFirstMessage?: string;
   voice: 'alloy' | 'ash' | 'ballad' | 'coral' | 'echo' | 'sage' | 'shimmer' | 'verse' | 'marin' | 'cedar';
@@ -76,6 +84,32 @@ const POSITIONS: { id: JarvisPosition; label: string; icon: string }[] = [
 
 type Tab = 'jarvis' | 'abilities' | 'ui' | 'system';
 
+/**
+ * Curated Ollama models for Apple-silicon Macs with 48 GB unified memory.
+ * qwen3.6:27b is the default: strong tool calling + vision, ~17 GB, leaving
+ * ~30 GB of headroom for the app and OS while staying fast enough for voice.
+ */
+export const LOCAL_MODEL_PRESETS: { id: string; label: string; desc: string }[] = [
+  { id: 'qwen3.6:27b', label: 'Qwen3.6 27B', desc: 'Best for this Mac · 17 GB' },
+  { id: 'qwen3.6:35b', label: 'Qwen3.6 35B', desc: 'Max quality · 24 GB' },
+  { id: 'gpt-oss:20b', label: 'GPT-OSS 20B', desc: 'Fastest · 13 GB' },
+];
+
+export const DEFAULT_LOCAL_MODEL = LOCAL_MODEL_PRESETS[0].id;
+
+interface OllamaStatus {
+  online: boolean;
+  models: { name: string }[];
+  error?: string;
+}
+
+interface VoiceboxStatus {
+  online: boolean;
+  profiles: { id: string; name: string; presetVoiceId: string | null }[];
+  kokoroReady?: boolean;
+  error?: string;
+}
+
 const THEMES: { id: JarvisTheme; name: string; accent: string; glow: string }[] = [
   { id: 'arc-reactor', name: 'Arc Reactor', accent: '#22d3ee', glow: 'rgba(34,211,238,0.4)' },
   { id: 'midnight',    name: 'Midnight',    accent: '#a855f7', glow: 'rgba(168,85,247,0.4)'  },
@@ -96,6 +130,9 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
   const [diagLoading, setDiagLoading] = useState(false);
   const [diagOutput, setDiagOutput] = useState<string | null>(null);
   const [diagError, setDiagError] = useState<string | null>(null);
+  const [ollamaStatus, setOllamaStatus] = useState<OllamaStatus | null>(null);
+  const [voiceboxStatus, setVoiceboxStatus] = useState<VoiceboxStatus | null>(null);
+  const [systemVoices, setSystemVoices] = useState<SpeechSynthesisVoice[]>([]);
 
   useEffect(() => {
     if (isOpen) {
@@ -105,6 +142,57 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
       setDiagError(null);
     }
   }, [isOpen, initialSettings]);
+
+  // Live Ollama status while the Local LLM engine is selected.
+  useEffect(() => {
+    if (!isOpen || (settings.apiMode ?? 'openai') !== 'local') return;
+    let cancelled = false;
+    const check = async () => {
+      try {
+        const res = await fetch('/api/local-llm');
+        const data = (await res.json()) as OllamaStatus;
+        if (!cancelled) setOllamaStatus(data);
+      } catch {
+        if (!cancelled) setOllamaStatus({ online: false, models: [], error: 'Status check failed' });
+      }
+    };
+    void check();
+    const timer = window.setInterval(() => void check(), 5000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [isOpen, settings.apiMode]);
+
+  // Live Voicebox app status while the Local LLM engine is selected.
+  useEffect(() => {
+    if (!isOpen || (settings.apiMode ?? 'openai') !== 'local') return;
+    let cancelled = false;
+    const check = async () => {
+      try {
+        const res = await fetch('/api/voicebox');
+        const data = (await res.json()) as VoiceboxStatus;
+        if (!cancelled) setVoiceboxStatus(data);
+      } catch {
+        if (!cancelled) setVoiceboxStatus({ online: false, profiles: [], error: 'Status check failed' });
+      }
+    };
+    void check();
+    const timer = window.setInterval(() => void check(), 5000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [isOpen, settings.apiMode]);
+
+  // macOS system voices for local TTS (populated async by Chromium).
+  useEffect(() => {
+    if (!isOpen) return;
+    const load = () => {
+      const english = window.speechSynthesis
+        .getVoices()
+        .filter((v) => /^en[-_]/i.test(v.lang))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      setSystemVoices(english);
+    };
+    load();
+    window.speechSynthesis.addEventListener('voiceschanged', load);
+    return () => window.speechSynthesis.removeEventListener('voiceschanged', load);
+  }, [isOpen]);
 
   async function runDiagnostics() {
     sfx('click_sfx', 0.5);
@@ -178,11 +266,11 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
               {/* API Mode switcher */}
               <div className="space-y-2">
                 <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">Voice Engine</label>
-                <div className="grid grid-cols-2 gap-2">
-                  {(['openai', 'elevenlabs'] as const).map((mode) => {
+                <div className="grid grid-cols-3 gap-2">
+                  {(['openai', 'elevenlabs', 'local'] as const).map((mode) => {
                     const active = (settings.apiMode ?? 'openai') === mode;
-                    const labels = { openai: 'OpenAI Realtime', elevenlabs: 'ElevenLabs' };
-                    const descs  = { openai: 'GPT-4o via WebRTC', elevenlabs: 'Jarvis Agent via WebRTC' };
+                    const labels = { openai: 'OpenAI Realtime', elevenlabs: 'ElevenLabs', local: 'Local LLM' };
+                    const descs  = { openai: 'GPT-4o via WebRTC', elevenlabs: 'Jarvis Agent via WebRTC', local: 'On-device via Ollama' };
                     return (
                       <button
                         key={mode}
@@ -271,6 +359,171 @@ export function SettingsModal({ isOpen, onClose, onSave, initialSettings, dynami
                     />
                     <p className="text-xs text-cyan-700">Leave empty to use the agent&apos;s default greeting.</p>
                   </div>
+                </div>
+              )}
+
+              {/* Local LLM fields */}
+              {(settings.apiMode ?? 'openai') === 'local' && (
+                <div className="space-y-4">
+                  {/* Ollama status */}
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`w-2 h-2 rounded-full ${
+                        ollamaStatus === null
+                          ? 'bg-cyan-800'
+                          : ollamaStatus.online
+                            ? 'bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.8)]'
+                            : 'bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.8)]'
+                      }`}
+                    />
+                    <span className="text-xs text-cyan-500 uppercase tracking-widest font-bold">
+                      {ollamaStatus === null ? 'Checking Ollama…' : ollamaStatus.online ? 'Ollama online' : 'Ollama offline'}
+                    </span>
+                  </div>
+                  {ollamaStatus !== null && !ollamaStatus.online && (
+                    <p className="text-xs text-red-400/90 leading-relaxed">
+                      {ollamaStatus.error ?? 'Ollama is not reachable on 127.0.0.1:11434.'}
+                    </p>
+                  )}
+
+                  {/* Model picker */}
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">Local Model</label>
+                    <div className="grid grid-cols-1 gap-2">
+                      {LOCAL_MODEL_PRESETS.map((m) => {
+                        const active = (settings.localModel ?? DEFAULT_LOCAL_MODEL) === m.id;
+                        const installed = ollamaStatus?.models.some(
+                          (im) => im.name === m.id || im.name === `${m.id}:latest`,
+                        ) ?? false;
+                        return (
+                          <button
+                            key={m.id}
+                            onClick={() => { sfx('select', 0.5); setSettings({ ...settings, localModel: m.id }); }}
+                            className={`flex items-center justify-between px-3 py-2.5 border rounded text-left transition-all ${
+                              active
+                                ? 'bg-cyan-500/20 border-cyan-400 shadow-[0_0_10px_rgba(34,211,238,0.2)]'
+                                : 'bg-transparent border-cyan-500/20 hover:border-cyan-500/50'
+                            }`}
+                          >
+                            <span className="flex flex-col">
+                              <span className={`text-xs font-bold uppercase tracking-wide ${active ? 'text-cyan-300' : 'text-cyan-600'}`}>
+                                {m.label}
+                              </span>
+                              <span className="text-[10px] text-white/30 mt-0.5">{m.desc}</span>
+                            </span>
+                            {ollamaStatus?.online && (
+                              <span className={`text-[10px] px-1.5 py-0.5 rounded border uppercase font-mono ${
+                                installed
+                                  ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                                  : 'bg-amber-500/10 text-amber-400 border-amber-500/30'
+                              }`}>
+                                {installed ? 'Installed' : 'Not pulled'}
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <input
+                      type="text"
+                      value={settings.localModel ?? DEFAULT_LOCAL_MODEL}
+                      onChange={(e) => setSettings({ ...settings, localModel: e.target.value })}
+                      placeholder="Custom Ollama model tag, e.g. qwen3.6:27b"
+                      className="w-full bg-cyan-950/20 border border-cyan-500/30 rounded px-3 py-2 text-cyan-100 focus:outline-none focus:border-cyan-400 focus:shadow-[0_0_10px_rgba(34,211,238,0.3)] transition-all font-mono text-sm"
+                    />
+                    <p className="text-xs text-cyan-700">
+                      Missing a model? Pull it with <span className="text-cyan-500 font-mono">ollama pull {settings.localModel ?? DEFAULT_LOCAL_MODEL}</span>
+                    </p>
+                  </div>
+
+                  {/* Speech output engine */}
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">Speech Output</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      {([
+                        { id: 'voicebox', label: 'Voicebox App', desc: 'AI voices & clones, on-device' },
+                        { id: 'system',   label: 'System Voice', desc: 'macOS speech synthesis' },
+                      ] as { id: 'voicebox' | 'system'; label: string; desc: string }[]).map((opt) => {
+                        const active = (settings.localTts ?? 'voicebox') === opt.id;
+                        return (
+                          <button
+                            key={opt.id}
+                            onClick={() => { sfx('select', 0.5); setSettings({ ...settings, localTts: opt.id }); }}
+                            className={`flex flex-col items-start px-3 py-2.5 border rounded text-left transition-all ${
+                              active
+                                ? 'bg-cyan-500/20 border-cyan-400 shadow-[0_0_10px_rgba(34,211,238,0.2)]'
+                                : 'bg-transparent border-cyan-500/20 hover:border-cyan-500/50'
+                            }`}
+                          >
+                            <span className={`text-xs font-bold uppercase tracking-wide ${active ? 'text-cyan-300' : 'text-cyan-600'}`}>
+                              {opt.label}
+                            </span>
+                            <span className="text-[10px] text-white/30 mt-0.5">{opt.desc}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Voicebox voice picker */}
+                  {(settings.localTts ?? 'voicebox') === 'voicebox' && (
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={`w-2 h-2 rounded-full ${
+                            voiceboxStatus === null
+                              ? 'bg-cyan-800'
+                              : voiceboxStatus.online
+                                ? 'bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.8)]'
+                                : 'bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.8)]'
+                          }`}
+                        />
+                        <span className="text-xs text-cyan-500 uppercase tracking-widest font-bold">
+                          {voiceboxStatus === null ? 'Checking Voicebox…' : voiceboxStatus.online ? 'Voicebox online' : 'Voicebox offline'}
+                        </span>
+                      </div>
+                      {voiceboxStatus !== null && !voiceboxStatus.online && (
+                        <p className="text-xs text-red-400/90">Open the Voicebox app — Jarvis will fall back to the system voice until it&apos;s running.</p>
+                      )}
+                      <select
+                        value={settings.voiceboxVoice ?? 'Jarvis'}
+                        onChange={(e) => { sfx('select', 0.5); setSettings({ ...settings, voiceboxVoice: e.target.value }); }}
+                        className="w-full bg-cyan-950/20 border border-cyan-500/30 rounded px-3 py-2 text-cyan-100 focus:outline-none focus:border-cyan-400 transition-all text-sm"
+                      >
+                        {(voiceboxStatus?.profiles ?? []).map((p) => (
+                          <option key={p.id} value={p.name}>
+                            {p.name}{p.presetVoiceId ? ` (${p.presetVoiceId})` : ' (custom)'}
+                          </option>
+                        ))}
+                        {!(voiceboxStatus?.profiles ?? []).some((p) => p.name === (settings.voiceboxVoice ?? 'Jarvis')) && (
+                          <option value={settings.voiceboxVoice ?? 'Jarvis'}>{settings.voiceboxVoice ?? 'Jarvis'}</option>
+                        )}
+                      </select>
+                      <p className="text-xs text-cyan-700">
+                        Voice profiles come from the Voicebox app — clone or design a voice there and pick it here.
+                      </p>
+                    </div>
+                  )}
+
+                  {/* System voice picker */}
+                  {(settings.localTts ?? 'voicebox') === 'system' && (
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">System Voice</label>
+                      <select
+                        value={settings.localVoice ?? ''}
+                        onChange={(e) => { sfx('select', 0.5); setSettings({ ...settings, localVoice: e.target.value }); }}
+                        className="w-full bg-cyan-950/20 border border-cyan-500/30 rounded px-3 py-2 text-cyan-100 focus:outline-none focus:border-cyan-400 transition-all text-sm"
+                      >
+                        <option value="">Auto — best available (prefers British English)</option>
+                        {systemVoices.map((v) => (
+                          <option key={v.name} value={v.name}>{`${v.name} (${v.lang})`}</option>
+                        ))}
+                      </select>
+                      <p className="text-xs text-cyan-700">
+                        Uses macOS speech synthesis — add higher-quality Siri voices in System Settings → Accessibility → Spoken Content.
+                      </p>
+                    </div>
+                  )}
                 </div>
               )}
 

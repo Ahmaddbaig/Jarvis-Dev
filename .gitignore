@@ -1,6 +1,9 @@
 # Dependencies
 node_modules/
 
+# Local model weights (whisper.cpp etc.)
+models/
+
 # Next.js build output
 .next/
 out/

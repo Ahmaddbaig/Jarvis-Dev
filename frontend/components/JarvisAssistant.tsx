@@ -4,7 +4,8 @@ import { useEffect, useRef, useState } from 'react';
 import { useConversation } from '@elevenlabs/react';
 import Image from 'next/image';
 import { AnimatePresence, motion } from 'framer-motion';
-import { SettingsModal, JarvisSettings } from './SettingsModal';
+import { SettingsModal, JarvisSettings, DEFAULT_LOCAL_MODEL } from './SettingsModal';
+import { LocalVoiceSession } from '@/frontend/lib/local-voice';
 import { FUNCTION_REGISTRY, getFunctionByName, JarvisFunction } from '@/frontend/lib/functions';
 import { loadDynamicFunctions, createGetFunctionByName, DynamicFunctionState } from '@/frontend/lib/dynamic-functions';
 import { XrayWidget } from './XrayWidget';
@@ -46,6 +47,10 @@ function hasJarvisWakeWord(transcript: string): boolean {
 const DEFAULT_SETTINGS: JarvisSettings = {
   apiMode: 'openai',
   apiKey: '',
+  localModel: DEFAULT_LOCAL_MODEL,
+  localVoice: '',
+  localTts: 'voicebox',
+  voiceboxVoice: 'Jarvis',
   elevenLabsAgentId: '',
   elevenLabsFirstMessage: '',
   voice: 'echo',
@@ -91,6 +96,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
   const lastTimeRef = useRef<number>(Date.now());
   const dataChannelRef = useRef<RTCDataChannel | null>(null);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
+  const localSessionRef = useRef<LocalVoiceSession | null>(null);
   const elPollRef = useRef<number | null>(null);
   // When true, an unexpected WebRTC drop will schedule an auto-reconnect.
   // Set false during intentional disconnect so we don't loop.
@@ -267,6 +273,10 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
   const [photos, setPhotos] = useState<PhotoEntry[]>([]);
   const photosRef = useRef<PhotoEntry[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
+
+  // Voicebox — typed input to Jarvis (works with every engine; the only way
+  // to talk to local mode without a mic).
+  const [voiceboxText, setVoiceboxText] = useState('');
 
   // Settings State
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -1153,10 +1163,158 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     }
   }
 
+  async function startLocal(currentSettings = settings) {
+    try {
+      const model = currentSettings.localModel?.trim();
+      if (!model) {
+        console.warn('No local model configured, skipping connection');
+        return;
+      }
+
+      console.log(
+        `%c[Jarvis] startLocal() called at ${new Date().toLocaleTimeString()} — model: ${model}`,
+        'background:#0d2137;color:#4fc3f7;font-weight:bold;padding:2px 6px;border-radius:3px'
+      );
+
+      disconnect(); // Ensure clean slate
+      setStatus('listening');
+      setLastError(null);
+
+      // Fail fast with an actionable message if Ollama/model aren't ready.
+      const statusRes = await fetch('/api/local-llm');
+      const statusData = await statusRes.json() as { online: boolean; models: { name: string }[]; error?: string };
+      if (!statusData.online) {
+        throw new Error(statusData.error ?? 'Ollama is not running on 127.0.0.1:11434');
+      }
+      const installed = statusData.models.some((m) => m.name === model || m.name === `${model}:latest`);
+      if (!installed) {
+        throw new Error(`Model "${model}" is not installed. Run: ollama pull ${model}`);
+      }
+
+      // Mic is optional in local mode — if unavailable (denied, missing, or a
+      // pending macOS permission prompt), the session still works through the
+      // voicebox (typed input). The timeout stops a TCC prompt from blocking
+      // session start; a late-granted stream is discarded and picked up on the
+      // next reconnect.
+      let stream: MediaStream | null = null;
+      try {
+        const micPromise = navigator.mediaDevices.getUserMedia({
+          audio: {
+            channelCount: 1,
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: false
+          }
+        });
+        stream = await Promise.race([
+          micPromise,
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 6000)),
+        ]);
+        if (!stream) {
+          micPromise.then((late) => late.getTracks().forEach((t) => t.stop())).catch(() => {});
+        }
+      } catch (micError) {
+        console.warn('[Jarvis] Mic unavailable — local mode continues in voicebox-only mode.', micError);
+      }
+      if (!stream) emitError('local', 'Microphone unavailable — voicebox-only mode', 'warn');
+      if (stream) {
+        localAudioStreamRef.current = stream;
+        stream.getAudioTracks().forEach((track) => {
+          track.enabled = !micMutedRef.current;
+        });
+        // The FFT visualizer analyzes remoteStreamRef; in local mode the mic
+        // stream drives it so the rings react while the user speaks.
+        remoteStreamRef.current = stream;
+      }
+
+      const allFunctions = dynamicState.loaded ? dynamicState.allFunctions : FUNCTION_REGISTRY;
+      const enabledTools = allFunctions
+        .filter((fn) => currentSettings.enabledFunctions.includes(fn.name))
+        .map((fn) => fn.tool);
+
+      console.log(
+        `%c[Jarvis] Local session — ${enabledTools.length} tools enabled: ${enabledTools.map(t => t.name).join(', ') || '(none)'}`,
+        'background:#1a3a1a;color:#81c784;font-weight:bold;padding:2px 6px;border-radius:3px'
+      );
+
+      const session = new LocalVoiceSession(
+        {
+          model,
+          instructions: buildAssistantInstructions(currentSettings.initialPrompt),
+          tools: enabledTools,
+          voiceName: currentSettings.localVoice || undefined,
+          ttsEngine: currentSettings.localTts ?? 'voicebox',
+          voiceboxProfile: currentSettings.voiceboxVoice || 'Jarvis',
+          micStream: stream,
+        },
+        {
+          onError: (message) => {
+            emitError('local', message);
+            setLastError(message);
+          },
+          shouldAcceptUtterance: async (transcript) => {
+            let musicIsPlaying = false;
+            try {
+              const musicRes = await fetch('/api/music');
+              const musicData = await musicRes.json() as { isPlaying?: boolean };
+              musicIsPlaying = musicRes.ok && musicData.isPlaying === true;
+            } catch {
+              // If playback status is unavailable, preserve normal conversation behavior.
+            }
+            if (musicIsPlaying && !hasJarvisWakeWord(transcript)) {
+              console.log('[Jarvis] Ignored background audio while music was playing:', transcript);
+              return false;
+            }
+            if (musicIsPlaying) await duckMusic();
+            return true;
+          },
+          executeFunction: async (fnName, parsedArgs) => {
+            const fn = dynamicGetFunctionByNameRef.current(fnName);
+            if (!fn) return { output: { error: `Unknown function: ${fnName}` } };
+
+            // Same auto-reconnect guard as the realtime path.
+            const msSinceSessionStart = Date.now() - sessionStartTimeRef.current;
+            if (fnName === 'navigate_to_page' && msSinceSessionStart < 6000) {
+              console.warn('[Jarvis] Blocked early navigate_to_page call (auto-reconnect guard). Args:', parsedArgs);
+              return { output: { success: true, navigated_to: parsedArgs.page } };
+            }
+
+            const result = await fn.handler(parsedArgs);
+            if (fnName === 'play_spotify') {
+              scheduleMusicRestore(MUSIC_PLAYBACK_RESTORE_FALLBACK_MS);
+            }
+            const resultObj = result as Record<string, unknown> & { imageBase64?: string };
+            if (typeof resultObj?.error === 'string') {
+              emitError('function', `${fnName}(): ${resultObj.error}`, 'error');
+            }
+            const { imageBase64, ...textResult } = resultObj ?? {};
+            if (fnName !== 'control_hud' && fnName !== 'show_hud_text') sfx('notification', 0.6);
+            return { output: textResult, imageBase64 };
+          },
+          onResponseDone: () => scheduleMusicRestore(500),
+        },
+      );
+
+      localSessionRef.current = session;
+      await session.start();
+      sessionStartTimeRef.current = Date.now();
+      setStatus('active');
+    } catch (error) {
+      console.error('Error starting local session:', error);
+      setStatus('error');
+      setLastError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
   async function startElevenLabs(currentSettings = settings) {
     try {
-      // Only tear down OpenAI WebRTC — do NOT call endSession() here because
-      // the ElevenLabs SDK queues it and will fire it on the session we're about to open.
+      // Only tear down OpenAI WebRTC and the local pipeline — do NOT call
+      // endSession() here because the ElevenLabs SDK queues it and will fire
+      // it on the session we're about to open.
+      if (localSessionRef.current) {
+        localSessionRef.current.stop();
+        localSessionRef.current = null;
+      }
       if (peerConnectionRef.current) {
         peerConnectionRef.current.close();
         peerConnectionRef.current = null;
@@ -1205,8 +1363,11 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
   }
 
   async function start(currentSettings = settings) {
-    if ((currentSettings.apiMode ?? 'openai') === 'elevenlabs') {
+    const mode = currentSettings.apiMode ?? 'openai';
+    if (mode === 'elevenlabs') {
       await startElevenLabs(currentSettings);
+    } else if (mode === 'local') {
+      await startLocal(currentSettings);
     } else {
       await startRealtime(currentSettings);
     }
@@ -1223,6 +1384,11 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     if (reconnectTimerRef.current) {
       clearTimeout(reconnectTimerRef.current);
       reconnectTimerRef.current = null;
+    }
+    // Local pipeline cleanup
+    if (localSessionRef.current) {
+      localSessionRef.current.stop();
+      localSessionRef.current = null;
     }
     // OpenAI WebRTC cleanup
     if (peerConnectionRef.current) {
@@ -1281,6 +1447,44 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     }
   }
 
+  function sendVoiceboxMessage() {
+    const text = voiceboxText.trim();
+    if (!text) return;
+    setVoiceboxText('');
+    sfx('click', 0.4);
+
+    const mode = settings.apiMode ?? 'openai';
+    if (mode === 'local') {
+      const session = localSessionRef.current;
+      if (!session) {
+        emitError('local', 'Local session is not running — check Settings.', 'warn');
+        return;
+      }
+      void session.sendText(text);
+      return;
+    }
+
+    if (mode === 'elevenlabs') {
+      try {
+        (elConversation as unknown as { sendUserMessage?: (t: string) => void }).sendUserMessage?.(text);
+      } catch (e) {
+        emitError('elevenlabs', e instanceof Error ? e.message : String(e));
+      }
+      return;
+    }
+
+    const dc = dataChannelRef.current;
+    if (!dc || dc.readyState !== 'open') {
+      emitError('openai', 'Session is not connected — voicebox message dropped.', 'warn');
+      return;
+    }
+    dc.send(JSON.stringify({
+      type: 'conversation.item.create',
+      item: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] },
+    }));
+    dc.send(JSON.stringify({ type: 'response.create' }));
+  }
+
   function handleLogoClick() {
     if (compact) {
       sfx('click', 0.45);
@@ -1309,7 +1513,8 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     const mode = settings.apiMode ?? 'openai';
     const shouldStart =
       (mode === 'elevenlabs' && !!settings.elevenLabsAgentId?.trim()) ||
-      (mode === 'openai' && !!settings.apiKey);
+      (mode === 'openai' && !!settings.apiKey) ||
+      (mode === 'local' && !!settings.localModel?.trim());
 
     console.log(
       `%c[Jarvis] Auto-start effect fired at ${new Date().toLocaleTimeString()} — restartTrigger=${restartTrigger}, shouldStart=${shouldStart}, mode=${mode}`,
@@ -1335,7 +1540,8 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     // race-triggered blank save can never overwrite a good server config.
     const hasCredentials =
       (newSettings.apiMode === 'openai'      && !!newSettings.apiKey?.trim()) ||
-      (newSettings.apiMode === 'elevenlabs'  && !!newSettings.elevenLabsAgentId?.trim());
+      (newSettings.apiMode === 'elevenlabs'  && !!newSettings.elevenLabsAgentId?.trim()) ||
+      (newSettings.apiMode === 'local'       && !!newSettings.localModel?.trim());
     if (hasCredentials) {
       saveServerSettings({ jarvis_settings: serialised });
     }
@@ -1675,6 +1881,23 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
           />
         ))}
       </AnimatePresence>
+
+      {/* Voicebox — typed commands to Jarvis */}
+      {!compact && mounted && (
+        <form
+          onSubmit={(e) => { e.preventDefault(); sendVoiceboxMessage(); }}
+          className="fixed bottom-5 left-1/2 -translate-x-1/2 z-40 w-[min(560px,85vw)]"
+        >
+          <input
+            type="text"
+            value={voiceboxText}
+            onChange={(e) => setVoiceboxText(e.target.value)}
+            placeholder="TYPE TO JARVIS — press Enter"
+            aria-label="Type a message to Jarvis"
+            className="w-full bg-black/60 backdrop-blur-sm border border-cyan-500/30 rounded-full px-5 py-2.5 text-sm text-cyan-100 placeholder:text-cyan-700 font-mono tracking-wide focus:outline-none focus:border-cyan-400 focus:shadow-[0_0_14px_rgba(34,211,238,0.25)] transition-all"
+          />
+        </form>
+      )}
 
       {/* Settings Modal */}
       <AnimatePresence>
