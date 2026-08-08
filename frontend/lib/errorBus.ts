@@ -9,7 +9,7 @@
  */
 
 export type ErrorLevel = 'error' | 'warn';
-export type ErrorSource = 'openai' | 'elevenlabs' | 'function' | 'app' | 'uncaught';
+export type ErrorSource = 'openai' | 'elevenlabs' | 'local' | 'function' | 'app' | 'uncaught';
 
 export interface ErrorEntry {
   id: string;

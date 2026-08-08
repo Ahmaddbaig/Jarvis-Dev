@@ -1,0 +1,25 @@
+{
+  "name": "jarvis-companion",
+  "version": "1.0.0",
+  "description": "Small cross-platform remote-control companion for Jarvis",
+  "main": "app.cjs",
+  "private": true,
+  "allowScripts": {
+    "@jitsi/robotjs@0.6.24": true,
+    "electron@43.2.0": true,
+    "sharp@0.35.3": true
+  },
+  "scripts": {
+    "start": "electron app.cjs",
+    "server": "node server.cjs"
+  },
+  "dependencies": {
+    "@jitsi/robotjs": "^0.6.22",
+    "screenshot-desktop": "^1.15.4",
+    "selfsigned": "^5.5.0",
+    "sharp": "^0.35.3"
+  },
+  "devDependencies": {
+    "electron": "^43.2.0"
+  }
+}

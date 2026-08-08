@@ -4,7 +4,8 @@ import { useEffect, useRef, useState } from 'react';
 import { useConversation } from '@elevenlabs/react';
 import Image from 'next/image';
 import { AnimatePresence, motion } from 'framer-motion';
-import { SettingsModal, JarvisSettings } from './SettingsModal';
+import { SettingsModal, JarvisSettings, DEFAULT_LOCAL_MODEL } from './SettingsModal';
+import { LocalVoiceSession } from '@/frontend/lib/local-voice';
 import { FUNCTION_REGISTRY, getFunctionByName, JarvisFunction } from '@/frontend/lib/functions';
 import { loadDynamicFunctions, createGetFunctionByName, DynamicFunctionState } from '@/frontend/lib/dynamic-functions';
 import { XrayWidget } from './XrayWidget';
@@ -19,14 +20,55 @@ import { installErrorInterceptors, emitError } from '@/frontend/lib/errorBus';
 import { loadServerSettings, saveServerSettings } from '@/frontend/lib/serverSettings';
 
 const FFT_BARS = 64;
+// Keep speaker bleed and song vocals below the activation point while still
+// allowing a nearby user speaking clearly to interrupt playback.
+const REALTIME_VAD_THRESHOLD = 0.7;
+const MUSIC_PLAYBACK_RESTORE_FALLBACK_MS = 10_000;
+const MAX_CHAT_MESSAGES = 24;
+const REALTIME_TEXT_DELTA_EVENTS = new Set([
+  'response.output_audio_transcript.delta',
+  'response.audio_transcript.delta',
+  'response.output_text.delta',
+  'response.text.delta',
+]);
+const REALTIME_TEXT_DONE_EVENTS = new Set([
+  'response.output_audio_transcript.done',
+  'response.audio_transcript.done',
+  'response.output_text.done',
+  'response.text.done',
+]);
+const MUSIC_TOOL_ROUTING_INSTRUCTIONS =
+  'For any request to play a named artist, song, album, or playlist, always call play_spotify. ' +
+  'Keep playback in the installed Spotify desktop application. Never open Spotify Web Player or a Spotify website, and never use open_url, web_search, run_shell_command, or computer_use for a music request. ' +
+  'Do not rely on your own knowledge of whether an artist exists, is mainstream, or is available. ' +
+  'Spotify search is the source of truth, so search even when the name is unfamiliar or the audio may be ambiguous. ' +
+  'Never reject a music request before trying the tool. Treat the phonetic variants "Chef G", "Chief G", and "Shef G" as the artist "Sheff G". ' +
+  'Music, song lyrics, television, and other background audio are not user turns. Only respond when speech is clearly directed to you; otherwise remain silent and do not ask what the user was saying.';
+
+function buildAssistantInstructions(initialPrompt: string): string {
+  return (
+    initialPrompt +
+    '\n\n' + MUSIC_TOOL_ROUTING_INSTRUCTIONS +
+    '\n\nDo not call navigate_to_page as part of a greeting or on your own initiative — only call it when the user explicitly asks to go to a different page.'
+  );
+}
+
+function hasJarvisWakeWord(transcript: string): boolean {
+  return /\b(?:jarvis|jervis)\b/i.test(transcript);
+}
+
 const DEFAULT_SETTINGS: JarvisSettings = {
   apiMode: 'openai',
   apiKey: '',
+  localModel: DEFAULT_LOCAL_MODEL,
+  localVoice: '',
+  localTts: 'voicebox',
+  voiceboxVoice: 'Jarvis',
   elevenLabsAgentId: '',
   elevenLabsFirstMessage: '',
   voice: 'echo',
   initialPrompt: 'You are Jarvis, a helpful AI assistant. You are always helpful, polite, and concise. Subtle British accent. Robotic. Emotionally controlled. Witty and a little bit poking fun at the user.',
-  enabledFunctions: ['desktop_mode', 'navigate_to_page', 'jarvis_disconnect'],
+  enabledFunctions: ['desktop_mode', 'navigate_to_page', 'jarvis_disconnect', 'play_spotify'],
   theme: 'arc-reactor',
   grid: 'off',
   visualizer: 'frequency-ring',
@@ -37,6 +79,125 @@ const DEFAULT_SETTINGS: JarvisSettings = {
 };
 
 type DesktopPanelPosition = Exclude<JarvisSettings['position'], 'center'>;
+
+type ChatMessage = {
+  id: string;
+  role: 'user' | 'assistant';
+  text: string;
+};
+
+type ChatPanelProps = {
+  messages: ChatMessage[];
+  value: string;
+  online: boolean;
+  sending: boolean;
+  micMuted: boolean;
+  error: string | null;
+  onChange: (value: string) => void;
+  onSend: () => void;
+  onToggleMic: () => void;
+};
+
+function ChatPanel({
+  messages,
+  value,
+  online,
+  sending,
+  micMuted,
+  error,
+  onChange,
+  onSend,
+  onToggleMic,
+}: ChatPanelProps) {
+  const historyRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const history = historyRef.current;
+    if (history) history.scrollTop = history.scrollHeight;
+  }, [messages]);
+
+  return (
+    <section
+      aria-label="Jarvis text chat"
+      className="fixed z-[80] bottom-5 left-1/2 -translate-x-1/2 w-[min(92vw,720px)] pointer-events-auto select-text"
+    >
+      {messages.length > 0 && (
+        <div
+          ref={historyRef}
+          aria-live="polite"
+          className="mb-2 max-h-44 overflow-y-auto rounded-xl border border-cyan-500/30 bg-black/85 px-4 py-3 shadow-[0_0_24px_rgba(var(--accent-rgb),0.16)] backdrop-blur-md"
+        >
+          <div className="space-y-2">
+            {messages.map((message) => (
+              <div
+                key={message.id}
+                className={`flex gap-3 text-sm leading-relaxed ${message.role === 'user' ? 'text-white/85' : 'text-cyan-300'}`}
+              >
+                <span className="w-14 shrink-0 font-mono text-[10px] font-bold uppercase tracking-widest text-cyan-500/70">
+                  {message.role === 'user' ? 'You' : 'Jarvis'}
+                </span>
+                <span className="min-w-0 whitespace-pre-wrap break-words">{message.text}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <form
+        className="flex items-end gap-2 rounded-xl border border-cyan-500/50 bg-black/90 p-2 shadow-[0_0_28px_rgba(var(--accent-rgb),0.2)] backdrop-blur-md"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSend();
+        }}
+      >
+        <button
+          type="button"
+          onClick={onToggleMic}
+          aria-label={micMuted ? 'Turn microphone on' : 'Mute microphone while typing'}
+          aria-pressed={micMuted}
+          className={`h-10 shrink-0 rounded-lg border px-3 font-mono text-[10px] font-bold uppercase tracking-widest transition-colors ${
+            micMuted
+              ? 'border-red-500/60 bg-red-950/50 text-red-300'
+              : 'border-cyan-500/30 bg-cyan-950/20 text-cyan-400 hover:border-cyan-400'
+          }`}
+        >
+          {micMuted ? 'Mic off' : 'Mic on'}
+        </button>
+
+        <textarea
+          value={value}
+          rows={1}
+          maxLength={4000}
+          onChange={(event) => onChange(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && !event.shiftKey) {
+              event.preventDefault();
+              event.currentTarget.form?.requestSubmit();
+            }
+          }}
+          placeholder={online ? 'Type to Jarvis — the response will be spoken aloud' : 'Start Jarvis, then type a message'}
+          aria-label="Message Jarvis"
+          className="min-h-10 max-h-28 flex-1 resize-none bg-transparent px-2 py-2.5 text-sm text-white outline-none placeholder:text-white/35"
+        />
+
+        <button
+          type="submit"
+          disabled={sending || !value.trim()}
+          className="h-10 shrink-0 rounded-lg border border-cyan-400/70 bg-cyan-500/20 px-4 text-xs font-bold uppercase tracking-widest text-cyan-300 transition-colors hover:bg-cyan-500/30 disabled:cursor-not-allowed disabled:opacity-35"
+        >
+          {sending ? 'Sending' : 'Send'}
+        </button>
+      </form>
+
+      <div className="mt-1 flex min-h-4 items-center justify-between px-2 font-mono text-[10px] uppercase tracking-wider">
+        <span className={online ? 'text-emerald-400/70' : 'text-white/35'}>
+          {online ? 'Text link ready · voice reply enabled' : 'Jarvis is offline'}
+        </span>
+        {error && <span className="ml-3 normal-case text-red-400">{error}</span>}
+      </div>
+    </section>
+  );
+}
 
 function isDesktopPanelPosition(value: unknown): value is DesktopPanelPosition {
   return (
@@ -51,6 +212,10 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
   const [status, setStatus] = useState<'idle' | 'listening' | 'active' | 'error'>('idle');
   const [lastError, setLastError] = useState<string | null>(null);
   const [micMuted, setMicMuted] = useState(false);
+  const [chatText, setChatText] = useState('');
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatSending, setChatSending] = useState(false);
+  const [chatError, setChatError] = useState<string | null>(null);
   const [audioLevel, setAudioLevel] = useState(0);
   const [fftData, setFftData] = useState<number[]>(new Array(FFT_BARS).fill(0));
   const statusRef = useRef(status);
@@ -67,6 +232,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
   const lastTimeRef = useRef<number>(Date.now());
   const dataChannelRef = useRef<RTCDataChannel | null>(null);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
+  const localSessionRef = useRef<LocalVoiceSession | null>(null);
   const elPollRef = useRef<number | null>(null);
   // When true, an unexpected WebRTC drop will schedule an auto-reconnect.
   // Set false during intentional disconnect so we don't loop.
@@ -77,6 +243,45 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
   // session auto-reconnects, which prevents the model from navigating the
   // user back to "home" as part of its unsolicited greeting.
   const sessionStartTimeRef = useRef<number>(0);
+  const realtimeResponseTextRef = useRef<Map<string, string>>(new Map());
+  const completedRealtimeResponsesRef = useRef<Set<string>>(new Set());
+  const musicDuckRef = useRef<{
+    active: boolean;
+    previousVolume: number | null;
+    app: 'Spotify' | 'Music' | null;
+  }>({
+    active: false,
+    previousVolume: null,
+    app: null,
+  });
+  const musicDuckRequestRef = useRef<Promise<void> | null>(null);
+  const musicRestoreTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function appendChatMessage(role: ChatMessage['role'], rawText: string): void {
+    const text = rawText.trim();
+    if (!text) return;
+
+    setChatMessages((current) => {
+      const previous = current[current.length - 1];
+      if (previous?.role === role && previous.text === text) return current;
+      return [...current, { id: crypto.randomUUID(), role, text }].slice(-MAX_CHAT_MESSAGES);
+    });
+  }
+
+  function realtimeResponseKey(data: Record<string, unknown>): string {
+    const response = data.response as { id?: unknown } | undefined;
+    return String(data.response_id ?? response?.id ?? data.item_id ?? 'current-response');
+  }
+
+  function completeRealtimeResponse(responseKey: string, finalText?: string): void {
+    if (completedRealtimeResponsesRef.current.has(responseKey)) return;
+    const text = (finalText || realtimeResponseTextRef.current.get(responseKey) || '').trim();
+    if (!text) return;
+
+    completedRealtimeResponsesRef.current.add(responseKey);
+    realtimeResponseTextRef.current.delete(responseKey);
+    appendChatMessage('assistant', text);
+  }
 
   // Dynamic function state — starts unloaded; gates auto-start.
   const [dynamicState, setDynamicState] = useState<DynamicFunctionState>({
@@ -96,6 +301,9 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
         fn.name,
         async (params: Record<string, unknown>) => {
           const result = await fn.handler(params);
+          if (fn.name === 'play_spotify') {
+            scheduleMusicRestore(MUSIC_PLAYBACK_RESTORE_FALLBACK_MS);
+          }
           const r = result as Record<string, unknown> | null;
           if (typeof r?.error === 'string') {
             emitError('function', `${fn.name}(): ${r.error}`, 'error');
@@ -114,9 +322,11 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     clientTools: elClientToolsRef.current,
     onConnect: () => {
       console.log('ElevenLabs connected');
+      setChatError(null);
       setStatus('active');
     },
     onDisconnect: (details?: { reason?: string; code?: number; message?: string }) => {
+      void restoreMusicVolume();
       const reason = details?.message ?? details?.reason ?? (details?.code != null ? `code ${details.code}` : null);
       console.log('ElevenLabs disconnected', details ?? '');
       if (reason && statusRef.current !== 'idle') {
@@ -136,12 +346,102 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
       setLastError(msg);
       emitError('elevenlabs', msg);
     },
+    onMessage: ({ message, role }) => {
+      appendChatMessage(role === 'agent' ? 'assistant' : 'user', message);
+    },
+    onModeChange: ({ mode }) => {
+      if (mode === 'speaking') {
+        void duckMusic();
+      } else {
+        scheduleMusicRestore(500);
+      }
+    },
+    onInterruption: () => {
+      void duckMusic();
+    },
   });
+
+  async function duckMusic(): Promise<void> {
+    if (musicRestoreTimerRef.current) {
+      clearTimeout(musicRestoreTimerRef.current);
+      musicRestoreTimerRef.current = null;
+    }
+    if (musicDuckRef.current.active || musicDuckRequestRef.current) return;
+
+    musicDuckRef.current.active = true;
+    const request = (async () => {
+      try {
+        const res = await fetch('/api/music', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ command: 'duck', value: 18 }),
+        });
+        const data = await res.json() as {
+          error?: string;
+          ducked?: boolean;
+          previousVolume?: number | null;
+          app?: 'Spotify' | 'Music';
+        };
+        if (!res.ok || data.error || !data.ducked) {
+          musicDuckRef.current = { active: false, previousVolume: null, app: null };
+          return;
+        }
+        musicDuckRef.current.previousVolume =
+          typeof data.previousVolume === 'number' ? data.previousVolume : null;
+        musicDuckRef.current.app = data.app ?? null;
+        // Failsafe in case a provider disconnects without an audio-finished event.
+        scheduleMusicRestore(30_000);
+      } catch {
+        musicDuckRef.current = { active: false, previousVolume: null, app: null };
+      }
+    })();
+
+    musicDuckRequestRef.current = request;
+    await request;
+    musicDuckRequestRef.current = null;
+  }
+
+  function scheduleMusicRestore(delayMs = 350): void {
+    if (musicRestoreTimerRef.current) clearTimeout(musicRestoreTimerRef.current);
+    musicRestoreTimerRef.current = setTimeout(() => {
+      musicRestoreTimerRef.current = null;
+      void restoreMusicVolume();
+    }, delayMs);
+  }
+
+  async function restoreMusicVolume(): Promise<void> {
+    if (musicRestoreTimerRef.current) {
+      clearTimeout(musicRestoreTimerRef.current);
+      musicRestoreTimerRef.current = null;
+    }
+    if (musicDuckRequestRef.current) await musicDuckRequestRef.current;
+    if (musicRestoreTimerRef.current) {
+      clearTimeout(musicRestoreTimerRef.current);
+      musicRestoreTimerRef.current = null;
+    }
+
+    const previousVolume = musicDuckRef.current.previousVolume;
+    const duckedApp = musicDuckRef.current.app;
+    const wasActive = musicDuckRef.current.active;
+    musicDuckRef.current = { active: false, previousVolume: null, app: null };
+    if (!wasActive || previousVolume === null || duckedApp === null) return;
+
+    try {
+      await fetch('/api/music', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ command: 'volume', value: previousVolume, app: duckedApp }),
+      });
+    } catch {
+      // The failsafe is best-effort; a later manual volume change remains available.
+    }
+  }
 
   // Photo context state
   const [photos, setPhotos] = useState<PhotoEntry[]>([]);
   const photosRef = useRef<PhotoEntry[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
+
 
   // Settings State
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -759,7 +1059,29 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
 
       const fd = new FormData();
       fd.set('sdp', offer.sdp ?? '');
-      fd.set('session', JSON.stringify({ type: 'realtime', model, audio: { output: { voice: currentSettings.voice ?? 'echo' } } }));
+      fd.set('session', JSON.stringify({
+        type: 'realtime',
+        model,
+        audio: {
+          input: {
+            noise_reduction: { type: 'far_field' },
+            transcription: {
+              model: 'gpt-4o-mini-transcribe',
+              language: 'en',
+              prompt: 'The speaker may address an assistant named Jarvis. Spell the wake word as Jarvis.',
+            },
+            turn_detection: {
+              type: 'server_vad',
+              threshold: REALTIME_VAD_THRESHOLD,
+              prefix_padding_ms: 500,
+              silence_duration_ms: 650,
+              create_response: false,
+              interrupt_response: true,
+            },
+          },
+          output: { voice: currentSettings.voice ?? 'echo' },
+        },
+      }));
 
       const response = await fetch('https://api.openai.com/v1/realtime/calls', {
         method: 'POST',
@@ -781,6 +1103,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
       dc.onopen = () => {
         console.log('WebRTC data channel open');
         autoReconnectRef.current = true; // session is live — enable auto-reconnect on drop
+        setChatError(null);
 
         const allFunctions = dynamicState.loaded ? dynamicState.allFunctions : FUNCTION_REGISTRY;
         const enabledTools = allFunctions
@@ -796,10 +1119,26 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
           type: 'session.update',
           session: {
             type: 'realtime',
-            instructions:
-              currentSettings.initialPrompt +
-              '\n\nDo not call navigate_to_page as part of a greeting or on your own initiative — only call it when the user explicitly asks to go to a different page.',
+            instructions: buildAssistantInstructions(currentSettings.initialPrompt),
             tool_choice: 'auto',
+            audio: {
+              input: {
+                noise_reduction: { type: 'far_field' },
+                transcription: {
+                  model: 'gpt-4o-mini-transcribe',
+                  language: 'en',
+                  prompt: 'The speaker may address an assistant named Jarvis. Spell the wake word as Jarvis.',
+                },
+                turn_detection: {
+                  type: 'server_vad',
+                  threshold: REALTIME_VAD_THRESHOLD,
+                  prefix_padding_ms: 500,
+                  silence_duration_ms: 650,
+                  create_response: false,
+                  interrupt_response: true,
+                },
+              },
+            },
             ...(enabledTools.length > 0 ? { tools: enabledTools } : { tools: [] }),
           },
         };
@@ -821,6 +1160,20 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
         try {
           const data = JSON.parse(event.data);
 
+          if (REALTIME_TEXT_DELTA_EVENTS.has(data.type) && typeof data.delta === 'string') {
+            const responseKey = realtimeResponseKey(data);
+            const currentText = realtimeResponseTextRef.current.get(responseKey) ?? '';
+            realtimeResponseTextRef.current.set(responseKey, currentText + data.delta);
+          }
+
+          if (REALTIME_TEXT_DONE_EVENTS.has(data.type)) {
+            const responseKey = realtimeResponseKey(data);
+            const finalText = typeof data.transcript === 'string'
+              ? data.transcript
+              : (typeof data.text === 'string' ? data.text : undefined);
+            completeRealtimeResponse(responseKey, finalText);
+          }
+
           if (data.type === 'error') {
             console.error('OpenAI Realtime Error:', JSON.stringify(data.error));
             emitError('openai', JSON.stringify(data.error));
@@ -831,6 +1184,69 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
               `%c[Jarvis] session.updated — tools: ${(data.session?.tools ?? []).map((t: {name:string}) => t.name).join(', ') || '(none)'}`,
               'background:#1a3a1a;color:#a5d6a7;padding:2px 6px;border-radius:3px'
             );
+          }
+
+          if (data.type === 'conversation.item.input_audio_transcription.completed') {
+            const transcript = typeof data.transcript === 'string' ? data.transcript.trim() : '';
+            const itemId = typeof data.item_id === 'string' ? data.item_id : '';
+
+            let musicIsPlaying = false;
+            try {
+              const musicRes = await fetch('/api/music');
+              const musicData = await musicRes.json() as { isPlaying?: boolean };
+              musicIsPlaying = musicRes.ok && musicData.isPlaying === true;
+            } catch {
+              // If playback status is unavailable, preserve normal conversation behavior.
+            }
+
+            if (musicIsPlaying && !hasJarvisWakeWord(transcript)) {
+              console.log('[Jarvis] Ignored background audio while music was playing:', transcript);
+              if (itemId) {
+                dc.send(JSON.stringify({
+                  type: 'conversation.item.delete',
+                  item_id: itemId,
+                }));
+              }
+              return;
+            }
+
+            if (musicIsPlaying) await duckMusic();
+            appendChatMessage('user', transcript);
+            dc.send(JSON.stringify({ type: 'response.create' }));
+            return;
+          }
+
+          if (data.type === 'conversation.item.input_audio_transcription.failed') {
+            const itemId = typeof data.item_id === 'string' ? data.item_id : '';
+            if (itemId) {
+              dc.send(JSON.stringify({
+                type: 'conversation.item.delete',
+                item_id: itemId,
+              }));
+            }
+            return;
+          }
+
+          if (
+            data.type === 'output_audio_buffer.stopped' ||
+            data.type === 'output_audio_buffer.cleared'
+          ) {
+            scheduleMusicRestore();
+          }
+
+          if (data.type === 'response.done' && Object.keys(pendingCalls).length === 0) {
+            const responseKey = realtimeResponseKey(data);
+            const responseOutput = Array.isArray(data.response?.output) ? data.response.output : [];
+            const responseText = responseOutput
+              .flatMap((item: { content?: unknown }) => Array.isArray(item.content) ? item.content : [])
+              .map((part: { transcript?: unknown; text?: unknown }) =>
+                typeof part.transcript === 'string'
+                  ? part.transcript
+                  : (typeof part.text === 'string' ? part.text : '')
+              )
+              .join('');
+            completeRealtimeResponse(responseKey, responseText);
+            scheduleMusicRestore(500);
           }
 
           // Accumulate argument deltas
@@ -875,6 +1291,9 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
             }
 
             const result = await fn.handler(parsedArgs);
+            if (fnName === 'play_spotify') {
+              scheduleMusicRestore(MUSIC_PLAYBACK_RESTORE_FALLBACK_MS);
+            }
 
             // Surface function-level errors (e.g. ENOENT, missing API key, network failures)
             // to the Error Terminal widget so they're visible without opening devtools.
@@ -936,10 +1355,161 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     }
   }
 
+  async function startLocal(currentSettings = settings) {
+    try {
+      const model = currentSettings.localModel?.trim();
+      if (!model) {
+        console.warn('No local model configured, skipping connection');
+        return;
+      }
+
+      console.log(
+        `%c[Jarvis] startLocal() called at ${new Date().toLocaleTimeString()} — model: ${model}`,
+        'background:#0d2137;color:#4fc3f7;font-weight:bold;padding:2px 6px;border-radius:3px'
+      );
+
+      disconnect(); // Ensure clean slate
+      setStatus('listening');
+      setLastError(null);
+
+      // Fail fast with an actionable message if Ollama/model aren't ready.
+      const statusRes = await fetch('/api/local-llm');
+      const statusData = await statusRes.json() as { online: boolean; models: { name: string }[]; error?: string };
+      if (!statusData.online) {
+        throw new Error(statusData.error ?? 'Ollama is not running on 127.0.0.1:11434');
+      }
+      const installed = statusData.models.some((m) => m.name === model || m.name === `${model}:latest`);
+      if (!installed) {
+        throw new Error(`Model "${model}" is not installed. Run: ollama pull ${model}`);
+      }
+
+      // Mic is optional in local mode — if unavailable (denied, missing, or a
+      // pending macOS permission prompt), the session still works through the
+      // voicebox (typed input). The timeout stops a TCC prompt from blocking
+      // session start; a late-granted stream is discarded and picked up on the
+      // next reconnect.
+      let stream: MediaStream | null = null;
+      try {
+        const micPromise = navigator.mediaDevices.getUserMedia({
+          audio: {
+            channelCount: 1,
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: false
+          }
+        });
+        stream = await Promise.race([
+          micPromise,
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 6000)),
+        ]);
+        if (!stream) {
+          micPromise.then((late) => late.getTracks().forEach((t) => t.stop())).catch(() => {});
+        }
+      } catch (micError) {
+        console.warn('[Jarvis] Mic unavailable — local mode continues in voicebox-only mode.', micError);
+      }
+      if (!stream) emitError('local', 'Microphone unavailable — voicebox-only mode', 'warn');
+      if (stream) {
+        localAudioStreamRef.current = stream;
+        stream.getAudioTracks().forEach((track) => {
+          track.enabled = !micMutedRef.current;
+        });
+        // The FFT visualizer analyzes remoteStreamRef; in local mode the mic
+        // stream drives it so the rings react while the user speaks.
+        remoteStreamRef.current = stream;
+      }
+
+      const allFunctions = dynamicState.loaded ? dynamicState.allFunctions : FUNCTION_REGISTRY;
+      const enabledTools = allFunctions
+        .filter((fn) => currentSettings.enabledFunctions.includes(fn.name))
+        .map((fn) => fn.tool);
+
+      console.log(
+        `%c[Jarvis] Local session — ${enabledTools.length} tools enabled: ${enabledTools.map(t => t.name).join(', ') || '(none)'}`,
+        'background:#1a3a1a;color:#81c784;font-weight:bold;padding:2px 6px;border-radius:3px'
+      );
+
+      const session = new LocalVoiceSession(
+        {
+          model,
+          instructions: buildAssistantInstructions(currentSettings.initialPrompt),
+          tools: enabledTools,
+          voiceName: currentSettings.localVoice || undefined,
+          ttsEngine: currentSettings.localTts ?? 'voicebox',
+          voiceboxProfile: currentSettings.voiceboxVoice || 'Jarvis',
+          micStream: stream,
+        },
+        {
+          onError: (message) => {
+            emitError('local', message);
+            setLastError(message);
+          },
+          onUserUtterance: (text) => appendChatMessage('user', text),
+          onAssistantReply: (text) => appendChatMessage('assistant', text),
+          shouldAcceptUtterance: async (transcript) => {
+            let musicIsPlaying = false;
+            try {
+              const musicRes = await fetch('/api/music');
+              const musicData = await musicRes.json() as { isPlaying?: boolean };
+              musicIsPlaying = musicRes.ok && musicData.isPlaying === true;
+            } catch {
+              // If playback status is unavailable, preserve normal conversation behavior.
+            }
+            if (musicIsPlaying && !hasJarvisWakeWord(transcript)) {
+              console.log('[Jarvis] Ignored background audio while music was playing:', transcript);
+              return false;
+            }
+            if (musicIsPlaying) await duckMusic();
+            return true;
+          },
+          executeFunction: async (fnName, parsedArgs) => {
+            const fn = dynamicGetFunctionByNameRef.current(fnName);
+            if (!fn) return { output: { error: `Unknown function: ${fnName}` } };
+
+            // Same auto-reconnect guard as the realtime path.
+            const msSinceSessionStart = Date.now() - sessionStartTimeRef.current;
+            if (fnName === 'navigate_to_page' && msSinceSessionStart < 6000) {
+              console.warn('[Jarvis] Blocked early navigate_to_page call (auto-reconnect guard). Args:', parsedArgs);
+              return { output: { success: true, navigated_to: parsedArgs.page } };
+            }
+
+            const result = await fn.handler(parsedArgs);
+            if (fnName === 'play_spotify') {
+              scheduleMusicRestore(MUSIC_PLAYBACK_RESTORE_FALLBACK_MS);
+            }
+            const resultObj = result as Record<string, unknown> & { imageBase64?: string };
+            if (typeof resultObj?.error === 'string') {
+              emitError('function', `${fnName}(): ${resultObj.error}`, 'error');
+            }
+            const { imageBase64, ...textResult } = resultObj ?? {};
+            if (fnName !== 'control_hud' && fnName !== 'show_hud_text') sfx('notification', 0.6);
+            return { output: textResult, imageBase64 };
+          },
+          onResponseDone: () => scheduleMusicRestore(500),
+        },
+      );
+
+      localSessionRef.current = session;
+      await session.start();
+      sessionStartTimeRef.current = Date.now();
+      setChatError(null);
+      setStatus('active');
+    } catch (error) {
+      console.error('Error starting local session:', error);
+      setStatus('error');
+      setLastError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
   async function startElevenLabs(currentSettings = settings) {
     try {
-      // Only tear down OpenAI WebRTC — do NOT call endSession() here because
-      // the ElevenLabs SDK queues it and will fire it on the session we're about to open.
+      // Only tear down OpenAI WebRTC and the local pipeline — do NOT call
+      // endSession() here because the ElevenLabs SDK queues it and will fire
+      // it on the session we're about to open.
+      if (localSessionRef.current) {
+        localSessionRef.current.stop();
+        localSessionRef.current = null;
+      }
       if (peerConnectionRef.current) {
         peerConnectionRef.current.close();
         peerConnectionRef.current = null;
@@ -969,7 +1539,9 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
       }
 
       const overrideAgent: Record<string, unknown> = {};
-      if (currentSettings.initialPrompt) overrideAgent.prompt = { prompt: currentSettings.initialPrompt };
+      if (currentSettings.initialPrompt) {
+        overrideAgent.prompt = { prompt: buildAssistantInstructions(currentSettings.initialPrompt) };
+      }
       if (currentSettings.elevenLabsFirstMessage?.trim()) overrideAgent.firstMessage = currentSettings.elevenLabsFirstMessage.trim();
       const overrides = Object.keys(overrideAgent).length > 0 ? { agent: overrideAgent } : undefined;
 
@@ -986,14 +1558,20 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
   }
 
   async function start(currentSettings = settings) {
-    if ((currentSettings.apiMode ?? 'openai') === 'elevenlabs') {
+    const mode = currentSettings.apiMode ?? 'openai';
+    if (mode === 'elevenlabs') {
       await startElevenLabs(currentSettings);
+    } else if (mode === 'local') {
+      await startLocal(currentSettings);
     } else {
       await startRealtime(currentSettings);
     }
   }
 
   function disconnect() {
+    void restoreMusicVolume();
+    realtimeResponseTextRef.current.clear();
+    completedRealtimeResponsesRef.current.clear();
     console.log(
       `%c[Jarvis] disconnect() called at ${new Date().toLocaleTimeString()} — stack: ${new Error().stack?.split('\n')[2]?.trim() ?? 'unknown'}`,
       'background:#2d0a0a;color:#ff6b6b;font-weight:bold;padding:2px 6px;border-radius:3px'
@@ -1003,6 +1581,11 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     if (reconnectTimerRef.current) {
       clearTimeout(reconnectTimerRef.current);
       reconnectTimerRef.current = null;
+    }
+    // Local pipeline cleanup
+    if (localSessionRef.current) {
+      localSessionRef.current.stop();
+      localSessionRef.current = null;
     }
     // OpenAI WebRTC cleanup
     if (peerConnectionRef.current) {
@@ -1061,6 +1644,61 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     }
   }
 
+  async function sendTypedChat(): Promise<void> {
+    const message = chatText.trim();
+    if (!message || chatSending) return;
+
+    setChatSending(true);
+    setChatError(null);
+
+    try {
+      const mode = settings.apiMode ?? 'openai';
+      if (mode === 'local') {
+        const session = localSessionRef.current;
+        if (!session) {
+          throw new Error('Start Jarvis before sending a message.');
+        }
+        setChatText('');
+        void duckMusic();
+        // Fire and forget — the session echoes the user message and reply into
+        // the chat via its callbacks, and failures surface through onError.
+        void session.sendText(message);
+        return;
+      }
+
+      if (mode === 'elevenlabs') {
+        if (elConversation.status !== 'connected') {
+          throw new Error('Start Jarvis before sending a message.');
+        }
+        appendChatMessage('user', message);
+        elConversation.sendUserMessage(message);
+      } else {
+        const dataChannel = dataChannelRef.current;
+        if (!dataChannel || dataChannel.readyState !== 'open') {
+          throw new Error('Start Jarvis before sending a message.');
+        }
+        appendChatMessage('user', message);
+        dataChannel.send(JSON.stringify({
+          type: 'conversation.item.create',
+          item: {
+            type: 'message',
+            role: 'user',
+            content: [{ type: 'input_text', text: message }],
+          },
+        }));
+        dataChannel.send(JSON.stringify({ type: 'response.create' }));
+      }
+
+      setChatText('');
+      void duckMusic();
+    } catch (error) {
+      const messageText = error instanceof Error ? error.message : String(error);
+      setChatError(messageText);
+    } finally {
+      setChatSending(false);
+    }
+  }
+
   function handleLogoClick() {
     if (compact) {
       sfx('click', 0.45);
@@ -1089,7 +1727,8 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     const mode = settings.apiMode ?? 'openai';
     const shouldStart =
       (mode === 'elevenlabs' && !!settings.elevenLabsAgentId?.trim()) ||
-      (mode === 'openai' && !!settings.apiKey);
+      (mode === 'openai' && !!settings.apiKey) ||
+      (mode === 'local' && !!settings.localModel?.trim());
 
     console.log(
       `%c[Jarvis] Auto-start effect fired at ${new Date().toLocaleTimeString()} — restartTrigger=${restartTrigger}, shouldStart=${shouldStart}, mode=${mode}`,
@@ -1115,7 +1754,8 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     // race-triggered blank save can never overwrite a good server config.
     const hasCredentials =
       (newSettings.apiMode === 'openai'      && !!newSettings.apiKey?.trim()) ||
-      (newSettings.apiMode === 'elevenlabs'  && !!newSettings.elevenLabsAgentId?.trim());
+      (newSettings.apiMode === 'elevenlabs'  && !!newSettings.elevenLabsAgentId?.trim()) ||
+      (newSettings.apiMode === 'local'       && !!newSettings.localModel?.trim());
     if (hasCredentials) {
       saveServerSettings({ jarvis_settings: serialised });
     }
@@ -1136,6 +1776,11 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
   const ring2Scale = 1 + visualAudioLevel * 0.05;
   const logoScale = 1;
   const glowIntensity = 0;
+  const chatMode = settings.apiMode ?? 'openai';
+  const chatOnline =
+    chatMode === 'elevenlabs' ? elConversation.status === 'connected'
+    : chatMode === 'local' ? status === 'active' && localSessionRef.current !== null
+    : dataChannelRef.current?.readyState === 'open' && status === 'active';
 
   const gridSize = ({ small: '20px 20px', medium: '40px 40px', large: '80px 80px', off: undefined } as Record<string, string | undefined>)[settings.grid ?? 'off'];
 
@@ -1455,6 +2100,21 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
           />
         ))}
       </AnimatePresence>
+
+      {/* Jarvis text chat — typed commands with spoken replies */}
+      {!compact && mounted && !isSettingsOpen && (
+        <ChatPanel
+          messages={chatMessages}
+          value={chatText}
+          online={chatOnline}
+          sending={chatSending}
+          micMuted={micMuted}
+          error={chatError}
+          onChange={setChatText}
+          onSend={() => void sendTypedChat()}
+          onToggleMic={() => setMicrophoneMuted(!micMutedRef.current)}
+        />
+      )}
 
       {/* Settings Modal */}
       <AnimatePresence>

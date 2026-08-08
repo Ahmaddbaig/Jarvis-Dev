@@ -13,7 +13,11 @@ electron_1.contextBridge.exposeInMainWorld('electron', {
     setDesktopPanelMuted: (muted) => electron_1.ipcRenderer.send('desktop-mode:muted', muted),
     setDesktopPanelMousePassthrough: (passthrough) => electron_1.ipcRenderer.send('desktop-mode:mouse-passthrough', passthrough),
     overlayClick: () => electron_1.ipcRenderer.send('desktop-mode:overlay-clicked'),
+    getDesktopControlToken: () => electron_1.ipcRenderer.invoke('desktop-control-token:get'),
     getAudioSourceId: () => electron_1.ipcRenderer.invoke('get-audio-source-id'),
+    getMacPermissions: () => electron_1.ipcRenderer.invoke('macos-permissions:get'),
+    requestMacPermission: (permission) => electron_1.ipcRenderer.invoke('macos-permissions:request', permission),
+    revealMacPermissionApp: () => electron_1.ipcRenderer.invoke('macos-permissions:reveal-app'),
     onDesktopOverlayClick: (callback) => {
         electron_1.ipcRenderer.on('desktop-mode:overlay-click', callback);
         return () => electron_1.ipcRenderer.removeAllListeners('desktop-mode:overlay-click');
