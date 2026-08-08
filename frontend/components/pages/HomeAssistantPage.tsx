@@ -1,45 +1,22 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { HomeAssistantWizard } from '../wizards/HomeAssistantWizard';
-import { loadServerSettings } from '@/frontend/lib/serverSettings';
 import { PageHeader } from '../PageHeader';
+import {
+  useHomeAssistantService,
+  useHomeAssistantStates,
+  type HAEntity,
+} from '@/frontend/hooks/queries/useHomeAssistant';
+import { useSaveServerSettings, useServerSettings } from '@/frontend/hooks/queries/useServerSettings';
+import { useWeather, type WeatherData } from '@/frontend/hooks/queries/useWeather';
+import { geocodeQueryOptions } from '@/frontend/hooks/queries/useWeather';
+import { useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { queryKeys } from '@/frontend/lib/query/keys';
+import { getCachedSetting } from '@/frontend/lib/serverSettings';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
-
-export interface HAEntity {
-  entity_id: string;
-  state: string;
-  attributes: {
-    friendly_name?: string;
-    device_class?: string;
-    brightness?: number;
-    current_temperature?: number;
-    temperature?: number;
-    unit_of_measurement?: string;
-    media_title?: string;
-    media_artist?: string;
-    volume_level?: number;
-    source?: string;
-    source_list?: string[];
-    supported_features?: number;
-    icon?: string;
-  };
-  last_changed: string;
-}
-
-interface WeatherData {
-  temperature: number;
-  windspeed: number;
-  condition: string;
-  icon: string;
-  isDay: boolean;
-  city: string;
-  state: string;
-  high: number | null;
-  low: number | null;
-}
 
 type NavView = 'dashboard' | 'devices' | 'rooms' | 'automations' | 'security' | 'network';
 
@@ -68,8 +45,8 @@ function isMediaOn(e: HAEntity): boolean {
 }
 
 function loadHAConfig() {
-  if (typeof window === 'undefined') return { url: '', token: '' };
-  return { url: localStorage.getItem('jarvis_ha_url') ?? '', token: localStorage.getItem('jarvis_ha_token') ?? '' };
+  if (typeof window === 'undefined') return { url: '' };
+  return { url: getCachedSetting('jarvis_ha_url') };
 }
 
 // ── Panel Shell ────────────────────────────────────────────────────────────────
@@ -423,11 +400,12 @@ function TVPanel({ entities, onCallService }: {
 
 // ── Weather Panel ──────────────────────────────────────────────────────────────
 
-async function geocodeCity(query: string): Promise<{ lat: number; lon: number; display: string } | null> {
+async function geocodeCity(
+  query: string,
+  queryClient: QueryClient,
+): Promise<{ lat: number; lon: number; display: string } | null> {
   try {
-    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=1`;
-    const res = await fetch(url, { headers: { 'Accept-Language': 'en', 'User-Agent': 'JarvisClient/1.0' } });
-    const data = await res.json() as Array<{ lat: string; lon: string; display_name: string }>;
+    const data = await queryClient.fetchQuery(geocodeQueryOptions(query, 1));
     if (!data.length) return null;
     const parts = data[0].display_name.split(',');
     const display = parts.slice(0, 2).join(',').trim();
@@ -436,60 +414,81 @@ async function geocodeCity(query: string): Promise<{ lat: number; lon: number; d
 }
 
 function WeatherPanel() {
-  const [weather,     setWeather]     = useState<WeatherData | null>(null);
-  const [loading,     setLoading]     = useState(true);
+  const queryClient = useQueryClient();
+  const serverSettingsQuery = useServerSettings();
+  const saveServerSettings = useSaveServerSettings();
+  const [coordsOverride, setCoords] = useState<{ lat: number; lon: number } | null | undefined>(undefined);
+  const persistedCoords = useMemo(() => {
+    const savedLat = serverSettingsQuery.data?.jarvis_weather_lat || getCachedSetting('jarvis_weather_lat');
+    const savedLon = serverSettingsQuery.data?.jarvis_weather_lon || getCachedSetting('jarvis_weather_lon');
+    if (!savedLat || !savedLon) return null;
+    const lat = Number(savedLat);
+    const lon = Number(savedLon);
+    return Number.isFinite(lat) && Number.isFinite(lon) ? { lat, lon } : null;
+  }, [serverSettingsQuery.data?.jarvis_weather_lat, serverSettingsQuery.data?.jarvis_weather_lon]);
+  const coords = coordsOverride === undefined ? persistedCoords : coordsOverride;
   const [configuring, setConfiguring] = useState(false);
   const [cityInput,   setCityInput]   = useState('');
   const [geoError,    setGeoError]    = useState('');
   const [geoLoading,  setGeoLoading]  = useState(false);
-
-  const fetchWeather = useCallback(async (lat: number, lon: number) => {
-    setLoading(true);
-    try {
-      const res = await fetch(`/api/weather?lat=${lat}&lon=${lon}`);
-      if (res.ok) setWeather(await res.json() as WeatherData);
-    } finally { setLoading(false); }
-  }, []);
+  const [locationUnavailable, setLocationUnavailable] = useState(false);
+  const weatherQuery = useWeather(coords?.lat, coords?.lon);
+  const weather: WeatherData | undefined = weatherQuery.data;
+  const loading = (!coords && !locationUnavailable) || weatherQuery.isPending;
 
   // On mount: try saved coords first, then geolocation
   useEffect(() => {
-    const savedLat = localStorage.getItem('jarvis_weather_lat');
-    const savedLon = localStorage.getItem('jarvis_weather_lon');
-    if (savedLat && savedLon) {
-      fetchWeather(parseFloat(savedLat), parseFloat(savedLon));
+    if (coords || serverSettingsQuery.isPending) return;
+    if (!navigator.geolocation) {
+      setLocationUnavailable(true);
       return;
     }
-    if (!navigator.geolocation) { setLoading(false); return; }
     navigator.geolocation.getCurrentPosition(
-      (pos) => fetchWeather(pos.coords.latitude, pos.coords.longitude),
-      () => setLoading(false),
+      (position) => {
+        setCoords({ lat: position.coords.latitude, lon: position.coords.longitude });
+        setLocationUnavailable(false);
+      },
+      () => setLocationUnavailable(true),
       { timeout: 8000 }
     );
-  }, [fetchWeather]);
+  }, [coords, serverSettingsQuery.isPending]);
 
   const handleCitySubmit = async () => {
     if (!cityInput.trim()) return;
     setGeoLoading(true);
     setGeoError('');
-    const result = await geocodeCity(cityInput.trim());
+    const result = await geocodeCity(cityInput.trim(), queryClient);
     setGeoLoading(false);
     if (!result) { setGeoError('Location not found'); return; }
-    localStorage.setItem('jarvis_weather_lat', String(result.lat));
-    localStorage.setItem('jarvis_weather_lon', String(result.lon));
+    saveServerSettings.mutate({
+      jarvis_weather_lat: String(result.lat),
+      jarvis_weather_lon: String(result.lon),
+      jarvis_weather_location: result.display,
+    });
     setConfiguring(false);
     setCityInput('');
-    fetchWeather(result.lat, result.lon);
+    setCoords({ lat: result.lat, lon: result.lon });
+    setLocationUnavailable(false);
   };
 
   const handleUseGeo = () => {
     localStorage.removeItem('jarvis_weather_lat');
     localStorage.removeItem('jarvis_weather_lon');
+    saveServerSettings.mutate({
+      jarvis_weather_lat: '',
+      jarvis_weather_lon: '',
+      jarvis_weather_location: '',
+    });
     setConfiguring(false);
-    setLoading(true);
-    if (!navigator.geolocation) { setLoading(false); return; }
+    setCoords(null);
+    setLocationUnavailable(false);
+    if (!navigator.geolocation) {
+      setLocationUnavailable(true);
+      return;
+    }
     navigator.geolocation.getCurrentPosition(
-      (pos) => fetchWeather(pos.coords.latitude, pos.coords.longitude),
-      () => setLoading(false),
+      (position) => setCoords({ lat: position.coords.latitude, lon: position.coords.longitude }),
+      () => setLocationUnavailable(true),
       { timeout: 8000 }
     );
   };
@@ -1255,15 +1254,20 @@ interface Props { onNavigateHome: () => void; }
 
 export function HomeAssistantPage({ onNavigateHome }: Props) {
   const [haUrl,   setHaUrl]   = useState('');
-  const [haToken, setHaToken] = useState('');
   const [showWizard, setShowWizard] = useState(false);
-  const [entities,   setEntities]   = useState<HAEntity[]>([]);
-  const [loading,    setLoading]    = useState(false);
-  const [error,      setError]      = useState('');
-  const [loadingIds, setLoadingIds] = useState<Set<string>>(new Set());
   const [navView, setNavView]       = useState<NavView>('dashboard');
   const [clock,   setClock]         = useState('');
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const queryClient = useQueryClient();
+  const serverSettingsQuery = useServerSettings();
+  const configured = serverSettingsQuery.data?.credentialStatus?.homeAssistantToken ?? false;
+  const entitiesQuery = useHomeAssistantStates(haUrl, configured);
+  const serviceMutation = useHomeAssistantService(haUrl);
+  const entities = entitiesQuery.data ?? [];
+  const loading = entitiesQuery.isFetching;
+  const error = entitiesQuery.error instanceof Error ? entitiesQuery.error.message : '';
+  const loadingIds = new Set(serviceMutation.isPending && serviceMutation.variables
+    ? [serviceMutation.variables.entityId]
+    : []);
 
   // Clock tick
   useEffect(() => {
@@ -1273,34 +1277,16 @@ export function HomeAssistantPage({ onNavigateHome }: Props) {
     return () => clearInterval(id);
   }, []);
 
-  const fetchEntities = useCallback(async (url: string, token: string) => {
-    if (!url || !token) return;
-    setLoading(true); setError('');
-    try {
-      const res = await fetch(`/api/home-assistant?url=${encodeURIComponent(url)}&token=${encodeURIComponent(token)}&path=/api/states`);
-      if (!res.ok) { const d = await res.json() as { error?: string }; setError(d.error ?? `HTTP ${res.status}`); return; }
-      setEntities(await res.json() as HAEntity[]);
-    } catch (e) { setError(`Could not reach HA: ${String(e)}`); }
-    finally { setLoading(false); }
-  }, []);
-
   useEffect(() => {
-    loadServerSettings().then((srv) => {
-      const url   = srv.jarvis_ha_url   || loadHAConfig().url;
-      const token = srv.jarvis_ha_token || loadHAConfig().token;
-      // Back-fill localStorage so the host machine also benefits
-      if (srv.jarvis_ha_url)   localStorage.setItem('jarvis_ha_url',   srv.jarvis_ha_url);
-      if (srv.jarvis_ha_token) localStorage.setItem('jarvis_ha_token', srv.jarvis_ha_token);
-      if (url && token) { setHaUrl(url); setHaToken(token); fetchEntities(url, token); }
-      else setShowWizard(true);
-    });
-  }, [fetchEntities]);
-
-  useEffect(() => {
-    if (!haUrl || !haToken) return;
-    pollRef.current = setInterval(() => fetchEntities(haUrl, haToken), 8000);
-    return () => { if (pollRef.current) clearInterval(pollRef.current); };
-  }, [haUrl, haToken, fetchEntities]);
+    if (serverSettingsQuery.isPending) return;
+    const serverSettings = serverSettingsQuery.data ?? {};
+    const url = serverSettings.jarvis_ha_url || loadHAConfig().url;
+    if (url && serverSettings.credentialStatus?.homeAssistantToken) {
+      setHaUrl(url);
+    } else {
+      setShowWizard(true);
+    }
+  }, [serverSettingsQuery.data, serverSettingsQuery.isPending]);
 
   useEffect(() => {
     const handler = async (e: Event) => {
@@ -1312,35 +1298,22 @@ export function HomeAssistantPage({ onNavigateHome }: Props) {
     window.addEventListener('jarvis:home-assistant', handler);
     return () => window.removeEventListener('jarvis:home-assistant', handler);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [haUrl, haToken]);
+  }, [haUrl]);
 
   const callService = async (domain: string, service: string, entityId: string, serviceData: Record<string, unknown> = {}) => {
-    if (!haUrl || !haToken) return;
-    setLoadingIds((p) => new Set(p).add(entityId));
-    try {
-      await fetch('/api/home-assistant', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: haUrl, token: haToken, domain, service, serviceData: { entity_id: entityId, ...serviceData } }),
-      });
-      setEntities((prev) => prev.map((e) => {
-        if (e.entity_id !== entityId) return e;
-        if (service === 'turn_on')       return { ...e, state: 'on',  attributes: { ...e.attributes, ...serviceData } };
-        if (service === 'turn_off')      return { ...e, state: 'off' };
-        if (service === 'toggle')        return { ...e, state: ['on','idle','playing'].includes(e.state) ? 'off' : 'on' };
-        if (service === 'select_source') return { ...e, attributes: { ...e.attributes, source: serviceData.source as string } };
-        return e;
-      }));
-      setTimeout(() => fetchEntities(haUrl, haToken), 1500);
-    } finally { setLoadingIds((p) => { const n = new Set(p); n.delete(entityId); return n; }); }
+    if (!haUrl || !configured) return;
+    await serviceMutation.mutateAsync({ domain, service, entityId, serviceData });
   };
 
   const handleSetBrightness = useCallback((entity: HAEntity, pct: number) => {
     callService('light', 'turn_on', entity.entity_id, { brightness: Math.round((pct / 100) * 255) });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [haUrl, haToken]);
+  }, [haUrl, configured]);
 
-  const handleWizardComplete = (url: string, token: string) => {
-    setHaUrl(url); setHaToken(token); setShowWizard(false); fetchEntities(url, token);
+  const handleWizardComplete = (url: string) => {
+    queryClient.removeQueries({ queryKey: queryKeys.homeAssistant.all });
+    setHaUrl(url);
+    setShowWizard(false);
   };
 
   const onCount  = entities.filter((e) => ['on','playing','idle','open'].includes(e.state)).length;

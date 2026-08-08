@@ -12,10 +12,26 @@ declare global {
       setDesktopPanelMousePassthrough?: (passthrough: boolean) => void;
       overlayClick?: () => void;
       getDesktopControlToken?: () => Promise<string>;
+      getLanGatewayInfo?: () => Promise<{
+        available: boolean;
+        url?: string;
+        pairingUrl?: string;
+        port: number;
+      }>;
+      getAIEngineStatus?: () => Promise<{
+        state: 'stopped' | 'starting' | 'ready' | 'restarting' | 'unavailable';
+        protocol?: string;
+        buildSha?: string;
+        processId?: number;
+        port?: number;
+        restarts?: number;
+        error?: string;
+      }>;
       getAudioSourceId?: () => Promise<string | null>;
       getMacPermissions?: () => Promise<MacPermissionStatus>;
       requestMacPermission?: (permission: 'accessibility' | 'screen' | 'microphone') => Promise<MacPermissionStatus>;
       revealMacPermissionApp?: () => Promise<MacPermissionStatus>;
+      getChromeControlToken?: () => Promise<string>;
       onDesktopOverlayClick?: (callback: () => void) => () => void;
       onDesktopPanelMuted?: (callback: (muted: boolean) => void) => () => void;
     };

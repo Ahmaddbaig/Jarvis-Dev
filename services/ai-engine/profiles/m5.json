@@ -1,0 +1,18 @@
+{
+  "id": "m5",
+  "manifestId": "jarvis-local-m5-v1",
+  "label": "M5 Local",
+  "hardware": "Apple M5 / 24 GB RAM",
+  "minimumMemoryBytes": 25769803776,
+  "expectedMemoryBytes": 15032385536,
+  "expectedDiskBytes": 9663676416,
+  "capabilities": ["respond", "transcribe", "speak", "vision", "embeddings"],
+  "idleUnloadSeconds": null,
+  "models": {
+    "pipeline": "jarvis-local-m5",
+    "llm": "qwen3.5-9b",
+    "transcription": "parakeet-cpp-nemotron-3.5-asr-streaming-0.6b",
+    "vad": "silero-vad-sherpa",
+    "tts": "kokoro-multi-lang-v1.0-sherpa"
+  }
+}

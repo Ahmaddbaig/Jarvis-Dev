@@ -1,6 +1,9 @@
 'use client';
 
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { queryKeys } from '@/frontend/lib/query/keys';
+import { useMusicCommand, useNowPlaying, type TrackInfo } from '@/frontend/hooks/queries/useMusic';
 
 // ── FFT Grid canvas ────────────────────────────────────────────────────────
 const GRID_COLS = 20;
@@ -171,51 +174,33 @@ function useFFTCanvas(canvasRef: React.RefObject<HTMLCanvasElement | null>) {
   }, []);
 }
 
-interface TrackInfo {
-  app: string; title: string; artist: string; album: string;
-  artworkUrl: string; position: number; duration: number; isPlaying: boolean;
-}
-
-async function fetchNowPlaying(): Promise<TrackInfo | null> {
-  try { const r = await fetch('/api/music'); const d = await r.json(); return d.error ? null : d; }
-  catch { return null; }
-}
-async function sendCommand(cmd: string) {
-  try { await fetch('/api/music', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ command: cmd }) }); }
-  catch {}
-}
 function fmt(s: number) { const m = Math.floor(s / 60); return `${m}:${(s % 60).toString().padStart(2, '0')}`; }
 
 const DISC = 190; // record diameter px
 
 export function MusicWidget() {
-  const [track, setTrack]   = useState<TrackInfo | null>(null);
-  const [loading, setLoading] = useState(true);
+  const nowPlayingQuery = useNowPlaying();
+  const commandMutation = useMusicCommand();
+  const queryClient = useQueryClient();
+  const track = nowPlayingQuery.data ?? null;
+  const loading = nowPlayingQuery.isPending;
   const [rotDeg, setRotDeg] = useState(0);
   const rotRef      = useRef(0);
   const rafRef      = useRef<number>(0);
   const lastRef     = useRef<number>(0);
-  const pollRef     = useRef<ReturnType<typeof setInterval> | null>(null);
   const fftCanvasRef = useRef<HTMLCanvasElement | null>(null);
   useFFTCanvas(fftCanvasRef);
 
-  const refresh = useCallback(async () => {
-    const d = await fetchNowPlaying(); setTrack(d); setLoading(false);
-  }, []);
-
   useEffect(() => {
-    refresh();
-    pollRef.current = setInterval(refresh, 6000);
-    return () => { if (pollRef.current) clearInterval(pollRef.current); };
-  }, [refresh]);
-
-  useEffect(() => {
-    const up = (e: Event) => { const d = (e as CustomEvent<TrackInfo>).detail; if (d) setTrack(d); };
-    const re = () => refresh();
+    const up = (event: Event) => {
+      const detail = (event as CustomEvent<TrackInfo>).detail;
+      if (detail) queryClient.setQueryData(queryKeys.music.nowPlaying(), detail);
+    };
+    const re = () => void queryClient.invalidateQueries({ queryKey: queryKeys.music.all });
     window.addEventListener('jarvis:music:update', up);
     window.addEventListener('jarvis:music:refresh', re);
     return () => { window.removeEventListener('jarvis:music:update', up); window.removeEventListener('jarvis:music:refresh', re); };
-  }, [refresh]);
+  }, [queryClient]);
 
   const isPlaying = track?.isPlaying ?? false;
   useEffect(() => {
@@ -231,10 +216,7 @@ export function MusicWidget() {
   }, [isPlaying]);
 
   const handleCmd = async (cmd: string) => {
-    await sendCommand(cmd);
-    if (['playpause','play','pause'].includes(cmd))
-      setTrack(p => p ? { ...p, isPlaying: cmd === 'play' ? true : cmd === 'pause' ? false : !p.isPlaying } : p);
-    setTimeout(refresh, 600);
+    await commandMutation.mutateAsync({ command: cmd });
   };
 
   // Color transitions: 0°=blue@10/pink@2, 180°=swapped

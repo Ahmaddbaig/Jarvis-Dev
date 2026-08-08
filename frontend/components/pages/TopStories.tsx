@@ -1,28 +1,10 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-
-interface Headline {
-  title: string;
-}
+import { useNewsHeadlines } from '@/frontend/hooks/queries/useNewsHeadlines';
 
 export function TopStories() {
-  const [stories, setStories] = useState<Headline[]>([]);
-
-  useEffect(() => {
-    async function fetch_() {
-      try {
-        const res = await fetch('/api/news-headlines');
-        const data = (await res.json()) as { items?: Headline[] };
-        if (data.items?.length) setStories(data.items.slice(0, 10));
-      } catch {
-        // silent
-      }
-    }
-    fetch_();
-    const iv = setInterval(fetch_, 120_000);
-    return () => clearInterval(iv);
-  }, []);
+  const { data = [] } = useNewsHeadlines();
+  const stories = data.slice(0, 10);
 
   if (stories.length === 0) {
     return (

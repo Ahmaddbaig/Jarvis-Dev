@@ -1,19 +1,45 @@
 # Dependencies
 node_modules/
 
-# Local model weights (whisper.cpp etc.)
+# LocalAI runtime, model weights, generated files, and logs
+.local-ai/
+
+# Local speech model weights (whisper.cpp)
 models/
 
 # Next.js build output
 .next/
 out/
 
+# TypeScript incremental build cache
+*.tsbuildinfo
+
+# Reproducible desktop build output
+.build/
+dist-electron/
+/release/
+scripts/dist/
+services/ai-engine/.venv/
+services/ai-engine/dist/
+apps/companion/dist/
+jarvis-ai-engine-session.json
+
+# VAD runtime assets (copied from node_modules by scripts/copy-vad-assets.js)
+public/vad/
+
 # Local settings & secrets (contains API keys)
 jarvis-server-settings.json
+jarvis-chrome-control.json
 jarvis-companions.json
+jarvis-companions.json.tmp
 jarvis-companions.json.*.tmp
 .jarvis-desktop-token
 .bambu-token.json
+jarvis-core.sqlite3
+jarvis-core.sqlite3-shm
+jarvis-core.sqlite3-wal
+migration-backups/
+migration-quarantine/
 .env
 .env.*
 
@@ -23,3 +49,7 @@ jarvis-companions.json.*.tmp
 # Logs
 *.log
 npm-debug.log*
+
+# Python bytecode
+__pycache__/
+*.py[cod]

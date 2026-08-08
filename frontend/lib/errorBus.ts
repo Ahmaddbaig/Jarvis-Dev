@@ -9,7 +9,7 @@
  */
 
 export type ErrorLevel = 'error' | 'warn';
-export type ErrorSource = 'openai' | 'elevenlabs' | 'local' | 'function' | 'app' | 'uncaught';
+export type ErrorSource = 'openai' | 'local-ai' | 'voicebox' | 'elevenlabs' | 'function' | 'app' | 'uncaught';
 
 export interface ErrorEntry {
   id: string;
@@ -62,6 +62,8 @@ export function emitError(
 
 function detectSource(args: unknown[]): ErrorSource {
   const first = typeof args[0] === 'string' ? args[0].toLowerCase() : '';
+  if (first.includes('localai') || first.includes('local ai')) return 'local-ai';
+  if (first.includes('voicebox') || first.includes('[voice/')) return 'voicebox';
   if (
     first.includes('openai') ||
     first.includes('realtime') ||

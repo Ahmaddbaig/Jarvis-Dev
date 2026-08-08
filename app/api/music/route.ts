@@ -59,6 +59,11 @@ end tell`);
 async function findSpotifyPlayButton(bounds: WindowBounds): Promise<{ x: number; y: number }> {
   const screenshotPath = `/tmp/jarvis_spotify_${Date.now()}.png`;
   try {
+    // Spotify must be above other windows because screencapture records the
+    // visible pixels in its rectangle, not the hidden window surface.
+    await osaScript(`tell application "Spotify" to activate
+tell application "System Events" to tell process "Spotify" to set frontmost to true
+delay 0.2`);
     await execAsync(
       `/usr/sbin/screencapture -x -R${bounds.x},${bounds.y},${bounds.width},${bounds.height} ${screenshotPath}`
     );
@@ -382,7 +387,14 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      const searchQuery = typeof query === 'string' ? query.trim().slice(0, 250) : '';
+      const searchQuery = typeof query === 'string'
+        ? query
+            .trim()
+            .slice(0, 250)
+            .replace(/([a-z0-9])by(?=(?:skillet|skillia)\b)/gi, '$1 by ')
+            .replace(/\bskillia\b/gi, 'Skillet')
+            .replace(/\s+/g, ' ')
+        : '';
       if (!searchQuery) {
         return NextResponse.json({ error: 'Missing Spotify search query.' }, { status: 400 });
       }
@@ -416,12 +428,31 @@ export async function POST(req: NextRequest) {
       const escapedQuery = JSON.stringify(searchQuery);
       await osaScript(`tell application "Spotify" to activate
 delay 1
+set searchClipboard to ${escapedQuery}
+set previousClipboard to the clipboard
+set the clipboard to searchClipboard
+try
+  tell application "System Events"
+    -- UI elements enabled can incorrectly report false on modern macOS even
+    -- when this process is trusted. The UI commands below return the real
+    -- authorization error if Accessibility access is actually denied.
+    tell process "Spotify" to set frontmost to true
+    keystroke "l" using command down
+    delay 0.3
+    keystroke "a" using command down
+    keystroke "v" using command down
+  end tell
+on error errorMessage number errorNumber
+  try
+    if (the clipboard as text) is searchClipboard then set the clipboard to previousClipboard
+  end try
+  error errorMessage number errorNumber
+end try
+try
+  if (the clipboard as text) is searchClipboard then set the clipboard to previousClipboard
+end try
 tell application "System Events"
-  if UI elements enabled is false then error "Jarvis needs Accessibility permission to control Spotify."
-  tell process "Spotify" to set frontmost to true
-  keystroke "l" using command down
-  delay 0.3
-  keystroke ${escapedQuery}
+  delay 0.2
   key code 36
   delay 2
 end tell`);

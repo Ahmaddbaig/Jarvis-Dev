@@ -1,13 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { spawn, ChildProcess } from 'child_process';
 import { getGoogleServiceRuntime } from '@/backend/mcp/google-service-runtime';
-import fs from 'fs';
+import {
+  googleOAuthClientInfo,
+  materializeGoogleOAuthCredentials,
+  removeMaterializedGoogleOAuthCredentials,
+} from '@/backend/secrets/google-credentials';
+import { isAuthenticatedDesktopRequest } from '@/backend/desktop-auth';
 
 // Keep the auth process alive between requests so the OAuth callback server
 // keeps listening even after this route returns.
 let activeAuthProcess: ChildProcess | null = null;
 
 export async function POST(req: NextRequest) {
+  if (!isAuthenticatedDesktopRequest(req)) {
+    return NextResponse.json({ error: 'Google authorization is desktop-only.' }, { status: 401 });
+  }
   // Kill any previous auth attempt
   if (activeAuthProcess) {
     try { activeAuthProcess.kill(); } catch { /* ignore */ }
@@ -30,12 +38,14 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  if (!fs.existsSync(service.credentialsPath)) {
+  if (!googleOAuthClientInfo()) {
     return NextResponse.json(
-      { error: `Missing shared Google credentials file at ${service.credentialsPath}` },
+      { error: 'Google OAuth credentials are not configured.' },
       { status: 400 },
     );
   }
+
+  materializeGoogleOAuthCredentials();
 
   const env: NodeJS.ProcessEnv = {
     ...process.env,
@@ -43,10 +53,23 @@ export async function POST(req: NextRequest) {
   };
 
   return new Promise<Response>((resolve) => {
-    const proc = spawn(service.command, service.authArgs, {
-      env,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    let proc: ReturnType<typeof spawn>;
+    try {
+      proc = spawn(service.command, service.authArgs, {
+        env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    }
+    catch (error) {
+      // The materialized client secret is plaintext on disk until a close or
+      // error handler removes it, and neither is attached yet.
+      removeMaterializedGoogleOAuthCredentials();
+      resolve(NextResponse.json(
+        { serviceId: service.id, error: error instanceof Error ? error.message : String(error) },
+        { status: 500 },
+      ));
+      return;
+    }
 
     activeAuthProcess = proc;
 
@@ -77,17 +100,23 @@ export async function POST(req: NextRequest) {
     proc.stderr?.on('data', (d: Buffer) => tryExtract(d.toString()));
 
     proc.on('close', (code) => {
-      activeAuthProcess = null;
+      if (activeAuthProcess === proc) {
+        activeAuthProcess = null;
+        removeMaterializedGoogleOAuthCredentials();
+      }
       settle(
         settled
           ? { serviceId: service.id, done: true }
-          : { serviceId: service.id, error: `Auth process exited (code ${code ?? '?'}) without a URL`, output: accumulated.slice(0, 600) },
+          : { serviceId: service.id, error: `Auth process exited (code ${code ?? '?'}) without an authorization URL.` },
         settled ? 200 : 500,
       );
     });
 
     proc.on('error', (err) => {
-      activeAuthProcess = null;
+      if (activeAuthProcess === proc) {
+        activeAuthProcess = null;
+        removeMaterializedGoogleOAuthCredentials();
+      }
       settle({ serviceId: service.id, error: err.message }, 500);
     });
 
@@ -96,7 +125,7 @@ export async function POST(req: NextRequest) {
       settle(
         settled
           ? { serviceId: service.id, done: true }
-          : { serviceId: service.id, error: 'Timed out waiting for auth URL', output: accumulated.slice(0, 600) },
+          : { serviceId: service.id, error: 'Timed out waiting for an authorization URL.' },
         settled ? 200 : 408,
       );
     }, 20_000);
@@ -104,10 +133,14 @@ export async function POST(req: NextRequest) {
 }
 
 // DELETE kills any running auth process (clean-up)
-export async function DELETE() {
+export async function DELETE(req: NextRequest) {
+  if (!isAuthenticatedDesktopRequest(req)) {
+    return NextResponse.json({ error: 'Google authorization is desktop-only.' }, { status: 401 });
+  }
   if (activeAuthProcess) {
     try { activeAuthProcess.kill(); } catch { /* ignore */ }
     activeAuthProcess = null;
   }
+  removeMaterializedGoogleOAuthCredentials();
   return NextResponse.json({ success: true });
 }

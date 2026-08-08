@@ -1,0 +1,16 @@
+name: jarvis-local-m3
+pipeline:
+  vad: silero-vad-sherpa
+  transcription: parakeet-cpp-nemotron-3.5-asr-streaming-0.6b
+  llm: qwen_qwen3.5-4b
+  tts: kokoro-multi-lang-v1.0-sherpa
+  disable_thinking: true
+  turn_detection:
+    type: semantic_vad
+    eagerness: high
+    retranscribe: false
+  streaming:
+    transcription: true
+    llm: true
+    tts: true
+    clause_chunking: true

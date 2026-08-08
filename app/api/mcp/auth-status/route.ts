@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getGoogleService } from '@/shared/google-services';
-import { getGoogleTokenPath } from '@/backend/mcp/google-service-runtime';
-import fs from 'fs';
+import { googleServiceAuthenticated } from '@/backend/secrets/google-credentials';
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
@@ -15,7 +14,8 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const tokenPath = getGoogleTokenPath(service.id);
-  const authenticated = fs.existsSync(tokenPath);
-  return NextResponse.json({ serviceId: service.id, authenticated, tokenPath });
+  return NextResponse.json({
+    serviceId: service.id,
+    authenticated: googleServiceAuthenticated(service.id),
+  });
 }

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Single-task computer use agent for Jarvis.
-Usage: python3 computer_use.py <task> <api_key>
+Usage: printf '%s' "$OPENAI_API_KEY" | python3 computer_use.py <task>
 Outputs a JSON result line at the end.
 """
 
@@ -212,12 +212,15 @@ def run_task(task: str, api_key: str) -> dict:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 3:
-        print(json.dumps({"error": "Usage: computer_use.py <task> <api_key>"}))
+    if len(sys.argv) < 2:
+        print(json.dumps({"error": "Usage: computer_use.py <task> (API key on stdin)"}))
         sys.exit(1)
 
     task = sys.argv[1]
-    api_key = sys.argv[2]
+    api_key = sys.stdin.read().strip()
+    if not api_key:
+        print(json.dumps({"error": "OpenAI credential was not provided."}))
+        sys.exit(1)
 
     try:
         output = run_task(task, api_key)

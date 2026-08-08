@@ -1,43 +1,39 @@
 import { NextRequest, NextResponse } from 'next/server';
-import fs from 'fs';
-import path from 'path';
+import { getCoreStore } from '@/backend/persistence/core-store';
+import { getCredentialService } from '@/backend/secrets/credential-service';
 
-// Server-side settings file — persists across clients on the same machine.
-// Stored next to the Next.js standalone server so it survives builds.
-function getSettingsPath(): string {
-  // Packaged macOS apps are signed and must never write inside their bundle.
-  // Electron provides this directory when it starts the production server.
-  const base = process.env.JARVIS_DATA_DIR || process.cwd();
-  return path.join(base, 'jarvis-server-settings.json');
-}
-
-function readSettings(): Record<string, unknown> {
-  try {
-    const p = getSettingsPath();
-    if (!fs.existsSync(p)) return {};
-    return JSON.parse(fs.readFileSync(p, 'utf-8')) as Record<string, unknown>;
-  } catch {
-    return {};
-  }
-}
-
-function writeSettings(data: Record<string, unknown>): void {
-  fs.writeFileSync(getSettingsPath(), JSON.stringify(data, null, 2), 'utf-8');
-}
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
 export async function GET() {
-  return NextResponse.json(readSettings());
+  try {
+    return NextResponse.json({
+      ...getCoreStore().readServerSettings(),
+      credentialStatus: getCredentialService().status(),
+    }, {
+      headers: { 'Cache-Control': 'no-store' },
+    });
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Settings storage is unavailable.' },
+      { status: 500 },
+    );
+  }
 }
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json() as Record<string, unknown>;
-    // Merge with existing so partial updates (e.g. just HA creds) don't wipe everything
-    const existing = readSettings();
-    const merged = { ...existing, ...body };
-    writeSettings(merged);
+    const body = await req.json() as unknown;
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return NextResponse.json({ error: 'Settings patch must be a JSON object.' }, { status: 400 });
+    }
+    const store = getCoreStore();
+    store.writeServerSettings(body as Record<string, unknown>);
     return NextResponse.json({ ok: true });
-  } catch (err) {
-    return NextResponse.json({ error: String(err) }, { status: 400 });
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Settings could not be saved.' },
+      { status: 400 },
+    );
   }
 }

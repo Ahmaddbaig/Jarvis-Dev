@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { McpServerManager } from '@/backend/mcp/server-manager';
+import { lanRequestIdentity } from '@/backend/gateway/trusted-request';
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
     const manager = McpServerManager.getInstance();
-    await manager.initialize();
+    // A LAN status read may observe already-running tools, but it must never
+    // bootstrap configured child processes as a side effect.
+    if (!lanRequestIdentity(req)) await manager.initialize();
     const tools = manager.listTools();
     const servers = manager.getServerStatus();
     return NextResponse.json({ tools, servers });

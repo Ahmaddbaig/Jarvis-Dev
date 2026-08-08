@@ -2,10 +2,10 @@
 
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { saveServerSettings } from '@/frontend/lib/serverSettings';
+import { desktopControlFetch } from '@/frontend/lib/desktopControlClient';
 
 interface Props {
-  onComplete: (url: string, token: string) => void;
+  onComplete: (url: string) => void;
   onSkip: () => void;
 }
 
@@ -33,16 +33,18 @@ export function HomeAssistantWizard({ onComplete, onSkip }: Props) {
     setTestError('');
     try {
       const cleanUrl = url.trim().replace(/\/$/, '');
-      const res = await fetch(
-        `/api/home-assistant?url=${encodeURIComponent(cleanUrl)}&token=${encodeURIComponent(token.trim())}&path=/api/states`
-      );
+      const res = await desktopControlFetch('/api/home-assistant', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'configure', url: cleanUrl, token: token.trim() }),
+      });
       if (!res.ok) {
         const err = await res.json() as { error?: string };
         setTestError(err.error ?? `HTTP ${res.status}`);
         return;
       }
-      const states = await res.json() as unknown[];
-      setDeviceCount(Array.isArray(states) ? states.length : 0);
+      const result = await res.json() as { deviceCount?: number };
+      setDeviceCount(result.deviceCount ?? 0);
       next();
     } catch (e) {
       setTestError(`Could not reach Home Assistant: ${String(e)}`);
@@ -52,12 +54,8 @@ export function HomeAssistantWizard({ onComplete, onSkip }: Props) {
   };
 
   const handleComplete = () => {
-    const haUrl   = url.trim().replace(/\/$/, '');
-    const haToken = token.trim();
-    localStorage.setItem('jarvis_ha_url',   haUrl);
-    localStorage.setItem('jarvis_ha_token', haToken);
-    saveServerSettings({ jarvis_ha_url: haUrl, jarvis_ha_token: haToken });
-    onComplete(haUrl, haToken);
+    localStorage.removeItem('jarvis_ha_token');
+    onComplete(url.trim().replace(/\/$/, ''));
   };
 
   return (
@@ -160,7 +158,7 @@ export function HomeAssistantWizard({ onComplete, onSkip }: Props) {
                 transition={{ duration: 0.2 }} className="flex flex-col flex-1">
                 <div className="text-white font-mono text-sm font-semibold mb-1">Long-Lived Access Token</div>
                 <div className="text-white/40 text-[10px] font-mono mb-4 leading-relaxed">
-                  Create a token in Home Assistant and paste it here. The token is stored locally and only sent to your HA server.
+                  Create a token in Home Assistant and paste it here. Jarvis saves it in the operating-system credential vault and only sends it to your HA server.
                 </div>
 
                 <div className="p-3 rounded-lg bg-white/[0.03] border border-white/[0.06] space-y-1.5 mb-4">

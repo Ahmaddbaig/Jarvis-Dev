@@ -1,44 +1,14 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-
-interface Headline {
-  title: string;
-  link: string;
-}
+import { useNewsHeadlines, type NewsHeadline } from '@/frontend/hooks/queries/useNewsHeadlines';
 
 export function HeadlineTicker() {
-  const [headlines, setHeadlines] = useState<Headline[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(false);
+  const { data: headlines = [], isPending, isError } = useNewsHeadlines();
 
-  useEffect(() => {
-    async function fetchHeadlines() {
-      try {
-        const res = await fetch('/api/news-headlines');
-        const data = (await res.json()) as { items?: Headline[]; error?: string };
-        if (data.items && data.items.length > 0) {
-          setHeadlines(data.items);
-          setError(false);
-        } else {
-          setError(true);
-        }
-      } catch {
-        setError(true);
-      } finally {
-        setLoading(false);
-      }
-    }
-
-    fetchHeadlines();
-    const interval = setInterval(fetchHeadlines, 60_000);
-    return () => clearInterval(interval);
-  }, []);
-
-  const tickerItems: Headline[] =
-    loading
+  const tickerItems: NewsHeadline[] =
+    isPending
       ? [{ title: 'Loading latest headlines…', link: '' }]
-      : error
+      : isError || headlines.length === 0
       ? [{ title: 'Unable to load headlines — check connection', link: '' }]
       : headlines;
 

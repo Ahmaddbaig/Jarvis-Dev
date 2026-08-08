@@ -1,9 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { McpServerManager } from '@/backend/mcp/server-manager';
 import { getGoogleServiceRuntime } from '@/backend/mcp/google-service-runtime';
-import fs from 'fs';
+import {
+  googleOAuthClientInfo,
+  materializeGoogleOAuthCredentials,
+  removeMaterializedGoogleOAuthCredentials,
+} from '@/backend/secrets/google-credentials';
+import { isAuthenticatedDesktopRequest } from '@/backend/desktop-auth';
 
 export async function POST(req: NextRequest) {
+  if (!isAuthenticatedDesktopRequest(req)) {
+    return NextResponse.json({ error: 'Google service setup is desktop-only.' }, { status: 401 });
+  }
   try {
     const body = await req.json();
     const serviceId = typeof body?.serviceId === 'string' ? body.serviceId : '';
@@ -16,44 +24,49 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (!fs.existsSync(service.credentialsPath)) {
+    if (!googleOAuthClientInfo()) {
       return NextResponse.json(
-        { error: `Missing shared Google credentials file at ${service.credentialsPath}` },
+        { error: 'Google OAuth credentials are not configured.' },
         { status: 400 },
       );
     }
 
-    const manager = McpServerManager.getInstance();
-    await manager.initialize();
+    materializeGoogleOAuthCredentials();
+    try {
+      const manager = McpServerManager.getInstance();
+      await manager.initialize();
 
-    const existing = manager.getServer(service.serverName);
-    if (existing?.connected) {
+      const existing = manager.getServer(service.serverName);
+      if (existing?.connected) {
+        return NextResponse.json({
+          success: true,
+          skipped: true,
+          serviceId: service.id,
+          tools: existing.tools.length,
+          message: `${service.label} MCP server already connected`,
+        });
+      }
+
+      if (manager.hasServer(service.serverName)) {
+        await manager.removeServer(service.serverName);
+      }
+
+      await manager.addServerConfig(service.serverName, {
+        command: service.command,
+        args: service.args,
+        env: service.env,
+      });
+
+      const server = manager.getServer(service.serverName);
       return NextResponse.json({
         success: true,
-        skipped: true,
         serviceId: service.id,
-        tools: existing.tools.length,
-        message: `${service.label} MCP server already connected`,
+        tools: server?.tools?.length ?? 0,
+        message: `${service.label} MCP server registered and started`,
       });
+    } finally {
+      removeMaterializedGoogleOAuthCredentials();
     }
-
-    if (manager.hasServer(service.serverName)) {
-      await manager.removeServer(service.serverName);
-    }
-
-    await manager.addServerConfig(service.serverName, {
-      command: service.command,
-      args: service.args,
-      env: service.env,
-    });
-
-    const server = manager.getServer(service.serverName);
-    return NextResponse.json({
-      success: true,
-      serviceId: service.id,
-      tools: server?.tools?.length ?? 0,
-      message: `${service.label} MCP server registered and started`,
-    });
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : String(err) },
@@ -63,6 +76,9 @@ export async function POST(req: NextRequest) {
 }
 
 export async function DELETE(req: NextRequest) {
+  if (!isAuthenticatedDesktopRequest(req)) {
+    return NextResponse.json({ error: 'Google service setup is desktop-only.' }, { status: 401 });
+  }
   try {
     const { searchParams } = new URL(req.url);
     const serviceId = searchParams.get('serviceId') ?? '';

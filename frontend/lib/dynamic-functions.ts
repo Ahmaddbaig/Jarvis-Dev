@@ -59,15 +59,16 @@ function createSkillHandler(toolDef: {
  * Merges them with the static FUNCTION_REGISTRY using collision resolution:
  * static > MCP > skills.
  */
-export const loadDynamicFunctions: () => Promise<DynamicFunctionState> =
-  async () => {
+export const loadDynamicFunctions: (signal?: AbortSignal) => Promise<DynamicFunctionState> =
+  async (signal) => {
     try {
       const [mcpRes, skillsRes] = await Promise.allSettled([
-        fetch('/api/mcp').then((r) => (r.ok ? r.json() : { tools: [] })),
-        fetch('/api/skills').then((r) =>
+        fetch('/api/mcp', { signal }).then((r) => (r.ok ? r.json() : { tools: [] })),
+        fetch('/api/skills', { signal }).then((r) =>
           r.ok ? r.json() : { tools: [], skills: [] },
         ),
       ]);
+      if (signal?.aborted) throw new DOMException('Dynamic function loading was cancelled.', 'AbortError');
 
       const mcpData =
         mcpRes.status === 'fulfilled' ? mcpRes.value : { tools: [] };
@@ -171,6 +172,7 @@ export const loadDynamicFunctions: () => Promise<DynamicFunctionState> =
         loadError: null,
       };
     } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') throw err;
       console.error('[dynamic-fn] Failed to load dynamic functions:', err);
       return {
         allFunctions: FUNCTION_REGISTRY,
@@ -189,4 +191,22 @@ export function createGetFunctionByName(allFunctions: JarvisFunction[]) {
   return (name: string): JarvisFunction | undefined => {
     return allFunctions.find((f) => f.name === name);
   };
+}
+
+/**
+ * Resolve a tool the model asked for, honouring the user's enabled set.
+ *
+ * Filtering the tool list offered to a model only controls what it is told
+ * about; a hallucinated name, or one injected through tool output, still
+ * arrives as an ordinary call. Execution therefore resolves against the
+ * enabled set rather than the full registry, so a disabled ability stays
+ * unreachable.
+ */
+export function resolveEnabledFunction(
+  name: string,
+  allFunctions: readonly JarvisFunction[],
+  enabledNames: ReadonlySet<string>,
+): JarvisFunction | undefined {
+  const fn = allFunctions.find((f) => f.name === name);
+  return fn && enabledNames.has(fn.name) ? fn : undefined;
 }
