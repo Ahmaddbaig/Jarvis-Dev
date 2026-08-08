@@ -26,6 +26,10 @@ export interface VoiceboxProfile {
   id: string;
   name: string;
   default_engine?: string | null;
+  /** 'preset' (built-in voice) or 'cloned' (user's custom voice samples). */
+  voice_type?: string | null;
+  preset_engine?: string | null;
+  preset_voice_id?: string | null;
 }
 
 interface GenerationResponse {

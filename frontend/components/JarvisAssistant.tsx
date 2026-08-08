@@ -126,10 +126,13 @@ type ChatPanelProps = {
   online: boolean;
   sending: boolean;
   micMuted: boolean;
+  /** Whether a voice session is up; drives the START/END power toggle. */
+  powerOn: boolean;
   error: string | null;
   onChange: (value: string) => void;
   onSend: () => void;
   onToggleMic: () => void;
+  onTogglePower: () => void;
 };
 
 function ChatPanel({
@@ -138,10 +141,12 @@ function ChatPanel({
   online,
   sending,
   micMuted,
+  powerOn,
   error,
   onChange,
   onSend,
   onToggleMic,
+  onTogglePower,
 }: ChatPanelProps) {
   const historyRef = useRef<HTMLDivElement | null>(null);
 
@@ -184,6 +189,20 @@ function ChatPanel({
           onSend();
         }}
       >
+        <button
+          type="button"
+          onClick={onTogglePower}
+          aria-label={powerOn ? 'Take Jarvis offline' : 'Start Jarvis'}
+          aria-pressed={powerOn}
+          className={`h-10 shrink-0 rounded-lg border px-3 font-mono text-[10px] font-bold uppercase tracking-widest transition-colors ${
+            powerOn
+              ? 'border-red-500/60 bg-red-950/30 text-red-300 hover:bg-red-950/60'
+              : 'border-emerald-500/50 bg-emerald-950/30 text-emerald-300 hover:border-emerald-400'
+          }`}
+        >
+          {powerOn ? 'End' : 'Start'}
+        </button>
+
         <button
           type="button"
           onClick={onToggleMic}
@@ -2063,10 +2082,19 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
           online={chatOnline}
           sending={chatSending}
           micMuted={micMuted}
+          powerOn={status === 'active' || status === 'listening'}
           error={chatError}
           onChange={setChatText}
           onSend={() => void sendTypedChat()}
           onToggleMic={() => setMicrophoneMuted(!micMutedRef.current)}
+          onTogglePower={() => {
+            sfx('click', 0.6);
+            if (status === 'active' || status === 'listening') {
+              disconnect();
+            } else {
+              start();
+            }
+          }}
         />
       )}
 

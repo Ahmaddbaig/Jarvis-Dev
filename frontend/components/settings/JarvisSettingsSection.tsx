@@ -297,7 +297,49 @@ export function JarvisSettingsSection({ settings, credentialStatus, onChange, on
               ● Brain ({brainProvider === 'claude' ? 'Claude API' : brainProvider === 'local' ? 'Ollama on this Mac' : 'OpenAI API'}) {brainStatus === null ? '— checking…' : brainStatus.ok ? 'ready' : `not ready — ${brainStatus.error ?? 'no API key'}`}
             </p>
             <p className={voiceboxStatus?.ok ? 'text-green-400' : 'text-red-400'}>
-              ● Voicebox {voiceboxStatus === null ? '— checking…' : voiceboxStatus.ok ? 'online' : `offline — ${voiceboxStatus.error ?? 'not reachable'}`}
+              ● Voice (Voicebox) {voiceboxStatus === null ? '— checking…' : voiceboxStatus.ok ? 'online' : `offline — ${voiceboxStatus.error ?? 'not reachable'}`}
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">Jarvis Voice</label>
+            {voiceboxStatus?.ok && voiceboxStatus.profiles.length > 0 ? (
+              <div className="grid grid-cols-2 gap-2">
+                {voiceboxStatus.profiles.map((profile) => {
+                  const active = (settings.voiceboxProfileId ?? '') === profile.id
+                    || (!settings.voiceboxProfileId && profile.name === 'Jarvis');
+                  const voiceDetail = [
+                    profile.voiceType === 'cloned' ? 'custom cloned voice' : profile.voiceType,
+                    profile.engine,
+                    profile.voiceId,
+                  ].filter(Boolean).join(' · ');
+                  return (
+                    <button
+                      key={profile.id}
+                      onClick={() => { sfx('select', 0.5); setSettings({ ...settings, voiceboxProfileId: profile.id }); }}
+                      className={`px-3 py-2 border rounded text-xs text-left transition-all ${
+                        active
+                          ? 'bg-cyan-500/20 border-cyan-400 text-cyan-300 shadow-[0_0_10px_rgba(34,211,238,0.2)]'
+                          : 'bg-transparent border-cyan-500/20 text-cyan-600 hover:border-cyan-500/50 hover:text-cyan-400'
+                      }`}
+                    >
+                      <span className="block">{profile.name}</span>
+                      {voiceDetail && (
+                        <span className="block mt-0.5 font-mono text-[10px] opacity-70">{voiceDetail}</span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="text-xs text-cyan-700">
+                A &quot;Jarvis&quot; voice (British male) is created automatically on first use.
+                Clone your own in the Voicebox app and it will appear here.
+              </p>
+            )}
+            <p className="text-[10px] text-cyan-700">
+              The voice itself lives in the Voicebox app: change a profile&apos;s voice there — preset
+              or your own cloned voice — and Jarvis speaks with it. Same voice for every brain below.
             </p>
           </div>
 
@@ -402,39 +444,6 @@ export function JarvisSettingsSection({ settings, credentialStatus, onChange, on
                 : brainProvider === 'local'
                   ? 'Runs fully on this Mac through Ollama — no API key, no internet, no per-question cost. Pick a model with tool calling.'
                   : 'Uses the OpenAI API key above. Any chat model with tool calling works.'}
-            </p>
-          </div>
-
-          <div className="space-y-2">
-            <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">Voice (Voicebox profile)</label>
-            {voiceboxStatus?.ok && voiceboxStatus.profiles.length > 0 ? (
-              <div className="grid grid-cols-2 gap-2">
-                {voiceboxStatus.profiles.map((profile) => {
-                  const active = (settings.voiceboxProfileId ?? '') === profile.id
-                    || (!settings.voiceboxProfileId && profile.name === 'Jarvis');
-                  return (
-                    <button
-                      key={profile.id}
-                      onClick={() => { sfx('select', 0.5); setSettings({ ...settings, voiceboxProfileId: profile.id }); }}
-                      className={`px-3 py-2 border rounded text-xs text-left transition-all ${
-                        active
-                          ? 'bg-cyan-500/20 border-cyan-400 text-cyan-300 shadow-[0_0_10px_rgba(34,211,238,0.2)]'
-                          : 'bg-transparent border-cyan-500/20 text-cyan-600 hover:border-cyan-500/50 hover:text-cyan-400'
-                      }`}
-                    >
-                      {profile.name}
-                    </button>
-                  );
-                })}
-              </div>
-            ) : (
-              <p className="text-xs text-cyan-700">
-                A &quot;Jarvis&quot; voice (British male) is created automatically on first use.
-                Clone your own in the Voicebox app and it will appear here.
-              </p>
-            )}
-            <p className="text-[10px] text-cyan-700">
-              The selected Voicebox profile stays the same when you switch the brain between Claude and OpenAI.
             </p>
           </div>
 

@@ -13,7 +13,14 @@ export interface BrainStatus {
 
 export interface VoiceProfileStatus {
   ok: boolean;
-  profiles: { id: string; name: string }[];
+  profiles: {
+    id: string;
+    name: string;
+    /** 'preset' or 'cloned' — cloned means the user's own custom voice. */
+    voiceType?: string;
+    engine?: string;
+    voiceId?: string;
+  }[];
   error?: string;
 }
 
