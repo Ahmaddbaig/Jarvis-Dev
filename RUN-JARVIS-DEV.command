@@ -5,7 +5,6 @@ cd -- "$(dirname "$0")"
 
 electron_app="$PWD/node_modules/electron/dist/Electron.app"
 electron_binary="$electron_app/Contents/MacOS/Electron"
-local_ai_pid=""
 jarvis_next_pid=""
 
 cleanup() {
@@ -13,12 +12,6 @@ cleanup() {
     next_pid_to_stop="$jarvis_next_pid"
     jarvis_next_pid=""
     kill -TERM "$next_pid_to_stop" 2>/dev/null || true
-  fi
-  if [[ -n "$local_ai_pid" ]]; then
-    echo "Stopping the Jarvis Local AI server..."
-    local_ai_pid_to_stop="$local_ai_pid"
-    local_ai_pid=""
-    kill -TERM "$local_ai_pid_to_stop" 2>/dev/null || true
   fi
 }
 trap cleanup EXIT INT TERM
@@ -66,57 +59,11 @@ if [[ ! -x "$electron_binary" ]]; then
   exit 1
 fi
 
-local_ai_binary="$PWD/.local-ai/bin/local-ai"
-local_ai_profile_file="$PWD/.local-ai/installed-profile"
-local_ai_launcher="$PWD/scripts/local-ai/start.zsh"
-
-if [[ -x "$local_ai_binary" && -f "$local_ai_profile_file" && -x "$local_ai_launcher" ]]; then
-  installed_profile=$(tr -d '[:space:]' < "$local_ai_profile_file")
-  case "$installed_profile" in
-    m2|m3|m5)
-      if ! curl --max-time 1 -fsS http://127.0.0.1:8080/readyz >/dev/null 2>&1; then
-        echo "Starting the installed ${installed_profile:u} Local AI server..."
-        "$local_ai_launcher" > "$PWD/.local-ai/run/local-ai.log" 2>&1 &
-        local_ai_pid=$!
-
-        for local_ai_check in {1..120}; do
-          if curl --max-time 1 -fsS http://127.0.0.1:8080/readyz >/dev/null 2>&1; then
-            break
-          fi
-          if ! kill -0 "$local_ai_pid" 2>/dev/null; then
-            echo "Local AI stopped during startup. Recent log output:"
-            tail -n 20 "$PWD/.local-ai/run/local-ai.log" 2>/dev/null || true
-            local_ai_pid=""
-            break
-          fi
-          sleep 1
-        done
-      fi
-
-      if curl --max-time 1 -fsS http://127.0.0.1:8080/readyz >/dev/null 2>&1; then
-        echo "Warming jarvis-local-${installed_profile} for quick first responses..."
-        if ! curl --fail --silent --show-error --max-time 300 \
-          -X POST http://127.0.0.1:8080/backend/load \
-          -H 'Content-Type: application/json' \
-          -d "{\"model\":\"jarvis-local-${installed_profile}\"}" >/dev/null; then
-          echo "Local AI warm-up did not complete. Jarvis will still open; see .local-ai/run/local-ai.log."
-        fi
-
-        echo "Warming the Local AI realtime audio connection..."
-        if ! JARVIS_LOCAL_AI_MODEL="jarvis-local-${installed_profile}" \
-          "$electron_binary" "$PWD/scripts/local-ai/smoke-webrtc.cjs" >/dev/null; then
-          echo "Local AI audio warm-up did not complete. Jarvis will still open; see .local-ai/run/local-ai.log."
-        fi
-      fi
-      ;;
-    *)
-      echo "Ignoring invalid Local AI installed profile '$installed_profile'."
-      ;;
-  esac
-fi
-
 echo "Starting Jarvis Dev from the editable source code..."
 echo "Close this Terminal window or press Control-C to stop it."
+
+npm run ai:setup
+npm run build:electron
 
 next_binary="$PWD/node_modules/next/dist/bin/next"
 jarvis_chrome_ui_token="$(/usr/bin/openssl rand -hex 32)"

@@ -1,5 +1,62 @@
+appId: com.jarvis.desktop
+productName: Jarvis
+asar: true
+
+directories:
+  output: release
+  buildResources: buildfiles
+
+files:
+  - dist-electron/**/*
+  - package.json
+
 extraResources:
+  # Keep node_modules below the FileSet root. electron-builder intentionally
+  # skips a root-level node_modules directory in extraResources.
+  - from: .next
+    to: app
+    filter:
+      - "standalone/**/*"
   - from: chrome-extension
     to: chrome-extension
     filter:
       - "**/*"
+  - from: buildfiles
+    to: buildfiles
+    filter:
+      - "icon.png"
+  - from: services/ai-engine/dist/jarvis-ai-engine
+    to: ai-engine
+    filter:
+      - "**/*"
+  - from: .build/release-evidence/artifact-manifest.json
+    to: artifact-manifest.json
+  - from: .build/release-evidence/sbom.cdx.json
+    to: sbom.cdx.json
+
+mac:
+  category: public.app-category.productivity
+  icon: buildfiles/icon.png
+  target:
+    - dmg
+    - zip
+  minimumSystemVersion: "12.0"
+  hardenedRuntime: true
+  notarize: true
+  entitlements: buildfiles/entitlements.mac.plist
+  entitlementsInherit: buildfiles/entitlements.mac.plist
+
+win:
+  icon: buildfiles/icon.png
+  target:
+    - nsis
+    - zip
+
+nsis:
+  deleteAppDataOnUninstall: false
+
+linux:
+  category: Utility
+  icon: buildfiles/icon.png
+  target:
+    - AppImage

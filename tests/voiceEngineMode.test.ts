@@ -25,32 +25,28 @@ describe('migrateLegacyVoiceboxMode', () => {
 
 describe('hasUsableVoiceEngineConfig', () => {
   test('allows LocalAI only on the machine where it is installed', () => {
-    expect(hasUsableVoiceEngineConfig({ apiMode: 'local' }, true)).toBe(true);
-    expect(hasUsableVoiceEngineConfig({ apiMode: 'local' }, false)).toBe(false);
+    expect(hasUsableVoiceEngineConfig({ apiMode: 'local' }, true, {})).toBe(true);
+    expect(hasUsableVoiceEngineConfig({ apiMode: 'local' }, false, {})).toBe(false);
   });
 
   test('checks the key belonging to the selected Voicebox brain', () => {
     expect(hasUsableVoiceEngineConfig({
       apiMode: 'voicebox',
       brainProvider: 'claude',
-      claudeApiKey: 'configured',
-    }, false)).toBe(true);
+    }, false, { anthropicApiKey: true })).toBe(true);
     expect(hasUsableVoiceEngineConfig({
       apiMode: 'voicebox',
       brainProvider: 'claude',
-      apiKey: 'openai-only',
-    }, false)).toBe(false);
+    }, false, { openaiApiKey: true })).toBe(false);
     expect(hasUsableVoiceEngineConfig({
       apiMode: 'voicebox',
       brainProvider: 'openai',
-      apiKey: 'configured',
       voiceboxProfileId: 'shared-jarvis-voice',
-    }, false)).toBe(true);
+    }, false, { openaiApiKey: true })).toBe(true);
     expect(hasUsableVoiceEngineConfig({
       apiMode: 'voicebox',
       brainProvider: 'openai',
-      claudeApiKey: 'claude-only',
       voiceboxProfileId: 'shared-jarvis-voice',
-    }, false)).toBe(false);
+    }, false, { anthropicApiKey: true })).toBe(false);
   });
 });

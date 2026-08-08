@@ -1,3 +1,6 @@
+const REMOTE_PROTOCOL = Object.freeze(await fetch(chrome.runtime.getURL('remote-protocol.json')).then((response) => response.json()));
+const EXTENSION_VERSION = chrome.runtime.getManifest().version;
+
 const STORAGE_DEFAULTS = {
   baseUrl: 'http://127.0.0.1:3100',
   token: '',
@@ -10,6 +13,7 @@ const STORAGE_DEFAULTS = {
 
 const PENDING_RESULT_KEY = 'pendingChromeResult';
 const CLICK_APPROVALS_KEY = 'pendingClickApprovals';
+const EXECUTED_RESULTS_KEY = 'executedChromeResults';
 const CLICK_APPROVAL_TTL_MS = 60_000;
 
 let pollLoopRunning = false;
@@ -39,6 +43,44 @@ async function storePendingResult(result) {
 
 async function clearPendingResult() {
   await chrome.storage.session.remove(PENDING_RESULT_KEY);
+}
+
+async function readExecutedResult(command) {
+  const stored = await chrome.storage.session.get(EXECUTED_RESULTS_KEY);
+  const results = stored[EXECUTED_RESULTS_KEY] && typeof stored[EXECUTED_RESULTS_KEY] === 'object'
+    ? stored[EXECUTED_RESULTS_KEY]
+    : {};
+  const now = Date.now();
+  for (const [key, entry] of Object.entries(results)) {
+    if (!entry || Number(entry.expiresAt) <= now) delete results[key];
+  }
+  await chrome.storage.session.set({ [EXECUTED_RESULTS_KEY]: results });
+  const cached = results[command.idempotencyKey];
+  return cached?.commandId === command.commandId ? { ...cached.result, idempotentReplay: true } : null;
+}
+
+async function storeExecutedResult(command, result) {
+  const stored = await chrome.storage.session.get(EXECUTED_RESULTS_KEY);
+  const results = stored[EXECUTED_RESULTS_KEY] && typeof stored[EXECUTED_RESULTS_KEY] === 'object'
+    ? stored[EXECUTED_RESULTS_KEY]
+    : {};
+  results[command.idempotencyKey] = {
+    commandId: command.commandId,
+    expiresAt: Date.now() + REMOTE_PROTOCOL.resultRetentionMs,
+    result,
+  };
+  const bounded = Object.fromEntries(Object.entries(results).slice(-100));
+  await chrome.storage.session.set({ [EXECUTED_RESULTS_KEY]: bounded });
+}
+
+function validateRemoteCommand(command) {
+  if (command?.protocol !== REMOTE_PROTOCOL.protocol) throw new Error('Jarvis Chrome protocol is incompatible. Re-pair after updating Jarvis.');
+  if (typeof command.commandId !== 'string' || typeof command.idempotencyKey !== 'string') throw new Error('Jarvis sent an invalid command identity.');
+  if (typeof command.deadline !== 'string' || Date.parse(command.deadline) <= Date.now()) throw new Error('Jarvis sent an expired command.');
+  if (typeof command.operation !== 'string' || !REMOTE_PROTOCOL.chromeCapabilities.includes(command.capability)) {
+    throw new Error('Jarvis sent an unsupported command capability.');
+  }
+  if (!/^sha256:[a-f0-9]{64}$/.test(command.targetFingerprint || '')) throw new Error('Jarvis sent an invalid target fingerprint.');
 }
 
 async function createClickApproval(tabId, fingerprint) {
@@ -73,7 +115,7 @@ async function consumeClickApproval(confirmationId, tabId) {
 }
 
 async function clearTransientCommandState() {
-  await chrome.storage.session.remove([PENDING_RESULT_KEY, CLICK_APPROVALS_KEY]);
+  await chrome.storage.session.remove([PENDING_RESULT_KEY, CLICK_APPROVALS_KEY, EXECUTED_RESULTS_KEY]);
 }
 
 function normalizeBaseUrl(value) {
@@ -550,7 +592,7 @@ async function runPageAction(tab, action, args) {
 }
 
 async function executeCommand(command) {
-  const action = command.action;
+  const action = command.operation;
   const args = command.args || {};
 
   if (action === 'status') {
@@ -741,14 +783,35 @@ async function runPollLoop() {
         if (!response.ok) throw new Error(`Jarvis returned HTTP ${response.status}.`);
 
         const payload = await response.json();
+        if (payload.protocol !== REMOTE_PROTOCOL.protocol) throw new Error('Jarvis Chrome protocol is incompatible.');
         const command = payload.command;
-        if (!command?.id || !command?.action) continue;
+        if (!command?.commandId || !command?.operation) continue;
 
-        let result;
-        try {
-          result = { commandId: command.id, ok: true, result: await executeCommand(command) };
-        } catch (error) {
-          result = { commandId: command.id, ok: false, error: error instanceof Error ? error.message : String(error) };
+        let result = await readExecutedResult(command);
+        if (!result) {
+          try {
+            validateRemoteCommand(command);
+            result = {
+              protocol: REMOTE_PROTOCOL.protocol,
+              commandId: command.commandId,
+              idempotencyKey: command.idempotencyKey,
+              ok: true,
+              result: await executeCommand(command),
+              completedAt: new Date().toISOString(),
+              idempotentReplay: false,
+            };
+          } catch (error) {
+            result = {
+              protocol: REMOTE_PROTOCOL.protocol,
+              commandId: command.commandId,
+              idempotencyKey: command.idempotencyKey,
+              ok: false,
+              error: error instanceof Error ? error.message : String(error),
+              completedAt: new Date().toISOString(),
+              idempotentReplay: false,
+            };
+          }
+          await storeExecutedResult(command, result);
         }
         await storePendingResult(result);
       } catch (error) {
@@ -772,10 +835,16 @@ async function pairWithJarvis(message) {
       code: String(message.code || '').trim(),
       extensionId: chrome.runtime.id,
       extensionName: 'Jarvis Chrome Control',
+      protocol: REMOTE_PROTOCOL.protocol,
+      extensionVersion: EXTENSION_VERSION,
+      capabilities: REMOTE_PROTOCOL.chromeCapabilities,
     }),
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok || !payload.token) throw new Error(payload.error || `Pairing failed with HTTP ${response.status}.`);
+  if (payload.status?.protocol !== REMOTE_PROTOCOL.protocol || payload.status?.compatible !== true) {
+    throw new Error('Jarvis accepted pairing but reported an incompatible Chrome protocol.');
+  }
   await clearTransientCommandState();
   await updateState({
     baseUrl,

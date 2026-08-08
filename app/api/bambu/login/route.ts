@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { setToken, type BambuToken } from '@/backend/bambu/mqtt-manager';
 
 const BAMBU_API = 'https://api.bambulab.com';
 
@@ -21,9 +22,6 @@ export async function POST(req: NextRequest) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, type: 'codeLogin' }),
     });
-    const codeText = await codeRes.text();
-    console.log('[Bambu send-code] status:', codeRes.status, 'body:', codeText);
-
     if (codeRes.ok) {
       return NextResponse.json({ status: 'code_sent' });
     }
@@ -35,8 +33,6 @@ export async function POST(req: NextRequest) {
       body: JSON.stringify({ account: email, password: '', apiError: '' }),
     });
     const authData = await safeJson(authRes);
-    console.log('[Bambu login probe] status:', authRes.status, 'body:', JSON.stringify(authData));
-
     if (authData.loginType === 'verifyCode') {
       const codeRes2 = await fetch(`${BAMBU_API}/v1/user-service/user/sendemail/code`, {
         method: 'POST',
@@ -49,11 +45,17 @@ export async function POST(req: NextRequest) {
     }
 
     if (authData.success && authData.accessToken) {
-      return NextResponse.json({ status: 'authenticated', token: authData });
+      const token: BambuToken = {
+        accessToken: String(authData.accessToken),
+        refreshToken: typeof authData.refreshToken === 'string' ? authData.refreshToken : '',
+        tokenExpiration: Date.now() + (typeof authData.expiresIn === 'number' ? authData.expiresIn : 86_400) * 1000,
+      };
+      setToken(token);
+      return NextResponse.json({ status: 'authenticated', tokenExpiration: token.tokenExpiration });
     }
 
     return NextResponse.json(
-      { error: `Bambu code request failed (${codeRes.status}): ${codeText}` },
+      { error: `Bambu code request failed with HTTP ${codeRes.status}.` },
       { status: 403 }
     );
   } catch (e) {

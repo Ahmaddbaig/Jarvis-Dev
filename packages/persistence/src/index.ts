@@ -1,0 +1,21 @@
+export { JarvisDatabase, UnsupportedSchemaVersionError } from './database';
+export type { DatabaseDiagnostics } from './database';
+export { DATABASE_MIGRATIONS, LATEST_SCHEMA_VERSION } from './migrations';
+export { migrateLegacyJson } from './legacy-json';
+export type { LegacyJsonMigrationOptions, LegacyJsonMigrationResult } from './legacy-json';
+export { SettingsRepository } from './repositories/settings';
+export type { StoredSetting } from './repositories/settings';
+export { SecretRefsRepository } from './repositories/secret-refs';
+export type { PutSecretRef, SecretRef } from './repositories/secret-refs';
+export { DevicesRepository } from './repositories/devices';
+export type { DeviceRecord, PutDevice } from './repositories/devices';
+export { PairingsRepository } from './repositories/pairings';
+export type { PairingRecord, PairingState, PutPairing } from './repositories/pairings';
+export { SecurityAuditRepository } from './repositories/security-audit';
+export type {
+  AppendSecurityAudit,
+  SecurityAuditDecision,
+  SecurityAuditRecord,
+} from './repositories/security-audit';
+export { TasksRepository } from './repositories/tasks';
+export type { LocalTask } from '@jarvis/contracts';

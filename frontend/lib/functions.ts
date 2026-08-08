@@ -1,6 +1,20 @@
 import { getCachedSetting, loadServerSettings } from './serverSettings';
 import { chromeControlFetch } from './chromeControlClient';
 import { desktopControlFetch } from './desktopControlClient';
+import { attachStaticToolPolicies } from './tools/compatibility';
+import type { JarvisFunction, LegacyJarvisFunction } from './tools/types';
+import { fetchLocalTasks, groupLocalTasks } from './localTasks';
+
+export type { JarvisFunction } from './tools/types';
+
+function readCachedJarvisSettings(): Record<string, unknown> {
+  try {
+    const raw = getCachedSetting('jarvis_settings');
+    return raw ? JSON.parse(raw) as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
 
 /** Paths from Settings → System — sent with shell / computer-use API calls. */
 export function readToolkitOverrides(): {
@@ -9,9 +23,7 @@ export function readToolkitOverrides(): {
 } {
   if (typeof window === 'undefined') return {};
   try {
-    const raw = localStorage.getItem('jarvis_settings');
-    if (!raw) return {};
-    const s = JSON.parse(raw) as Record<string, unknown>;
+    const s = readCachedJarvisSettings();
     const shell =
       typeof s.shellPathOverride === 'string' && s.shellPathOverride.trim()
         ? s.shellPathOverride.trim()
@@ -27,19 +39,6 @@ export function readToolkitOverrides(): {
   } catch {
     return {};
   }
-}
-
-export interface JarvisFunction {
-  name: string;
-  label: string;
-  description: string;
-  tool: {
-    type: 'function';
-    name: string;
-    description: string;
-    parameters: Record<string, unknown>;
-  };
-  handler: (args: Record<string, unknown>) => unknown | Promise<unknown>;
 }
 
 type DesktopPanelPosition = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
@@ -65,18 +64,6 @@ function normalizeSpotifyQuery(query: string): string {
     .replace(/\bskillia\b/gi, 'Skillet')
     .replace(/\s+/g, ' ')
     .trim();
-}
-
-async function readActiveApiKey(): Promise<string> {
-  try {
-    const serverSettings = await loadServerSettings();
-    const raw = serverSettings.jarvis_settings || getCachedSetting('jarvis_settings');
-    if (!raw) return '';
-    const parsed = JSON.parse(raw) as { apiKey?: unknown };
-    return typeof parsed.apiKey === 'string' ? parsed.apiKey.trim() : '';
-  } catch {
-    return '';
-  }
 }
 
 // ── Calendar event fetching ───────────────────────────────────────────────────
@@ -110,12 +97,9 @@ async function fetchUpcomingCalendarEvents(): Promise<CalendarEventSummary[]> {
 
   // 2. Fall back to iCal feed
   try {
-    const icalUrl = typeof window !== 'undefined' ? localStorage.getItem('jarvis_ical_url') : null;
-    if (icalUrl) {
-      const res  = await fetch(`/api/ical?url=${encodeURIComponent(icalUrl)}`);
-      const data = await res.json() as { events?: CalendarEventSummary[] };
-      return data.events ?? [];
-    }
+    const res  = await fetch('/api/ical');
+    const data = await res.json() as { events?: CalendarEventSummary[] };
+    return res.ok ? data.events ?? [] : [];
   } catch { /* ignore */ }
 
   return [];
@@ -123,7 +107,7 @@ async function fetchUpcomingCalendarEvents(): Promise<CalendarEventSummary[]> {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const FUNCTION_REGISTRY: JarvisFunction[] = [
+const LEGACY_FUNCTION_REGISTRY: LegacyJarvisFunction[] = [
   {
     name: 'get_date',
     label: 'Get Date',
@@ -255,16 +239,11 @@ export const FUNCTION_REGISTRY: JarvisFunction[] = [
       const platformHint = target ? '' : `[Platform: ${platform}] `;
       const enrichedTask = platformHint + task;
 
-      const stored = localStorage.getItem('jarvis_settings');
-      const apiKey = stored ? JSON.parse(stored).apiKey : '';
-      if (!apiKey) return { error: 'No API key found in settings.' };
-
       try {
         const requestBody = {
           task: enrichedTask,
           target: target || undefined,
           screen: Number.isInteger(args.screen) ? args.screen : 0,
-          apiKey,
           ...readToolkitOverrides(),
         };
         let res = await desktopControlFetch('/api/computer-use', {
@@ -505,17 +484,10 @@ export const FUNCTION_REGISTRY: JarvisFunction[] = [
         // Show scanning widget with the captured camera image underneath
         dispatch({ state: 'scanning', capturedBase64: imageBase64 });
 
-        const stored = localStorage.getItem('jarvis_settings');
-        const apiKey = stored ? JSON.parse(stored).apiKey : '';
-        if (!apiKey) {
-          dispatch({ state: 'error', error: 'No API key found in settings.' });
-          return { error: 'No API key.' };
-        }
-
         const res = await fetch('/api/xray', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ imageBase64, apiKey }),
+          body: JSON.stringify({ imageBase64 }),
         });
 
         const data = await res.json();
@@ -585,10 +557,6 @@ export const FUNCTION_REGISTRY: JarvisFunction[] = [
       const prompt = String(args.prompt ?? '').trim();
       if (!prompt) return { error: 'No prompt provided.' };
 
-      const stored = localStorage.getItem('jarvis_settings');
-      const apiKey = stored ? JSON.parse(stored).apiKey : '';
-      if (!apiKey) return { error: 'No API key found in settings.' };
-
       const moduleId =
         typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
           ? crypto.randomUUID()
@@ -624,7 +592,6 @@ export const FUNCTION_REGISTRY: JarvisFunction[] = [
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             prompt,
-            apiKey,
             size: args.size,
             quality: args.quality,
             referenceImageBase64,
@@ -729,17 +696,13 @@ export const FUNCTION_REGISTRY: JarvisFunction[] = [
       const description = args.description as string;
       if (!description) return { error: 'No print description provided.' };
 
-      const stored = localStorage.getItem('jarvis_settings');
-      const apiKey = stored ? JSON.parse(stored).apiKey : '';
-      if (!apiKey) return { error: 'No API key found in settings.' };
-
       const task = `${description}. Open Bambu Studio, go to the online models tab. Find a model matching the user's description. Pick a relevant one. Load the model. Check the available printers using the device tab at the top. Find one not in use. Set the printer. Slice the file, and send it to the correct printer. If you get stuck with an incompatible printer error, then select the drop down and choose the printer you selected. Do not ask follow-up questions unless the file is missing or there are zero available printers. Make reasonable choices and complete the print job. If there are multiple idle printers, choose the first idle one. Stop only after the print job has been successfully sent, or if the file cannot be found, no printer is available, or Bambu Studio blocks the job with an error that cannot be resolved.`;
 
       try {
         const res = await desktopControlFetch('/api/computer-use', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ task, apiKey, ...readToolkitOverrides() }),
+          body: JSON.stringify({ task, ...readToolkitOverrides() }),
         });
         return await res.json();
       } catch (err) {
@@ -1033,9 +996,6 @@ export const FUNCTION_REGISTRY: JarvisFunction[] = [
         return { error: String(err) };
       }
 
-      const apiKey = await readActiveApiKey();
-      if (!apiKey) return { error: 'No API key found in settings.' };
-
       const platform = typeof navigator !== 'undefined' ? navigator.platform : 'unknown';
       const task =
         `[Platform: ${platform}] Use the Spotify desktop application's visible user interface to play ${JSON.stringify(safeQuery)}. ` +
@@ -1047,7 +1007,7 @@ export const FUNCTION_REGISTRY: JarvisFunction[] = [
         const res = await desktopControlFetch('/api/computer-use', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ task, apiKey, ...readToolkitOverrides() }),
+          body: JSON.stringify({ task, ...readToolkitOverrides() }),
         });
         const data = await res.json();
         if (!res.ok || data.error) return { error: data.error ?? `Computer Use failed with HTTP ${res.status}.` };
@@ -1540,8 +1500,7 @@ export const FUNCTION_REGISTRY: JarvisFunction[] = [
 
       if (page === 'calendar') {
         try {
-          const localTasksRaw = typeof window !== 'undefined' ? localStorage.getItem('jarvis_calendar_tasks') : null;
-          const localTasks = localTasksRaw ? JSON.parse(localTasksRaw) as Record<string, { text: string; time?: string; done: boolean }[]> : {};
+          const localTasks = groupLocalTasks(await fetchLocalTasks());
 
           // Collect upcoming 7 days of local tasks
           const upcoming: string[] = [];
@@ -1589,15 +1548,10 @@ export const FUNCTION_REGISTRY: JarvisFunction[] = [
 
       if (page === 'home-assistant') {
         try {
-          let haUrl   = getCachedSetting('jarvis_ha_url');
-          let haToken = getCachedSetting('jarvis_ha_token');
-          if (!haUrl || !haToken) {
-            const s = await loadServerSettings();
-            haUrl   = s.jarvis_ha_url   ?? '';
-            haToken = s.jarvis_ha_token ?? '';
-          }
-          if (haUrl && haToken) {
-            const res = await fetch(`/api/home-assistant?url=${encodeURIComponent(haUrl)}&token=${encodeURIComponent(haToken)}&path=/api/states`);
+          const serverSettings = await loadServerSettings();
+          const haUrl = serverSettings.jarvis_ha_url ?? getCachedSetting('jarvis_ha_url');
+          if (haUrl && serverSettings.credentialStatus?.homeAssistantToken) {
+            const res = await fetch('/api/home-assistant?path=/api/states');
             if (res.ok) {
               const states = await res.json() as Array<{ entity_id: string; state: string; attributes: { friendly_name?: string } }>;
               const on  = states.filter((e) => e.state === 'on').length;
@@ -1797,13 +1751,16 @@ export const FUNCTION_REGISTRY: JarvisFunction[] = [
 
       // Navigate to calendar page
       window.dispatchEvent(new CustomEvent('jarvis:navigate', { detail: { page: 'calendar' } }));
+      const localTasksPromise = fetchLocalTasks()
+        .then(groupLocalTasks)
+        .catch((): ReturnType<typeof groupLocalTasks> => ({}));
 
       // Helper: build a combined schedule for a date key
       const getScheduleForKey = async (dateKey: string): Promise<string> => {
         const lines: string[] = [];
         // Local tasks
         try {
-          const store = JSON.parse(localStorage.getItem('jarvis_calendar_tasks') ?? '{}') as Record<string, { text: string; time?: string; done: boolean }[]>;
+          const store = await localTasksPromise;
           const tasks = (store[dateKey] ?? []);
           for (const t of tasks) lines.push(`${t.time ? t.time + ' — ' : ''}${t.text}${t.done ? ' (done)' : ''}`);
         } catch { /* ignore */ }
@@ -2007,17 +1964,11 @@ export const FUNCTION_REGISTRY: JarvisFunction[] = [
       const source       = args.source       as string | undefined;
       const domain       = args.domain       as string | undefined;
 
-      // Use getCachedSetting (cache → localStorage). If both are empty the server
-      // settings cache is cold — load it now so mobile/tablet clients work too.
-      let haUrl   = getCachedSetting('jarvis_ha_url');
-      let haToken = getCachedSetting('jarvis_ha_token');
-      if (!haUrl || !haToken) {
-        const s = await loadServerSettings();
-        haUrl   = s.jarvis_ha_url   ?? '';
-        haToken = s.jarvis_ha_token ?? '';
-      }
+      const serverSettings = await loadServerSettings();
+      const haUrl = serverSettings.jarvis_ha_url ?? getCachedSetting('jarvis_ha_url');
+      const haConfigured = serverSettings.credentialStatus?.homeAssistantToken ?? false;
 
-      if (!haUrl || !haToken) {
+      if (!haUrl || !haConfigured) {
         return { success: false, message: 'Home Assistant is not configured. Navigate to the Home Assistant page and connect first.' };
       }
 
@@ -2029,7 +1980,7 @@ export const FUNCTION_REGISTRY: JarvisFunction[] = [
       // list_devices: return all entity states
       if (command === 'list_devices') {
         try {
-          const res = await fetch(`/api/home-assistant?url=${encodeURIComponent(haUrl)}&token=${encodeURIComponent(haToken)}&path=/api/states`);
+          const res = await fetch('/api/home-assistant?path=/api/states');
           if (!res.ok) return { success: false, message: 'Could not fetch device list from Home Assistant.' };
           const states = await res.json() as Array<{ entity_id: string; state: string; attributes: { friendly_name?: string; unit_of_measurement?: string } }>;
           const filterDomain = domain?.toLowerCase();
@@ -2062,7 +2013,7 @@ export const FUNCTION_REGISTRY: JarvisFunction[] = [
       // user's lights are smart plugs (switch domain, friendly names Light 1–4).
       if (!resolvedEntityId && domain && command !== 'select_source' && command !== 'list_devices') {
         try {
-          const res = await fetch(`/api/home-assistant?url=${encodeURIComponent(haUrl)}&token=${encodeURIComponent(haToken)}&path=/api/states`);
+          const res = await fetch('/api/home-assistant?path=/api/states');
           if (res.ok) {
             const states = await res.json() as Array<{ entity_id: string; state: string; attributes: { friendly_name?: string } }>;
             const domainLower = domain.toLowerCase();
@@ -2094,10 +2045,10 @@ export const FUNCTION_REGISTRY: JarvisFunction[] = [
               for (const t of targets) {
                 const svcData: Record<string, unknown> = { entity_id: t.entity_id };
                 if (command === 'set_brightness') svcData.brightness = Math.round(((brightness ?? 100) / 100) * 255);
-                const r = await fetch(`/api/home-assistant?url=${encodeURIComponent(haUrl)}&token=${encodeURIComponent(haToken)}&path=/api/services/${t.entity_id.split('.')[0]}/${svc}`, {
+                const r = await fetch('/api/home-assistant', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify(svcData),
+                  body: JSON.stringify({ domain: t.entity_id.split('.')[0], service: svc, serviceData: svcData }),
                 });
                 results.push(`${t.attributes.friendly_name ?? t.entity_id}: ${r.ok ? 'done' : 'failed'}`);
               }
@@ -2110,7 +2061,7 @@ export const FUNCTION_REGISTRY: JarvisFunction[] = [
       // Auto-resolve TV for select_source when no entity specified
       if (command === 'select_source' && !resolvedEntityId && !friendlyName) {
         try {
-          const res = await fetch(`/api/home-assistant?url=${encodeURIComponent(haUrl)}&token=${encodeURIComponent(haToken)}&path=/api/states`);
+          const res = await fetch('/api/home-assistant?path=/api/states');
           if (res.ok) {
             const states = await res.json() as Array<{ entity_id: string; state: string; attributes: { friendly_name?: string; source_list?: string[] } }>;
             const tvs = states.filter((e) => e.entity_id.startsWith('media_player.'));
@@ -2128,7 +2079,7 @@ export const FUNCTION_REGISTRY: JarvisFunction[] = [
 
       if (!resolvedEntityId && friendlyName) {
         try {
-          const res = await fetch(`/api/home-assistant?url=${encodeURIComponent(haUrl)}&token=${encodeURIComponent(haToken)}&path=/api/states`);
+          const res = await fetch('/api/home-assistant?path=/api/states');
           if (res.ok) {
             const states = await res.json() as Array<{ entity_id: string; state: string; attributes: { friendly_name?: string } }>;
             const query = friendlyName.toLowerCase();
@@ -2166,7 +2117,7 @@ export const FUNCTION_REGISTRY: JarvisFunction[] = [
         const res = await fetch('/api/home-assistant', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: haUrl, token: haToken, domain: entityDomain, service, serviceData }),
+          body: JSON.stringify({ domain: entityDomain, service, serviceData }),
         });
         if (!res.ok) {
           const err = await res.json() as { error?: string };
@@ -2477,6 +2428,8 @@ export const FUNCTION_REGISTRY: JarvisFunction[] = [
     },
   },
 ];
+
+export const FUNCTION_REGISTRY: JarvisFunction[] = attachStaticToolPolicies(LEGACY_FUNCTION_REGISTRY);
 
 export function getFunctionByName(name: string): JarvisFunction | undefined {
   return FUNCTION_REGISTRY.find((f) => f.name === name);

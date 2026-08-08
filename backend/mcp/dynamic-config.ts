@@ -2,7 +2,7 @@ import path from 'path';
 import os from 'os';
 
 export const DYNAMIC_MCP_CONFIG_PATH = path.join(os.homedir(), '.jarvis', 'mcp-dynamic.json');
-export const JARVIS_DATA_DIR = path.join(os.homedir(), '.jarvis');
+export const JARVIS_DATA_DIR = process.env.JARVIS_DATA_DIR || path.join(os.homedir(), '.jarvis');
 export const GOOGLE_CREDENTIALS_DIR = path.join(JARVIS_DATA_DIR, 'google');
 export const GOOGLE_CREDENTIALS_PATH = path.join(GOOGLE_CREDENTIALS_DIR, 'credentials.json');
 export const LEGACY_GOOGLE_CALENDAR_CREDENTIALS_DIR = path.join(JARVIS_DATA_DIR, 'google-calendar');

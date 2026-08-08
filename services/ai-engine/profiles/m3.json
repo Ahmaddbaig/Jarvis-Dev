@@ -1,0 +1,18 @@
+{
+  "id": "m3",
+  "manifestId": "jarvis-local-m3-v1",
+  "label": "M3 Local",
+  "hardware": "Apple M3 / 16 GB RAM",
+  "minimumMemoryBytes": 17179869184,
+  "expectedMemoryBytes": 9663676416,
+  "expectedDiskBytes": 5368709120,
+  "capabilities": ["respond", "transcribe", "speak", "embeddings"],
+  "idleUnloadSeconds": 900,
+  "models": {
+    "pipeline": "jarvis-local-m3",
+    "llm": "qwen_qwen3.5-4b",
+    "transcription": "parakeet-cpp-nemotron-3.5-asr-streaming-0.6b",
+    "vad": "silero-vad-sherpa",
+    "tts": "kokoro-multi-lang-v1.0-sherpa"
+  }
+}

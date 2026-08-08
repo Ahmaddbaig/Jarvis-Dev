@@ -1,6 +1,9 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // Electron launches the generated standalone server from resources/app.
+  output: "standalone",
+  transpilePackages: ["@jarvis/contracts", "@jarvis/core", "@jarvis/persistence", "@jarvis/secrets"],
   reactStrictMode: false,
   // Avoid Next's runtime image cache writing inside the signed macOS bundle.
   images: { unoptimized: true },

@@ -1,4 +1,5 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
+import { getCredentialService } from '@/backend/secrets/credential-service';
 
 export interface ICalEvent {
   id: string;
@@ -88,9 +89,9 @@ function parseICalFeed(text: string): ICalEvent[] {
   return events;
 }
 
-export async function GET(req: NextRequest) {
-  const url = req.nextUrl.searchParams.get('url');
-  if (!url) return NextResponse.json({ error: 'Missing url param' }, { status: 400 });
+export async function GET() {
+  const url = getCredentialService().get('icalFeedUrl');
+  if (!url) return NextResponse.json({ error: 'iCal feed is not configured.' }, { status: 401 });
 
   try {
     const res = await fetch(url, {

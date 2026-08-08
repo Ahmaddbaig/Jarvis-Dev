@@ -1,0 +1,18 @@
+{
+  "id": "m2",
+  "manifestId": "jarvis-local-m2-v1",
+  "label": "M2 Local",
+  "hardware": "Apple M2 / 8 GB RAM",
+  "minimumMemoryBytes": 8589934592,
+  "expectedMemoryBytes": 6442450944,
+  "expectedDiskBytes": 3221225472,
+  "capabilities": ["respond", "transcribe", "speak", "embeddings"],
+  "idleUnloadSeconds": 300,
+  "models": {
+    "pipeline": "jarvis-local-m2",
+    "llm": "qwen_qwen3.5-2b",
+    "transcription": "parakeet-cpp-realtime_eou_120m-v1",
+    "vad": "silero-vad-sherpa",
+    "tts": "kokoro-multi-lang-v1.0-sherpa"
+  }
+}

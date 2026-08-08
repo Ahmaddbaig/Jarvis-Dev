@@ -11,6 +11,11 @@ export interface VoiceEngineConfig {
   voiceboxProfileId?: string;
 }
 
+export interface VoiceCredentialStatus {
+  openaiApiKey?: boolean;
+  anthropicApiKey?: boolean;
+}
+
 /**
  * Voicebox originally used the mode id "local". LocalAI later claimed that
  * id, so recognize the old Voicebox-only fields before defaults are applied.
@@ -29,6 +34,9 @@ export function migrateLegacyVoiceboxMode<T extends VoiceEngineConfig>(config: T
 export function hasUsableVoiceEngineConfig(
   config: VoiceEngineConfig | null,
   allowLocalAI: boolean,
+  // Required: defaulting to {} turns a forgotten argument into a silent
+  // "voice never starts" with no diagnostic.
+  credentialStatus: VoiceCredentialStatus,
 ): boolean {
   if (!config) return false;
   const mode = config.apiMode ?? 'openai';
@@ -36,8 +44,8 @@ export function hasUsableVoiceEngineConfig(
   if (mode === 'elevenlabs') return Boolean(config.elevenLabsAgentId?.trim());
   if (mode === 'voicebox') {
     return config.brainProvider === 'claude'
-      ? Boolean(config.claudeApiKey?.trim())
-      : Boolean(config.apiKey?.trim());
+      ? Boolean(credentialStatus.anthropicApiKey)
+      : Boolean(credentialStatus.openaiApiKey);
   }
-  return Boolean(config.apiKey?.trim());
+  return Boolean(credentialStatus.openaiApiKey);
 }

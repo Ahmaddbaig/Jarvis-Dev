@@ -1,13 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
 import { toFile } from 'openai';
+import { getCredentialService } from '@/backend/secrets/credential-service';
 
 export async function POST(req: NextRequest) {
   try {
-    const { imageBase64, apiKey } = await req.json();
+    const { imageBase64 } = await req.json();
 
     if (!imageBase64) return NextResponse.json({ error: 'Missing image' }, { status: 400 });
-    if (!apiKey) return NextResponse.json({ error: 'Missing apiKey' }, { status: 400 });
+    const apiKey = getCredentialService().get('openaiApiKey');
+    if (!apiKey) return NextResponse.json({ error: 'OpenAI is not configured.' }, { status: 401 });
 
     const client = new OpenAI({ apiKey });
 

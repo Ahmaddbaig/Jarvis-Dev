@@ -1,0 +1,7 @@
+# The Computer Use helper is bundled by PyInstaller on each target platform.
+# Keep these exact so release builds do not silently change their runtime.
+PyInstaller==6.21.0
+mss==10.2.0
+PyAutoGUI==0.9.54
+openai==2.53.0
+Pillow==12.3.0

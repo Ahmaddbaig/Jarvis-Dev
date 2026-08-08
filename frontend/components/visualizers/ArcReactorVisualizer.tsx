@@ -38,7 +38,7 @@ export function ArcReactorVisualizer({ fftData, status }: Props) {
 
     // Seeded pseudo-random (deterministic per bar index so noise is smooth)
     const hash = (n: number) => {
-      let x = Math.sin(n) * 43758.5453123;
+      const x = Math.sin(n) * 43758.5453123;
       return x - Math.floor(x);
     };
 

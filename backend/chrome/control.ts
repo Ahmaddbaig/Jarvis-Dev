@@ -2,6 +2,15 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import {
+  JARVIS_REMOTE_PROTOCOL_VERSION,
+  REMOTE_CAPABILITIES,
+  jsonObjectSchema,
+  missingRemoteCapabilities,
+  remoteResultSchema,
+} from '@jarvis/contracts';
+import { migrateLegacyJson } from '@jarvis/persistence';
+import { getCoreStore } from '../persistence/core-store';
+import {
   CHROME_CONTROL_ACTIONS,
   ChromeControlAction,
   ChromeControlCommand,
@@ -14,6 +23,9 @@ interface PersistedPairing {
   extensionId: string;
   extensionName: string;
   pairedAt: string;
+  protocol: number;
+  extensionVersion: string;
+  capabilities: string[];
 }
 
 interface PairingCode {
@@ -25,6 +37,8 @@ interface PairingCode {
 interface PendingResult {
   resolve: (value: ChromeControlResult) => void;
   timeout: ReturnType<typeof setTimeout>;
+  command: ChromeControlCommand;
+  lastDeliveredAt: number;
 }
 
 interface ChromeRuntimeState {
@@ -34,7 +48,7 @@ interface ChromeRuntimeState {
   queue: ChromeControlCommand[];
   pollWaiters: Array<(command: ChromeControlCommand | null) => void>;
   pendingResults: Map<string, PendingResult>;
-  completedCommandIds: Map<string, number>;
+  completedCommandIds: Map<string, { completedAt: number; idempotencyKey: string }>;
 }
 
 const PAIRING_CODE_TTL_MS = 10 * 60_000;
@@ -52,30 +66,79 @@ function pairingPath(): string {
 }
 
 function readPairing(): PersistedPairing | null {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(pairingPath(), 'utf8')) as Partial<PersistedPairing>;
-    if (
-      typeof parsed.tokenHash !== 'string' || !/^[a-f0-9]{64}$/.test(parsed.tokenHash) ||
-      typeof parsed.extensionId !== 'string' || !/^[a-p]{32}$/.test(parsed.extensionId) ||
-      typeof parsed.extensionName !== 'string' ||
-      typeof parsed.pairedAt !== 'string'
-    ) {
-      return null;
-    }
-    return parsed as PersistedPairing;
-  } catch {
-    return null;
+  const store = getCoreStore();
+  const result = migrateLegacyJson({
+    database: store.database,
+    sourceId: 'jarvis-chrome-control-v1',
+    sourcePath: pairingPath(),
+    backupDirectory: path.join(store.dataDirectory, 'migration-backups'),
+    quarantineDirectory: path.join(store.dataDirectory, 'migration-quarantine'),
+    importRecord: (record) => writePairing(parsePairing(record)),
+  });
+  if (result.state === 'imported' && fs.existsSync(pairingPath())) fs.unlinkSync(pairingPath());
+
+  const device = store.database.devices.list('chrome-extension')[0];
+  if (!device) return null;
+  const pairing = store.database.pairings.get('chrome-extension');
+  if (!pairing || pairing.state !== 'paired' || !pairing.pairedAt) return null;
+  return parsePairing({
+    tokenHash: pairing.metadata.tokenHash,
+    extensionId: device.id,
+    extensionName: device.friendlyName,
+    pairedAt: pairing.pairedAt,
+    protocol: pairing.metadata.protocol,
+    extensionVersion: pairing.metadata.extensionVersion,
+    capabilities: pairing.metadata.capabilities,
+  });
+}
+
+function parsePairing(value: unknown): PersistedPairing {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Chrome pairing metadata is invalid.');
   }
+  const parsed = value as Partial<PersistedPairing>;
+  if (
+    typeof parsed.tokenHash !== 'string' || !/^[a-f0-9]{64}$/.test(parsed.tokenHash) ||
+    typeof parsed.extensionId !== 'string' || !/^[a-p]{32}$/.test(parsed.extensionId) ||
+    typeof parsed.extensionName !== 'string' ||
+    typeof parsed.pairedAt !== 'string'
+  ) {
+    throw new Error('Chrome pairing metadata is invalid.');
+  }
+  return {
+    ...(parsed as PersistedPairing),
+    protocol: Number.isInteger(parsed.protocol) ? parsed.protocol as number : 0,
+    extensionVersion: typeof parsed.extensionVersion === 'string' ? parsed.extensionVersion : 'legacy',
+    capabilities: Array.isArray(parsed.capabilities)
+      ? parsed.capabilities.filter((item): item is string => typeof item === 'string').slice(0, 100)
+      : [],
+  };
 }
 
 function writePairing(pairing: PersistedPairing): void {
-  fs.mkdirSync(dataDirectory(), { recursive: true });
-  fs.writeFileSync(pairingPath(), JSON.stringify(pairing, null, 2), { encoding: 'utf8', mode: 0o600 });
-  try {
-    fs.chmodSync(pairingPath(), 0o600);
-  } catch {
-    // Windows does not implement POSIX modes; the user profile directory remains the boundary.
-  }
+  const validated = parsePairing(pairing);
+  const database = getCoreStore().database;
+  database.transaction(() => {
+    database.devices.put({
+      id: validated.extensionId,
+      kind: 'chrome-extension',
+      friendlyName: validated.extensionName,
+      platform: 'chrome',
+      metadata: {},
+    });
+    database.pairings.put({
+      id: 'chrome-extension',
+      deviceId: validated.extensionId,
+      state: 'paired',
+      pairedAt: validated.pairedAt,
+      metadata: {
+        tokenHash: validated.tokenHash,
+        protocol: validated.protocol,
+        extensionVersion: validated.extensionVersion,
+        capabilities: validated.capabilities,
+      },
+    });
+  });
 }
 
 function getState(): ChromeRuntimeState {
@@ -108,7 +171,15 @@ function failPendingCommands(message: string): void {
   state.queue = [];
   for (const [commandId, pending] of state.pendingResults) {
     clearTimeout(pending.timeout);
-    pending.resolve({ commandId, ok: false, error: message });
+    pending.resolve({
+      protocol: JARVIS_REMOTE_PROTOCOL_VERSION,
+      commandId,
+      idempotencyKey: pending.command.idempotencyKey,
+      ok: false,
+      error: message,
+      completedAt: new Date().toISOString(),
+      idempotentReplay: false,
+    });
   }
   state.pendingResults.clear();
   state.completedCommandIds.clear();
@@ -127,6 +198,9 @@ export function pairChromeExtension(input: {
   code: string;
   extensionId: string;
   extensionName?: string;
+  protocol: unknown;
+  extensionVersion: unknown;
+  capabilities: unknown;
 }): { token: string; status: ChromeControlStatus } {
   const state = getState();
   const pairingCode = state.pairingCode;
@@ -141,6 +215,17 @@ export function pairChromeExtension(input: {
   if (!/^[a-p]{32}$/.test(input.extensionId)) {
     throw new Error('Invalid Chrome extension identifier.');
   }
+  if (input.protocol !== JARVIS_REMOTE_PROTOCOL_VERSION) {
+    throw new Error(`Chrome protocol ${String(input.protocol)} is incompatible with Jarvis protocol ${JARVIS_REMOTE_PROTOCOL_VERSION}. Update the extension.`);
+  }
+  if (typeof input.extensionVersion !== 'string' || !/^\d+\.\d+\.\d+$/.test(input.extensionVersion)) {
+    throw new Error('Chrome extension version is missing or invalid.');
+  }
+  const capabilities = Array.isArray(input.capabilities)
+    ? input.capabilities.filter((item): item is string => typeof item === 'string')
+    : [];
+  const missing = missingRemoteCapabilities(capabilities, REMOTE_CAPABILITIES.chrome);
+  if (missing.length > 0) throw new Error(`Chrome extension is missing required capabilities: ${missing.join(', ')}.`);
   if (!/^\d{6}$/.test(input.code) || input.code !== pairingCode.code) {
     pairingCode.failedAttempts += 1;
     throw new Error('Incorrect pairing code.');
@@ -152,6 +237,9 @@ export function pairChromeExtension(input: {
     extensionId: input.extensionId,
     extensionName: (input.extensionName || 'Jarvis Chrome').replace(/[^a-z0-9 ._()-]/gi, '').slice(0, 80),
     pairedAt: new Date().toISOString(),
+    protocol: JARVIS_REMOTE_PROTOCOL_VERSION,
+    extensionVersion: input.extensionVersion,
+    capabilities: [...new Set(capabilities)].sort().slice(0, 100),
   };
 
   failPendingCommands('Chrome was re-paired. Retry the command.');
@@ -168,11 +256,9 @@ export function revokeChromePairing(): void {
   state.pairing = null;
   state.pairingCode = null;
   state.lastSeenAt = 0;
-  try {
-    fs.unlinkSync(pairingPath());
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-  }
+  const database = getCoreStore().database;
+  const pairing = database.pairings.get('chrome-extension');
+  if (pairing) database.devices.delete(pairing.deviceId);
 }
 
 export function verifyChromeToken(token: string, extensionId?: string | null): boolean {
@@ -182,12 +268,21 @@ export function verifyChromeToken(token: string, extensionId?: string | null): b
   return safeEqualHex(tokenHash(token), pairing.tokenHash);
 }
 
+export function verifyChromeCompatibility(): boolean {
+  const pairing = getState().pairing;
+  return Boolean(
+    pairing &&
+    pairing.protocol === JARVIS_REMOTE_PROTOCOL_VERSION &&
+    missingRemoteCapabilities(pairing.capabilities, REMOTE_CAPABILITIES.chrome).length === 0
+  );
+}
+
 export function chromeControlStatus(): ChromeControlStatus {
   const state = getState();
   const pairing = state.pairing;
   return {
     paired: Boolean(pairing),
-    connected: Boolean(pairing) && Date.now() - state.lastSeenAt < ONLINE_WINDOW_MS,
+    connected: Boolean(pairing) && verifyChromeCompatibility() && Date.now() - state.lastSeenAt < ONLINE_WINDOW_MS,
     extensionName: pairing?.extensionName,
     extensionId: pairing?.extensionId,
     pairedAt: pairing?.pairedAt,
@@ -196,6 +291,10 @@ export function chromeControlStatus(): ChromeControlStatus {
       ? path.normalize(process.env.JARVIS_CHROME_EXTENSION_PATH)
       : path.join(process.cwd(), 'chrome-extension'),
     supportedEndpoints: ['http://127.0.0.1:3100', 'http://127.0.0.1:3000'],
+    protocol: JARVIS_REMOTE_PROTOCOL_VERSION,
+    compatible: verifyChromeCompatibility(),
+    extensionVersion: pairing?.extensionVersion,
+    capabilities: pairing?.capabilities ?? [],
   };
 }
 
@@ -300,36 +399,77 @@ export function createChromeCommand(actionValue: unknown, rawArgs: unknown): Chr
   const inputArgs = rawArgs && typeof rawArgs === 'object' && !Array.isArray(rawArgs)
     ? rawArgs as Record<string, unknown>
     : {};
+  const args = jsonObjectSchema.parse(normalizeCommandArgs(action, inputArgs));
+  const commandId = crypto.randomUUID();
+  const targetFingerprint = `sha256:${crypto.createHash('sha256')
+    .update(JSON.stringify({ action, tabId: args.tabId ?? null, url: args.url ?? null, selector: args.selector ?? null }))
+    .digest('hex')}`;
+  const capability = action === 'list_tabs' || action === 'status' || action === 'switch_tab' || action === 'close_tab' || action === 'open_tab'
+    ? 'browser.tabs'
+    : action === 'navigate' || action === 'back' || action === 'forward' || action === 'reload' || action === 'search'
+      ? 'browser.navigate'
+      : action === 'read_page' || action === 'find' || action === 'get_selected_text'
+        ? 'browser.page.read'
+        : action === 'screenshot'
+          ? 'browser.page.capture'
+          : action === 'click' || action === 'press_key'
+            ? 'browser.page.click'
+            : action === 'type'
+              ? 'browser.page.type'
+              : 'browser.page.scroll';
   return {
-    id: crypto.randomUUID(),
-    action,
-    args: normalizeCommandArgs(action, inputArgs),
-    createdAt: new Date().toISOString(),
+    protocol: JARVIS_REMOTE_PROTOCOL_VERSION,
+    commandId,
+    idempotencyKey: `chrome:${commandId}`,
+    capability,
+    deadline: new Date(Date.now() + COMMAND_TIMEOUT_MS).toISOString(),
+    targetFingerprint,
+    operation: action,
+    args,
+  };
+}
+
+function commandFailure(command: ChromeControlCommand, message: string): ChromeControlResult {
+  return {
+    protocol: JARVIS_REMOTE_PROTOCOL_VERSION,
+    commandId: command.commandId,
+    idempotencyKey: command.idempotencyKey,
+    ok: false,
+    error: message,
+    completedAt: new Date().toISOString(),
+    idempotentReplay: false,
   };
 }
 
 export function issueChromeCommand(command: ChromeControlCommand): Promise<ChromeControlResult> {
   const state = getState();
   if (!state.pairing) {
-    return Promise.resolve({ commandId: command.id, ok: false, error: 'Pair the Jarvis Chrome extension in Settings first.' });
+    return Promise.resolve(commandFailure(command, 'Pair the Jarvis Chrome extension in Settings first.'));
+  }
+  if (!verifyChromeCompatibility()) {
+    return Promise.resolve(commandFailure(command, 'The paired Chrome extension is incompatible. Reload and pair the packaged extension.'));
   }
   if (Date.now() - state.lastSeenAt >= ONLINE_WINDOW_MS) {
-    return Promise.resolve({ commandId: command.id, ok: false, error: 'The Jarvis Chrome extension is paired but offline. Open Chrome and the extension popup.' });
+    return Promise.resolve(commandFailure(command, 'The Jarvis Chrome extension is paired but offline. Open Chrome and the extension popup.'));
   }
   if (state.queue.length >= MAX_QUEUE_SIZE) {
-    return Promise.resolve({ commandId: command.id, ok: false, error: 'The Chrome command queue is full.' });
+    return Promise.resolve(commandFailure(command, 'The Chrome command queue is full.'));
   }
 
   return new Promise((resolve) => {
     const timeout = setTimeout(() => {
-      state.pendingResults.delete(command.id);
-      state.queue = state.queue.filter((queued) => queued.id !== command.id);
-      resolve({ commandId: command.id, ok: false, error: 'Chrome did not complete the command within 45 seconds.' });
+      state.pendingResults.delete(command.commandId);
+      state.queue = state.queue.filter((queued) => queued.commandId !== command.commandId);
+      resolve(commandFailure(command, 'Chrome did not complete the command within 45 seconds.'));
     }, COMMAND_TIMEOUT_MS);
-    state.pendingResults.set(command.id, { resolve, timeout });
+    state.pendingResults.set(command.commandId, { resolve, timeout, command, lastDeliveredAt: 0 });
 
     const waiter = state.pollWaiters.shift();
-    if (waiter) waiter(command);
+    if (waiter) {
+      const pending = state.pendingResults.get(command.commandId);
+      if (pending) pending.lastDeliveredAt = Date.now();
+      waiter(command);
+    }
     else state.queue.push(command);
   });
 }
@@ -338,7 +478,18 @@ export function pollChromeCommand(timeoutMs = 12_000, signal?: AbortSignal): Pro
   const state = getState();
   state.lastSeenAt = Date.now();
   const queued = state.queue.shift();
-  if (queued) return Promise.resolve(queued);
+  if (queued) {
+    const pending = state.pendingResults.get(queued.commandId);
+    if (pending) pending.lastDeliveredAt = Date.now();
+    return Promise.resolve(queued);
+  }
+  const redelivery = [...state.pendingResults.values()].find((pending) => (
+    pending.lastDeliveredAt > 0 && Date.now() - pending.lastDeliveredAt >= 2_000
+  ));
+  if (redelivery) {
+    redelivery.lastDeliveredAt = Date.now();
+    return Promise.resolve(redelivery.command);
+  }
 
   return new Promise((resolve) => {
     let finished = false;
@@ -367,19 +518,23 @@ export function completeChromeCommand(result: ChromeControlResult): boolean {
   const state = getState();
   state.lastSeenAt = Date.now();
   const completedBefore = Date.now() - 5 * 60_000;
-  for (const [commandId, completedAt] of state.completedCommandIds) {
-    if (completedAt < completedBefore) state.completedCommandIds.delete(commandId);
+  for (const [commandId, completed] of state.completedCommandIds) {
+    if (completed.completedAt < completedBefore) state.completedCommandIds.delete(commandId);
   }
   const pending = state.pendingResults.get(result.commandId);
-  if (!pending) return state.completedCommandIds.has(result.commandId);
+  if (!pending) {
+    const completed = state.completedCommandIds.get(result.commandId);
+    return completed?.idempotencyKey === result.idempotencyKey;
+  }
+  if (!remoteResultSchema.safeParse(result).success || result.idempotencyKey !== pending.command.idempotencyKey) return false;
 
   let safeResult = result;
   try {
     if (JSON.stringify(result).length > MAX_RESULT_BYTES) {
-      safeResult = { commandId: result.commandId, ok: false, error: 'Chrome returned more data than Jarvis accepts.' };
+      safeResult = commandFailure(pending.command, 'Chrome returned more data than Jarvis accepts.');
     }
   } catch {
-    safeResult = { commandId: result.commandId, ok: false, error: 'Chrome returned a non-serializable result.' };
+    safeResult = commandFailure(pending.command, 'Chrome returned a non-serializable result.');
   }
 
   clearTimeout(pending.timeout);
@@ -389,7 +544,10 @@ export function completeChromeCommand(result: ChromeControlResult): boolean {
     if (!oldest) break;
     state.completedCommandIds.delete(oldest);
   }
-  state.completedCommandIds.set(result.commandId, Date.now());
+  state.completedCommandIds.set(result.commandId, {
+    completedAt: Date.now(),
+    idempotencyKey: result.idempotencyKey,
+  });
   pending.resolve(safeResult);
   return true;
 }

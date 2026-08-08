@@ -16,6 +16,7 @@ import {
   SentenceCoalescer,
 } from './chatTools';
 import { emitError } from '@/frontend/lib/errorBus';
+import { resolveEnabledFunction } from '@/frontend/lib/dynamic-functions';
 import type { JarvisFunction } from '@/frontend/lib/functions';
 
 /**
@@ -49,6 +50,11 @@ export interface LocalSessionOptions {
   enabledFunctionNames: string[];
   /** Read at call time so dynamically loaded MCP/skill tools are included. */
   getFunctions: () => JarvisFunction[];
+  /**
+   * Runs a tool through capability policy. Returns the handler result, or an
+   * `{ error }` object when policy refused it.
+   */
+  executeTool: (name: string, args: Record<string, unknown>) => Promise<unknown>;
 }
 
 export interface LocalConversationCallbacks {
@@ -276,7 +282,7 @@ export function useLocalConversation(
 
       for (const call of toolCalls) {
         const name = call.function?.name ?? '';
-        const fn = options.getFunctions().find((f) => f.name === name);
+        const fn = resolveEnabledFunction(name, options.getFunctions(), new Set(options.enabledFunctionNames));
         let resultJson: string;
 
         if (!fn) {
@@ -286,7 +292,7 @@ export function useLocalConversation(
             // A hung handler must not stall the loop forever — busyRef would
             // stay true and the mic would be dead for the rest of the session.
             const result = await Promise.race([
-              Promise.resolve(fn.handler(parseToolArgs(call.function.arguments))),
+              options.executeTool(name, parseToolArgs(call.function.arguments)),
               new Promise((_, reject) =>
                 setTimeout(
                   () => reject(new Error(`${name}() timed out after ${TOOL_HANDLER_TIMEOUT_MS / 1000}s`)),

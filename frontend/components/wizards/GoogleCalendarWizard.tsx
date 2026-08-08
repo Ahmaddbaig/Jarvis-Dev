@@ -8,6 +8,15 @@ import {
   getScopeText,
   type GoogleServiceId,
 } from '@/shared/google-services';
+import { useQueryClient } from '@tanstack/react-query';
+import {
+  googleAuthStatusQueryOptions,
+  googleServicesStatusQueryOptions,
+  useGoogleServicesStatus,
+  type GoogleServiceStatus,
+  type GoogleServicesStatusResponse,
+} from '@/frontend/hooks/queries/useGoogleServicesStatus';
+import { desktopControlFetch } from '@/frontend/lib/desktopControlClient';
 
 interface GoogleCalendarWizardProps {
   onComplete: (connectedServices?: GoogleServiceId[]) => void;
@@ -35,26 +44,7 @@ interface CredentialsJson {
 interface ValidationResult {
   valid: boolean;
   error?: string;
-  data?: CredentialsJson;
-}
-
-interface GoogleServiceStatus {
-  id: GoogleServiceId;
-  label: string;
-  shortLabel: string;
-  serverName: string;
-  configured: boolean;
-  connected: boolean;
-  tools: number;
-  authenticated: boolean;
-  tokenPath: string | null;
-}
-
-interface GoogleServicesStatusResponse {
-  hasCredentials: boolean;
-  credentialsPath: string;
-  services: GoogleServiceStatus[];
-  error?: string;
+  data?: { clientId: string; projectId: string | null };
 }
 
 type AuthState =
@@ -87,7 +77,13 @@ function validateCredentialsFile(content: string): ValidationResult {
   }
 
   if (parsed.installed?.client_id && parsed.installed?.client_secret) {
-    return { valid: true, data: parsed };
+    return {
+      valid: true,
+      data: {
+        clientId: parsed.installed.client_id,
+        projectId: parsed.installed.project_id ?? null,
+      },
+    };
   }
 
   if (parsed.web?.client_id && parsed.web?.client_secret) {
@@ -272,20 +268,20 @@ const stepVariants = {
 };
 
 export function GoogleCalendarWizard({ onComplete, onSkip, onBack }: GoogleCalendarWizardProps) {
+  const queryClient = useQueryClient();
+  const statusQuery = useGoogleServicesStatus();
   const [currentStep, setCurrentStep] = useState(0);
   const [selectedIds, setSelectedIds] = useState<GoogleServiceId[]>(['calendar']);
   const [selectionTouched, setSelectionTouched] = useState(false);
-  const [serviceStatuses, setServiceStatuses] = useState<Record<GoogleServiceId, GoogleServiceStatus | undefined>>({
-    calendar: undefined,
-    gmail: undefined,
-  });
-  const [statusLoading, setStatusLoading] = useState(true);
-  const [statusError, setStatusError] = useState<string | null>(null);
-  const [hasCredentials, setHasCredentials] = useState(false);
-  const [credentialsPath, setCredentialsPath] = useState<string | null>(null);
+  const serviceStatuses = useMemo(() => Object.fromEntries(
+    (statusQuery.data?.services ?? []).map((service) => [service.id, service]),
+  ) as Record<GoogleServiceId, GoogleServiceStatus | undefined>, [statusQuery.data]);
+  const statusLoading = statusQuery.isPending || statusQuery.isFetching;
+  const statusError = statusQuery.error instanceof Error ? statusQuery.error.message : null;
+  const hasCredentials = statusQuery.data?.hasCredentials ?? false;
 
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
-  const [validatedData, setValidatedData] = useState<CredentialsJson | null>(null);
+  const [validatedData, setValidatedData] = useState<ValidationResult['data'] | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -311,15 +307,10 @@ export function GoogleCalendarWizard({ onComplete, onSkip, onBack }: GoogleCalen
   );
 
   const fetchGoogleStatus = useCallback(async (updateSelection = false): Promise<GoogleServicesStatusResponse> => {
-    const res = await fetch('/api/mcp/google-services');
-    const data = await res.json() as GoogleServicesStatusResponse;
-    if (!res.ok || data.error) {
-      throw new Error(data.error || 'Could not load Google service status.');
-    }
-
-    setHasCredentials(data.hasCredentials);
-    setCredentialsPath(data.credentialsPath);
-    setServiceStatuses(Object.fromEntries(data.services.map((service) => [service.id, service])) as Record<GoogleServiceId, GoogleServiceStatus>);
+    const data = await queryClient.fetchQuery({
+      ...googleServicesStatusQueryOptions(),
+      staleTime: 0,
+    });
 
     if (updateSelection && !selectionTouched) {
       const pending = data.services
@@ -329,28 +320,19 @@ export function GoogleCalendarWizard({ onComplete, onSkip, onBack }: GoogleCalen
     }
 
     return data;
-  }, [selectionTouched]);
+  }, [queryClient, selectionTouched]);
 
   useEffect(() => {
-    let alive = true;
-    const load = async () => {
-      setStatusLoading(true);
-      setStatusError(null);
-      try {
-        await fetchGoogleStatus(true);
-      } catch (err) {
-        if (alive) setStatusError(err instanceof Error ? err.message : String(err));
-      } finally {
-        if (alive) setStatusLoading(false);
-      }
-    };
-    load();
-    return () => { alive = false; };
-  }, [fetchGoogleStatus]);
+    if (!statusQuery.data || selectionTouched) return;
+    const pending = statusQuery.data.services
+      .filter((service) => !service.connected && !service.authenticated)
+      .map((service) => service.id);
+    setSelectedIds(getGoogleServiceIds(pending.length > 0 ? pending : ['calendar']));
+  }, [selectionTouched, statusQuery.data]);
 
   useEffect(() => {
     return () => {
-      fetch('/api/mcp/trigger-auth', { method: 'DELETE' }).catch(() => { /* ignore */ });
+      desktopControlFetch('/api/mcp/trigger-auth', { method: 'DELETE' }).catch(() => { /* ignore */ });
     };
   }, []);
 
@@ -390,7 +372,7 @@ export function GoogleCalendarWizard({ onComplete, onSkip, onBack }: GoogleCalen
     setValidatedData(result.data!);
     setIsUploading(true);
     try {
-      const res = await fetch('/api/mcp/credentials', {
+      const res = await desktopControlFetch('/api/mcp/credentials', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content }),
@@ -425,7 +407,7 @@ export function GoogleCalendarWizard({ onComplete, onSkip, onBack }: GoogleCalen
   }, []);
 
   const startService = useCallback(async (id: GoogleServiceId) => {
-    const res = await fetch('/api/mcp/google-services/start', {
+    const res = await desktopControlFetch('/api/mcp/google-services/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ serviceId: id }),
@@ -445,13 +427,12 @@ export function GoogleCalendarWizard({ onComplete, onSkip, onBack }: GoogleCalen
   const pollForAuth = useCallback(async (id: GoogleServiceId) => {
     for (let attempt = 0; attempt < 90; attempt++) {
       await delay(2000);
-      const res = await fetch(`/api/mcp/auth-status?service=${encodeURIComponent(id)}`);
-      const data = await res.json() as { authenticated?: boolean; error?: string };
-      if (!res.ok || data.error) throw new Error(data.error || `Could not check ${id} auth status.`);
+      const data = await queryClient.fetchQuery(googleAuthStatusQueryOptions(id));
+      if (data.error) throw new Error(data.error || `Could not check ${id} auth status.`);
       if (data.authenticated) return;
     }
     throw new Error('Authentication timed out. Complete Google sign-in in the browser, then retry this service.');
-  }, []);
+  }, [queryClient]);
 
   const runAuthForServices = useCallback(async (idsToRun: GoogleServiceId[]) => {
     if (idsToRun.length === 0) return;
@@ -511,7 +492,7 @@ export function GoogleCalendarWizard({ onComplete, onSkip, onBack }: GoogleCalen
           authUrl: undefined,
         });
 
-        const triggerRes = await fetch('/api/mcp/trigger-auth', {
+        const triggerRes = await desktopControlFetch('/api/mcp/trigger-auth', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ serviceId: id }),
@@ -556,7 +537,7 @@ export function GoogleCalendarWizard({ onComplete, onSkip, onBack }: GoogleCalen
         });
       } catch (err) {
         hadError = true;
-        await fetch('/api/mcp/trigger-auth', { method: 'DELETE' }).catch(() => { /* ignore */ });
+        await desktopControlFetch('/api/mcp/trigger-auth', { method: 'DELETE' }).catch(() => { /* ignore */ });
         updateProgress(id, {
           status: 'error',
           message: `${service?.shortLabel ?? id} failed.`,
@@ -855,7 +836,7 @@ export function GoogleCalendarWizard({ onComplete, onSkip, onBack }: GoogleCalen
                     <div className="flex items-center justify-between gap-4">
                       <div>
                         <div className="text-[11px] font-mono text-emerald-400 font-semibold">Shared credentials found</div>
-                        <div className="text-[9px] font-mono text-emerald-300/45 break-all mt-1">{credentialsPath}</div>
+                        <div className="text-[9px] font-mono text-emerald-300/45 mt-1">Stored in the operating-system credential vault</div>
                       </div>
                       <span className="text-[9px] font-mono text-emerald-400/70 uppercase tracking-wider">Ready</span>
                     </div>
@@ -889,7 +870,7 @@ export function GoogleCalendarWizard({ onComplete, onSkip, onBack }: GoogleCalen
                   </div>
                 )}
 
-                {uploadSuccess && validatedData?.installed && (
+                {uploadSuccess && validatedData && (
                   <div className="p-5 rounded-xl bg-emerald-500/[0.06] border border-emerald-500/20 space-y-3">
                     <div className="text-[11px] font-mono text-emerald-400 font-semibold">Credentials saved</div>
                     <div className="grid md:grid-cols-3 gap-3 pt-2 border-t border-emerald-500/10">
@@ -899,13 +880,13 @@ export function GoogleCalendarWizard({ onComplete, onSkip, onBack }: GoogleCalen
                       </div>
                       <div>
                         <div className="text-[8px] font-mono text-white/30 uppercase tracking-widest mb-1">Client ID</div>
-                        <div className="text-[10px] font-mono text-white/60 truncate" title={validatedData.installed.client_id}>
-                          {truncateClientId(validatedData.installed.client_id || '-')}
+                        <div className="text-[10px] font-mono text-white/60 truncate" title={validatedData.clientId}>
+                          {truncateClientId(validatedData.clientId)}
                         </div>
                       </div>
                       <div>
                         <div className="text-[8px] font-mono text-white/30 uppercase tracking-widest mb-1">Project</div>
-                        <div className="text-[10px] font-mono text-white/60 truncate">{savedProjectId || validatedData.installed.project_id || '-'}</div>
+                        <div className="text-[10px] font-mono text-white/60 truncate">{savedProjectId || validatedData.projectId || '-'}</div>
                       </div>
                     </div>
                   </div>

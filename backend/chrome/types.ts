@@ -21,19 +21,11 @@ export const CHROME_CONTROL_ACTIONS = [
 
 export type ChromeControlAction = (typeof CHROME_CONTROL_ACTIONS)[number];
 
-export interface ChromeControlCommand {
-  id: string;
-  action: ChromeControlAction;
-  args: Record<string, unknown>;
-  createdAt: string;
+export interface ChromeControlCommand extends RemoteCommand {
+  operation: ChromeControlAction;
 }
 
-export interface ChromeControlResult {
-  commandId: string;
-  ok: boolean;
-  result?: unknown;
-  error?: string;
-}
+export type ChromeControlResult = RemoteResult;
 
 export interface ChromeControlStatus {
   paired: boolean;
@@ -44,4 +36,9 @@ export interface ChromeControlStatus {
   lastSeen?: string;
   extensionPath: string;
   supportedEndpoints: string[];
+  protocol: number;
+  compatible: boolean;
+  extensionVersion?: string;
+  capabilities: string[];
 }
+import type { RemoteCommand, RemoteResult } from '@jarvis/contracts';

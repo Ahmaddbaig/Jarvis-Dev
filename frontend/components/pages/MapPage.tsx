@@ -7,6 +7,10 @@ import 'leaflet/dist/leaflet.css';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { MapSidePanel, SidePanelData } from './MapSidePanel';
+import { useQueryClient } from '@tanstack/react-query';
+import { geocodeQueryOptions } from '@/frontend/hooks/queries/useWeather';
+import { fetchJson } from '@/frontend/lib/query/fetchJson';
+import { queryKeys } from '@/frontend/lib/query/keys';
 
 // Fix broken default icon URLs caused by webpack asset hashing
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -39,12 +43,6 @@ export interface MapCommand {
   query?: string;
 }
 
-interface GeoResult {
-  lat: string;
-  lon: string;
-  display_name: string;
-}
-
 // ── Component ─────────────────────────────────────────────────────────────────
 
 interface Props {
@@ -55,6 +53,7 @@ interface Props {
 }
 
 export function MapPage({ onNavigateHome, pendingCommand, onPendingCommandConsumed }: Props) {
+  const queryClient = useQueryClient();
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
   const markersRef = useRef<L.Layer[]>([]);
@@ -124,15 +123,10 @@ export function MapPage({ onNavigateHome, pendingCommand, onPendingCommandConsum
 
   // ── Geocode helper ─────────────────────────────────────────────────────────
 
-  const geocode = useCallback(async (q: string): Promise<GeoResult | null> => {
-    const res = await fetch(`/api/geocode?q=${encodeURIComponent(q)}`);
-    const data = (await res.json().catch(() => null)) as GeoResult[] | { error?: string } | null;
-    if (!res.ok) {
-      throw new Error(!Array.isArray(data) && data?.error ? data.error : `Location search failed (${res.status}).`);
-    }
-    if (!Array.isArray(data)) throw new Error('Location search returned an invalid response.');
-    return data[0] ?? null;
-  }, []);
+  const geocode = useCallback(async (query: string) => {
+    const results = await queryClient.fetchQuery(geocodeQueryOptions(query, 5));
+    return results[0] ?? null;
+  }, [queryClient]);
 
   // ── Add marker helper ──────────────────────────────────────────────────────
 
@@ -229,16 +223,20 @@ export function MapPage({ onNavigateHome, pendingCommand, onPendingCommandConsum
         const endGeo = await geocode(endName);
         if (!endGeo) throw new Error(`No location found for “${endName}”.`);
 
-        const res = await fetch(
-          `/api/osrm-route?slng=${encodeURIComponent(startGeo.lon)}&slat=${encodeURIComponent(startGeo.lat)}&elng=${encodeURIComponent(endGeo.lon)}&elat=${encodeURIComponent(endGeo.lat)}`
-        );
-        const data = (await res.json().catch(() => null)) as {
+        const start = [Number(startGeo.lon), Number(startGeo.lat)] as const;
+        const end = [Number(endGeo.lon), Number(endGeo.lat)] as const;
+        const data = await queryClient.fetchQuery({
+          queryKey: queryKeys.routes.driving(start, end),
+          queryFn: ({ signal }) => fetchJson<{
           geometry?: { type: string; coordinates: [number, number][] };
           distanceMi?: string;
           durationMin?: number;
-          error?: string;
-        } | null;
-        if (!res.ok) throw new Error(data?.error || `Route request failed (${res.status}).`);
+          }>('/api/osrm-route?'
+            + `slng=${encodeURIComponent(startGeo.lon)}&slat=${encodeURIComponent(startGeo.lat)}`
+            + `&elng=${encodeURIComponent(endGeo.lon)}&elat=${encodeURIComponent(endGeo.lat)}`,
+          {}, signal),
+          staleTime: 5 * 60_000,
+        });
         if (!data?.geometry?.coordinates?.length) throw new Error('No driving route was found.');
 
         const latlngs = data.geometry.coordinates.map(([lng, lat]) => [lat, lng] as L.LatLngTuple);
@@ -265,7 +263,7 @@ export function MapPage({ onNavigateHome, pendingCommand, onPendingCommandConsum
         setSearching(false);
       }
     },
-    [geocode, addMarker]
+    [geocode, addMarker, queryClient]
   );
 
   // ── jarvis:map event handler ────────────────────────────────────────────────

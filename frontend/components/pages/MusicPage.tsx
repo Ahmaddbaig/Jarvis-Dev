@@ -1,38 +1,11 @@
 'use client';
 
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import { PageHeader } from '../PageHeader';
-
-interface TrackInfo {
-  app: string;
-  title: string;
-  artist: string;
-  album: string;
-  artworkUrl: string;
-  position: number;
-  duration: number;
-  isPlaying: boolean;
-}
-
-async function fetchNowPlaying(): Promise<TrackInfo | null> {
-  try {
-    const res = await fetch('/api/music');
-    const data = await res.json();
-    if (data.error) return null;
-    return data as TrackInfo;
-  } catch { return null; }
-}
-
-async function sendCommand(command: string, value?: number) {
-  try {
-    await fetch('/api/music', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ command, value }),
-    });
-  } catch {}
-}
+import { useQueryClient } from '@tanstack/react-query';
+import { queryKeys } from '@/frontend/lib/query/keys';
+import { useMusicCommand, useNowPlaying, type TrackInfo } from '@/frontend/hooks/queries/useMusic';
 
 function formatTime(secs: number) {
   const m = Math.floor(secs / 60), s = secs % 60;
@@ -42,30 +15,27 @@ function formatTime(secs: number) {
 interface Props { onNavigateHome: () => void }
 
 export function MusicPage({ onNavigateHome }: Props) {
-  const [track, setTrack]   = useState<TrackInfo | null>(null);
-  const [loading, setLoading] = useState(true);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const nowPlayingQuery = useNowPlaying();
+  const commandMutation = useMusicCommand();
+  const queryClient = useQueryClient();
+  const track = nowPlayingQuery.data ?? null;
+  const loading = nowPlayingQuery.isPending;
   // rotation angle (degrees) accumulated while playing
   const rotRef      = useRef(0);
   const rafRef      = useRef<number>(0);
   const lastTimeRef = useRef<number>(0);
   const [rotDeg, setRotDeg] = useState(0);
 
-  const refresh = useCallback(async () => {
-    const data = await fetchNowPlaying();
-    setTrack(data);
-    setLoading(false);
-  }, []);
-
-  useEffect(() => { refresh(); pollRef.current = setInterval(refresh, 6000); return () => { if (pollRef.current) clearInterval(pollRef.current); }; }, [refresh]);
-
   useEffect(() => {
-    const onUpdate  = (e: Event) => { const d = (e as CustomEvent<TrackInfo>).detail; if (d) setTrack(d); };
-    const onRefresh = () => refresh();
+    const onUpdate  = (event: Event) => {
+      const detail = (event as CustomEvent<TrackInfo>).detail;
+      if (detail) queryClient.setQueryData(queryKeys.music.nowPlaying(), detail);
+    };
+    const onRefresh = () => void queryClient.invalidateQueries({ queryKey: queryKeys.music.all });
     window.addEventListener('jarvis:music:update', onUpdate);
     window.addEventListener('jarvis:music:refresh', onRefresh);
     return () => { window.removeEventListener('jarvis:music:update', onUpdate); window.removeEventListener('jarvis:music:refresh', onRefresh); };
-  }, [refresh]);
+  }, [queryClient]);
 
   // Smooth rotation RAF — 33 RPM ≈ 0.198 deg/frame @60fps (we use 20s full turn = 18°/s)
   const isPlaying = track?.isPlaying ?? false;
@@ -88,11 +58,7 @@ export function MusicPage({ onNavigateHome }: Props) {
   }, [isPlaying]);
 
   const handleCommand = async (cmd: string) => {
-    await sendCommand(cmd);
-    if (cmd === 'playpause' || cmd === 'play' || cmd === 'pause') {
-      setTrack(prev => prev ? { ...prev, isPlaying: cmd === 'play' ? true : cmd === 'pause' ? false : !prev.isPlaying } : prev);
-    }
-    setTimeout(refresh, 600);
+    await commandMutation.mutateAsync({ command: cmd });
   };
 
   const progress = track && track.duration > 0 ? Math.min(100, (track.position / track.duration) * 100) : 0;

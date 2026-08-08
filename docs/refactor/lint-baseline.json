@@ -1,0 +1,16 @@
+{
+  "snapshotCommit": "893a7d8ad2a3b0f27f2b1d61c4ba9ae0e9cbb2a9",
+  "snapshotNote": "Ratcheted after the post-review fix pass. Budgets move downward only.",
+  "maxWarnings": 62,
+  "rules": {
+    "@next/next/no-img-element": 8,
+    "@typescript-eslint/no-explicit-any": 2,
+    "@typescript-eslint/no-unused-expressions": 1,
+    "@typescript-eslint/no-unused-vars": 14,
+    "react-hooks/exhaustive-deps": 6,
+    "react-hooks/immutability": 1,
+    "react-hooks/purity": 6,
+    "react-hooks/refs": 8,
+    "react-hooks/set-state-in-effect": 16
+  }
+}
