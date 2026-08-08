@@ -56,7 +56,7 @@ const jarvisSettingsBaseSchema = z.object({
   speechVocabulary: optionalBoundedString(8_192),
   elevenLabsAgentId: optionalBoundedString(512),
   elevenLabsFirstMessage: optionalBoundedString(8_192),
-  brainProvider: z.enum(['openai', 'claude']).optional(),
+  brainProvider: z.enum(['openai', 'claude', 'local']).optional(),
   chatModel: optionalBoundedString(256),
   voiceboxProfileId: optionalBoundedString(512),
   voicePlaybackRate: z.number().finite().min(0.5).max(2).optional(),
@@ -116,6 +116,7 @@ export const NON_SECRET_SERVER_SETTING_KEYS = [
   'bambu_token_exp',
   'jarvis_news_settings',
   'jarvis_voicebox_url',
+  'jarvis_ollama_url',
   'jarvis_gcal_wizard_skipped',
 ] as const;
 

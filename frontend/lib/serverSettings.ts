@@ -35,6 +35,7 @@ export type ServerSettings = {
 
   // Voicebox voice engine
   jarvis_voicebox_url?: string;    // default http://127.0.0.1:17493
+  jarvis_ollama_url?: string;      // local brain, default http://127.0.0.1:11434
 
   // Calendar onboarding
   jarvis_gcal_wizard_skipped?: string;

@@ -79,6 +79,7 @@ const REALTIME_TEXT_DONE_EVENTS = new Set([
 // tokens, and the reasoning-tier models think for seconds before speaking.
 const DEFAULT_OPENAI_CHAT_MODEL = 'gpt-4o-mini';
 const DEFAULT_CLAUDE_CHAT_MODEL = 'claude-haiku-4-5';
+const DEFAULT_LOCAL_CHAT_MODEL = 'qwen3.6:27b';
 
 const DEFAULT_SETTINGS: JarvisSettings = {
   schemaVersion: 1,
@@ -125,10 +126,13 @@ type ChatPanelProps = {
   online: boolean;
   sending: boolean;
   micMuted: boolean;
+  /** Whether a voice session is up; drives the START/END power toggle. */
+  powerOn: boolean;
   error: string | null;
   onChange: (value: string) => void;
   onSend: () => void;
   onToggleMic: () => void;
+  onTogglePower: () => void;
 };
 
 function ChatPanel({
@@ -137,10 +141,12 @@ function ChatPanel({
   online,
   sending,
   micMuted,
+  powerOn,
   error,
   onChange,
   onSend,
   onToggleMic,
+  onTogglePower,
 }: ChatPanelProps) {
   const historyRef = useRef<HTMLDivElement | null>(null);
 
@@ -183,6 +189,20 @@ function ChatPanel({
           onSend();
         }}
       >
+        <button
+          type="button"
+          onClick={onTogglePower}
+          aria-label={powerOn ? 'Take Jarvis offline' : 'Start Jarvis'}
+          aria-pressed={powerOn}
+          className={`h-10 shrink-0 rounded-lg border px-3 font-mono text-[10px] font-bold uppercase tracking-widest transition-colors ${
+            powerOn
+              ? 'border-red-500/60 bg-red-950/30 text-red-300 hover:bg-red-950/60'
+              : 'border-emerald-500/50 bg-emerald-950/30 text-emerald-300 hover:border-emerald-400'
+          }`}
+        >
+          {powerOn ? 'End' : 'Start'}
+        </button>
+
         <button
           type="button"
           onClick={onToggleMic}
@@ -1520,7 +1540,11 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
         provider,
         model:
           currentSettings.chatModel?.trim() ||
-          (provider === 'claude' ? DEFAULT_CLAUDE_CHAT_MODEL : DEFAULT_OPENAI_CHAT_MODEL),
+          (provider === 'claude'
+            ? DEFAULT_CLAUDE_CHAT_MODEL
+            : provider === 'local'
+              ? DEFAULT_LOCAL_CHAT_MODEL
+              : DEFAULT_OPENAI_CHAT_MODEL),
         // Same music routing as the Realtime/ElevenLabs engines; the hook's
         // system prompt already appends the navigate_to_page caveat.
         initialPrompt: buildAssistantInstructions(currentSettings.initialPrompt, currentSettings.speechVocabulary),
@@ -1690,11 +1714,13 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
       mode === 'local' ||
       (mode === 'elevenlabs' && !!settings.elevenLabsAgentId?.trim()) ||
       (mode === 'openai' && !!credentialStatus?.openaiApiKey) ||
-      // Voicebox engine needs the API key matching its brain provider
+      // Voicebox engine needs the API key matching its brain provider;
+      // the local (Ollama) brain needs none.
       (mode === 'voicebox' &&
-        (settings.brainProvider === 'claude'
-          ? !!credentialStatus?.anthropicApiKey
-          : !!credentialStatus?.openaiApiKey));
+        (settings.brainProvider === 'local' ||
+          (settings.brainProvider === 'claude'
+            ? !!credentialStatus?.anthropicApiKey
+            : !!credentialStatus?.openaiApiKey)));
 
     console.log(
       `%c[Jarvis] Auto-start effect fired at ${new Date().toLocaleTimeString()} — restartTrigger=${restartTrigger}, shouldStart=${shouldStart}, mode=${mode}`,
@@ -2056,10 +2082,19 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
           online={chatOnline}
           sending={chatSending}
           micMuted={micMuted}
+          powerOn={status === 'active' || status === 'listening'}
           error={chatError}
           onChange={setChatText}
           onSend={() => void sendTypedChat()}
           onToggleMic={() => setMicrophoneMuted(!micMutedRef.current)}
+          onTogglePower={() => {
+            sfx('click', 0.6);
+            if (status === 'active' || status === 'listening') {
+              disconnect();
+            } else {
+              start();
+            }
+          }}
         />
       )}
 

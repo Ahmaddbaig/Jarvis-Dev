@@ -21,9 +21,10 @@ import type { JarvisFunction } from '@/frontend/lib/functions';
 
 /**
  * Voicebox voice engine: Silero VAD (in-renderer) → whisper.cpp STT →
- * Claude or OpenAI chat with Jarvis tools → Voicebox TTS (the JARVIS voice).
- * Mirrors the surface of the ElevenLabs useConversation hook so
- * JarvisAssistant can drive either provider through the same voice profile.
+ * Claude, OpenAI, or local Ollama chat with Jarvis tools → Voicebox TTS
+ * (the JARVIS voice). Mirrors the surface of the ElevenLabs useConversation
+ * hook so JarvisAssistant can drive any provider through the same voice
+ * profile.
  */
 
 const VAD_SAMPLE_RATE = 16_000;
@@ -35,12 +36,12 @@ const TOOL_HANDLER_TIMEOUT_MS = 30_000;
 
 export type LocalConversationStatus = 'disconnected' | 'connecting' | 'connected';
 
-export type BrainProvider = 'openai' | 'claude';
+export type BrainProvider = 'openai' | 'claude' | 'local';
 
 export interface LocalSessionOptions {
   /** Brain provider for the chat model. */
   provider: BrainProvider;
-  /** Chat model, e.g. gpt-4o-mini or claude-opus-5. */
+  /** Chat model, e.g. gpt-4o-mini, claude-haiku-4-5, or qwen3.6:27b. */
   model: string;
   initialPrompt: string;
   firstMessage?: string;

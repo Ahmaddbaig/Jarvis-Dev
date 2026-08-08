@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
-import { getClaudeApiKey, getOpenAiApiKey } from '@/backend/localvoice/config';
+import { getClaudeApiKey, getOllamaUrl, getOpenAiApiKey } from '@/backend/localvoice/config';
 
 /**
  * Brain for the Voicebox voice engine: one chat round trip with optional
- * tools, against OpenAI or Claude depending on the selected provider.
+ * tools, against OpenAI, Claude, or a local Ollama model depending on the
+ * selected provider.
  *
  * POST streams NDJSON so the client can start TTS on the first sentence
  * while the model is still writing:
@@ -13,14 +14,23 @@ import { getClaudeApiKey, getOpenAiApiKey } from '@/backend/localvoice/config';
  *   {"t":"e","error":"..."} — mid-stream failure
  * Pre-stream failures (bad key, validation) return plain JSON with an error
  * status. The client drives the tool-call loop in OpenAI chat-completions
- * shapes; the Claude branch converts formats server-side. Keys stay
- * server-side.
+ * shapes; the Claude and Ollama branches convert formats server-side. Keys
+ * stay server-side; the local provider needs none.
  *
- * GET ?provider=openai|claude — health for the Settings UI: key configured?
+ * GET ?provider=openai|claude|local — health for the Settings UI: key
+ * configured, or for local, Ollama reachable (plus its installed models).
  */
 
 const OPENAI_CHAT_URL = 'https://api.openai.com/v1/chat/completions';
 const CHAT_TIMEOUT_MS = 60_000;
+// A local model may pay a multi-second cold load before its first token.
+const LOCAL_CHAT_TIMEOUT_MS = 180_000;
+// Ollama's default context cannot fit the Jarvis system prompt plus the tool
+// schemas; too small and the model silently loses the front of the transcript.
+const OLLAMA_NUM_CTX = 16_384;
+// Keep the model resident between turns so only the first question after
+// launch pays the load cost.
+const OLLAMA_KEEP_ALIVE = '30m';
 const MAX_MESSAGES = 128;
 const MAX_TOTAL_CHARS = 200_000;
 // Spoken replies are 1-3 sentences; tool calls are small. Claude output_config
@@ -29,7 +39,11 @@ const MAX_TOTAL_CHARS = 200_000;
 const CLAUDE_MAX_TOKENS = 2048;
 const CLAUDE_EFFORT = 'low';
 
-type Provider = 'openai' | 'claude';
+type Provider = 'openai' | 'claude' | 'local';
+
+function parseProvider(value: string | null | undefined): Provider {
+  return value === 'claude' ? 'claude' : value === 'local' ? 'local' : 'openai';
+}
 
 interface ChatToolCall {
   id?: string;
@@ -59,12 +73,42 @@ interface ChatRequestBody {
 type Emit = (event: Record<string, unknown>) => void;
 
 function keyForProvider(provider: Provider): string {
+  if (provider === 'local') return '';
   return provider === 'claude' ? getClaudeApiKey() : getOpenAiApiKey();
 }
 
+/** Reachability + installed models of the local Ollama server. */
+async function ollamaHealth(): Promise<{ ok: boolean; models: string[]; error?: string }> {
+  const baseUrl = getOllamaUrl();
+  try {
+    const res = await fetch(`${baseUrl}/api/tags`, { signal: AbortSignal.timeout(3_000) });
+    if (!res.ok) throw new Error(`status ${res.status}`);
+    const data = (await res.json()) as { models?: { name?: string }[] };
+    const models = (data.models ?? [])
+      .map((m) => m.name)
+      .filter((name): name is string => typeof name === 'string' && name.length > 0);
+    return {
+      ok: models.length > 0,
+      models,
+      error:
+        models.length > 0
+          ? undefined
+          : 'Ollama is running but has no models — run `ollama pull qwen3.6:27b`.',
+    };
+  } catch {
+    return {
+      ok: false,
+      models: [],
+      error: `Ollama is not reachable at ${baseUrl} — start the Ollama app or run \`ollama serve\`.`,
+    };
+  }
+}
+
 export async function GET(req: NextRequest) {
-  const provider: Provider =
-    req.nextUrl.searchParams.get('provider') === 'claude' ? 'claude' : 'openai';
+  const provider = parseProvider(req.nextUrl.searchParams.get('provider'));
+  if (provider === 'local') {
+    return NextResponse.json(await ollamaHealth());
+  }
   const hasKey = keyForProvider(provider).length > 0;
   const label = provider === 'claude' ? 'Claude (Anthropic)' : 'OpenAI';
   return NextResponse.json({
@@ -415,6 +459,179 @@ async function streamOpenAi(apiKey: string, body: ChatRequestBody, emit: Emit): 
   }
 }
 
+interface OllamaChatMessage {
+  role: string;
+  content: string;
+  tool_calls?: { function: { name: string; arguments: Record<string, unknown> } }[];
+}
+
+/**
+ * Convert OpenAI-style history to Ollama's native /api/chat shape: tool-call
+ * arguments become objects, and tool results carry role + content only (the
+ * native API has no tool_call_id).
+ */
+function toOllamaMessages(messages: ChatMessage[]): OllamaChatMessage[] {
+  return messages.map((m) => {
+    if (m.role === 'assistant' && (m.tool_calls?.length ?? 0) > 0) {
+      return {
+        role: 'assistant',
+        content: m.content ?? '',
+        tool_calls: (m.tool_calls ?? []).map((call) => {
+          const args = call.function.arguments;
+          let input: Record<string, unknown> = {};
+          if (typeof args === 'string') {
+            try {
+              input = JSON.parse(args) as Record<string, unknown>;
+            } catch {
+              input = {};
+            }
+          } else {
+            input = args ?? {};
+          }
+          return { function: { name: call.function.name, arguments: input } };
+        }),
+      };
+    }
+    return { role: m.role, content: m.content ?? '' };
+  });
+}
+
+async function streamOllama(baseUrl: string, body: ChatRequestBody, emit: Emit): Promise<void> {
+  const tools = Array.isArray(body.tools) ? body.tools : [];
+  const model = body.model!;
+
+  const send = (withThink: boolean) =>
+    fetch(`${baseUrl}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model,
+        messages: toOllamaMessages(body.messages!),
+        ...(tools.length > 0 ? { tools } : {}),
+        stream: true,
+        // Thinking would add seconds of silence before the first spoken
+        // sentence — voice replies need the answer, not the reasoning.
+        ...(withThink ? { think: false } : {}),
+        keep_alive: OLLAMA_KEEP_ALIVE,
+        options: { num_ctx: OLLAMA_NUM_CTX },
+      }),
+      signal: AbortSignal.timeout(LOCAL_CHAT_TIMEOUT_MS),
+    });
+
+  try {
+    let res = await send(true);
+    if (!res.ok) {
+      const text = await res.text();
+      let detail = '';
+      try {
+        detail = (JSON.parse(text) as { error?: string }).error ?? '';
+      } catch {
+        detail = text.slice(0, 200);
+      }
+      // Models without the thinking capability reject the `think` field.
+      if (/think/i.test(detail)) {
+        res = await send(false);
+      } else {
+        const friendly = /not found/i.test(detail)
+          ? `Model "${model}" is not installed — run \`ollama pull ${model}\`.`
+          : `Local model request failed (${res.status})${detail ? `: ${detail}` : ''}`;
+        console.error('[voice/chat] ollama', res.status, detail);
+        emit({ t: 'e', error: friendly });
+        return;
+      }
+    }
+    if (!res.ok || !res.body) {
+      const detail = await res.text().catch(() => '');
+      console.error('[voice/chat] ollama', res.status, detail.slice(0, 200));
+      emit({ t: 'e', error: `Local model request failed (${res.status})` });
+      return;
+    }
+
+    // Native /api/chat streams NDJSON: text arrives incrementally in
+    // message.content, tool calls as whole objects in message.tool_calls.
+    let content = '';
+    let streamError: string | null = null;
+    const calls: ChatToolCall[] = [];
+    const decoder = new TextDecoder();
+    const reader = res.body.getReader();
+    let buffer = '';
+
+    const handleLine = (line: string) => {
+      if (!line) return;
+      let parsed: {
+        message?: {
+          content?: string;
+          tool_calls?: {
+            id?: string;
+            function?: { name?: string; arguments?: Record<string, unknown> };
+          }[];
+        };
+        error?: string;
+      };
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        return;
+      }
+      if (parsed.error) {
+        streamError = parsed.error;
+        return;
+      }
+      const message = parsed.message;
+      if (typeof message?.content === 'string' && message.content) {
+        content += message.content;
+        emit({ t: 'd', text: message.content });
+      }
+      for (const tc of message?.tool_calls ?? []) {
+        if (!tc.function?.name) continue;
+        calls.push({
+          id: tc.id ?? `call_${calls.length}`,
+          type: 'function' as const,
+          // Stringified to match the OpenAI shape the client round-trips.
+          function: {
+            name: tc.function.name,
+            arguments: JSON.stringify(tc.function.arguments ?? {}),
+          },
+        });
+      }
+    };
+
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done || streamError) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
+      for (const line of lines) handleLine(line.trim());
+    }
+    if (!streamError && buffer.trim()) handleLine(buffer.trim());
+
+    if (streamError) {
+      console.error('[voice/chat] ollama', streamError);
+      emit({ t: 'e', error: `Local model error: ${streamError}` });
+      return;
+    }
+
+    emit({
+      t: 'm',
+      message: {
+        role: 'assistant',
+        content,
+        ...(calls.length > 0 ? { tool_calls: calls } : {}),
+      },
+    });
+  } catch (err) {
+    const isTimeout = err instanceof Error && err.name === 'TimeoutError';
+    console.error('[voice/chat] ollama', err instanceof Error ? err.message : err);
+    emit({
+      t: 'e',
+      error: isTimeout
+        ? 'The local model timed out.'
+        : `Ollama is not reachable at ${baseUrl} — start the Ollama app or run \`ollama serve\`.`,
+    });
+  }
+}
+
 export async function POST(req: NextRequest) {
   let body: ChatRequestBody;
   try {
@@ -428,9 +645,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: validationError }, { status: 400 });
   }
 
-  const provider: Provider = body.provider === 'claude' ? 'claude' : 'openai';
+  const provider = parseProvider(body.provider);
   const apiKey = keyForProvider(provider);
-  if (!apiKey) {
+  if (!apiKey && provider !== 'local') {
     const label = provider === 'claude' ? 'Claude (Anthropic)' : 'OpenAI';
     return NextResponse.json(
       { error: `No ${label} API key configured — add one in Settings.` },
@@ -447,6 +664,8 @@ export async function POST(req: NextRequest) {
       try {
         if (provider === 'claude') {
           await streamClaude(apiKey, body.model!, body.messages!, body.tools ?? [], emit);
+        } else if (provider === 'local') {
+          await streamOllama(getOllamaUrl(), body, emit);
         } else {
           await streamOpenAi(apiKey, body, emit);
         }

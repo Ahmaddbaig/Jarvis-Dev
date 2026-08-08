@@ -49,4 +49,11 @@ describe('hasUsableVoiceEngineConfig', () => {
       voiceboxProfileId: 'shared-jarvis-voice',
     }, false, { anthropicApiKey: true })).toBe(false);
   });
+
+  test('local Voicebox brain needs no API key', () => {
+    expect(hasUsableVoiceEngineConfig({
+      apiMode: 'voicebox',
+      brainProvider: 'local',
+    }, false, {})).toBe(true);
+  });
 });
