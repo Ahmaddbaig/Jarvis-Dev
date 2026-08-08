@@ -1,9 +1,13 @@
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import { getVoiceboxUrl } from './config';
 
 /**
  * Thin server-side client for the Voicebox REST API (local TTS/STT studio).
  * Only the endpoints Jarvis needs: profiles, generation queue, audio fetch.
  */
+
+const execFileAsync = promisify(execFile);
 
 const DEFAULT_PROFILE_NAME = 'Jarvis';
 const DEFAULT_PRESET_ENGINE = 'kokoro';
@@ -13,6 +17,10 @@ const GENERATION_POLL_INTERVAL_MS = 60;
 // MLX, which can take over a minute on a memory-pressured machine.
 const GENERATION_TIMEOUT_MS = 120_000;
 const REQUEST_TIMEOUT_MS = 15_000;
+// Cold app launch plus server boot; measured at roughly 20s on an M5 Pro.
+const LAUNCH_READY_TIMEOUT_MS = 30_000;
+const LAUNCH_POLL_INTERVAL_MS = 500;
+const LAUNCH_COOLDOWN_MS = 30_000;
 
 export interface VoiceboxProfile {
   id: string;
@@ -30,10 +38,51 @@ function api(pathname: string): string {
   return `${getVoiceboxUrl()}${pathname}`;
 }
 
+let launchAttemptedAt = 0;
+
+/**
+ * Voicebox only serves its API while the app is running, so a user who has
+ * simply quit it would otherwise get a failed reply rather than speech. Start
+ * it in the background (no window, no focus steal) and wait for the server.
+ *
+ * macOS-only because the launch is `open`-based; other platforms fall through
+ * to the original connection error. Rate-limited so a missing or broken
+ * install is not relaunched on every request.
+ */
+async function tryStartVoicebox(): Promise<boolean> {
+  if (process.platform !== 'darwin') return false;
+  if (Date.now() - launchAttemptedAt < LAUNCH_COOLDOWN_MS) return false;
+  launchAttemptedAt = Date.now();
+
+  try {
+    await execFileAsync('open', ['-gj', '-a', 'Voicebox']);
+  } catch {
+    return false; // Voicebox is not installed
+  }
+
+  const deadline = Date.now() + LAUNCH_READY_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, LAUNCH_POLL_INTERVAL_MS));
+    try {
+      const res = await fetch(api('/health'), { signal: AbortSignal.timeout(1_000) });
+      if (res.ok) return true;
+    } catch {
+      // still booting
+    }
+  }
+  return false;
+}
+
 export async function listProfiles(): Promise<VoiceboxProfile[]> {
-  const res = await fetch(api('/profiles'), {
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  });
+  // Retry only on a connection-level failure, so the common (already running)
+  // path costs nothing extra.
+  let res: Response;
+  try {
+    res = await fetch(api('/profiles'), { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+  } catch (err) {
+    if (!(await tryStartVoicebox())) throw err;
+    res = await fetch(api('/profiles'), { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+  }
   if (!res.ok) throw new Error(`Voicebox /profiles failed: ${res.status}`);
   const data = (await res.json()) as VoiceboxProfile[];
   return Array.isArray(data) ? data : [];

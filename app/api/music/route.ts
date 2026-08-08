@@ -9,6 +9,7 @@ import {
   getWindowsNowPlaying,
   isWindowsMediaHost,
 } from '@/backend/media/windowsMediaSession';
+import { searchDuckDuckGoHtml } from '@/backend/search/ddg-html-search';
 
 const execAsync = promisify(exec);
 
@@ -152,6 +153,28 @@ delay 0.2`);
   } finally {
     try { unlinkSync(screenshotPath); } catch { /* ignore cleanup errors */ }
   }
+}
+
+/**
+ * Resolve a search query to a Spotify URI (spotify:track:… etc.) without any
+ * UI scripting, via a keyless DuckDuckGo lookup of open.spotify.com pages.
+ */
+async function findSpotifyUri(query: string): Promise<string | null> {
+  try {
+    const results = await searchDuckDuckGoHtml(`site:open.spotify.com ${query}`, 8);
+    // Prefer entity types that reliably autoplay via Apple Events.
+    for (const type of ['track', 'album', 'playlist', 'artist'] as const) {
+      for (const r of results) {
+        const m = r.url.match(
+          new RegExp(`open\\.spotify\\.com/(?:intl-[a-z-]+/)?${type}/([A-Za-z0-9]{22})`)
+        );
+        if (m) return `spotify:${type}:${m[1]}`;
+      }
+    }
+  } catch (err) {
+    console.warn('[music] Spotify URI lookup failed:', err);
+  }
+  return null;
 }
 
 function spotifyTrackMatchesQuery(
@@ -374,6 +397,32 @@ export async function POST(req: NextRequest) {
         : '';
       if (!searchQuery) {
         return NextResponse.json({ error: 'Missing Spotify search query.' }, { status: 400 });
+      }
+
+      // Fast path — resolve to a Spotify URI and play it with pure Apple
+      // Events: no Accessibility permission, no focus steal, no robot clicks.
+      const uri = await findSpotifyUri(searchQuery);
+      if (uri) {
+        try {
+          await osaScript(`tell application "Spotify" to play track "${uri}"`);
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+          const track = await getNowPlaying('Spotify');
+          if (track?.isPlaying && spotifyTrackMatchesQuery(track, searchQuery)) {
+            return NextResponse.json({
+              success: true,
+              command,
+              query: searchQuery,
+              app: 'Spotify',
+              track,
+              method: 'uri',
+            });
+          }
+          console.warn(
+            `[music] URI fast path did not verify for "${searchQuery}" (uri: ${uri}) — falling back to UI scripting.`
+          );
+        } catch (err) {
+          console.warn('[music] URI fast path failed, falling back to UI scripting:', err);
+        }
       }
 
       const escapedQuery = JSON.stringify(searchQuery);
