@@ -97,7 +97,7 @@ export function JarvisSettingsSection({ settings, credentialStatus, onChange, on
             const descs  = {
               openai: 'Paid Realtime API',
               local: 'Free on this Mac',
-              voicebox: 'Claude or OpenAI + same cloned voice',
+              voicebox: 'Cloud or local brain + same cloned voice',
               elevenlabs: 'Hosted voice agent',
             };
             return (
@@ -294,7 +294,7 @@ export function JarvisSettingsSection({ settings, credentialStatus, onChange, on
           {/* Service status */}
           <div className="space-y-1 text-xs font-mono">
             <p className={brainStatus?.ok ? 'text-green-400' : 'text-red-400'}>
-              ● Brain ({brainProvider === 'claude' ? 'Claude API' : 'OpenAI API'}) {brainStatus === null ? '— checking…' : brainStatus.ok ? 'ready' : `not ready — ${brainStatus.error ?? 'no API key'}`}
+              ● Brain ({brainProvider === 'claude' ? 'Claude API' : brainProvider === 'local' ? 'Ollama on this Mac' : 'OpenAI API'}) {brainStatus === null ? '— checking…' : brainStatus.ok ? 'ready' : `not ready — ${brainStatus.error ?? 'no API key'}`}
             </p>
             <p className={voiceboxStatus?.ok ? 'text-green-400' : 'text-red-400'}>
               ● Voicebox {voiceboxStatus === null ? '— checking…' : voiceboxStatus.ok ? 'online' : `offline — ${voiceboxStatus.error ?? 'not reachable'}`}
@@ -307,19 +307,28 @@ export function JarvisSettingsSection({ settings, credentialStatus, onChange, on
               value={brainProvider}
               onChange={(e) => {
                 sfx('select', 0.5);
-                const provider = e.target.value === 'claude' ? 'claude' as const : 'openai' as const;
+                const provider = e.target.value === 'claude'
+                  ? 'claude' as const
+                  : e.target.value === 'local'
+                    ? 'local' as const
+                    : 'openai' as const;
                 setSettings({
                   ...settings,
                   brainProvider: provider,
                   // Reset to the provider's default model so a GPT model
                   // is never sent to the Claude API or vice versa.
-                  chatModel: provider === 'claude' ? 'claude-haiku-4-5' : 'gpt-4o-mini',
+                  chatModel: provider === 'claude'
+                    ? 'claude-haiku-4-5'
+                    : provider === 'local'
+                      ? 'qwen3.6:27b'
+                      : 'gpt-4o-mini',
                 });
               }}
               className="w-full bg-cyan-950/20 border border-cyan-500/30 rounded px-3 py-2 text-cyan-100 focus:outline-none focus:border-cyan-400 focus:shadow-[0_0_10px_rgba(34,211,238,0.3)] transition-all font-mono text-sm"
             >
               <option value="openai" className="bg-slate-900">OpenAI (GPT)</option>
               <option value="claude" className="bg-slate-900">Claude (Anthropic)</option>
+              <option value="local" className="bg-slate-900">Local (Ollama) — no API key</option>
             </select>
           </div>
 
@@ -350,14 +359,20 @@ export function JarvisSettingsSection({ settings, credentialStatus, onChange, on
 
           <div className="space-y-2">
             <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">
-              Brain Model ({brainProvider === 'claude' ? 'Claude' : 'OpenAI'})
+              Brain Model ({brainProvider === 'claude' ? 'Claude' : brainProvider === 'local' ? 'Ollama' : 'OpenAI'})
             </label>
             <div className="grid grid-cols-3 gap-2">
               {(brainProvider === 'claude'
                 ? ['claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5']
-                : ['gpt-4o-mini', 'gpt-4.1-mini', 'gpt-4o']
+                : brainProvider === 'local'
+                  ? (brainStatus?.models?.length ? brainStatus.models : ['qwen3.6:27b'])
+                  : ['gpt-4o-mini', 'gpt-4.1-mini', 'gpt-4o']
               ).map((model) => {
-                const fallback = brainProvider === 'claude' ? 'claude-haiku-4-5' : 'gpt-4o-mini';
+                const fallback = brainProvider === 'claude'
+                  ? 'claude-haiku-4-5'
+                  : brainProvider === 'local'
+                    ? 'qwen3.6:27b'
+                    : 'gpt-4o-mini';
                 const active = (settings.chatModel ?? fallback) === model;
                 return (
                   <button
@@ -376,15 +391,17 @@ export function JarvisSettingsSection({ settings, credentialStatus, onChange, on
             </div>
             <input
               type="text"
-              value={settings.chatModel ?? (brainProvider === 'claude' ? 'claude-haiku-4-5' : 'gpt-4o-mini')}
+              value={settings.chatModel ?? (brainProvider === 'claude' ? 'claude-haiku-4-5' : brainProvider === 'local' ? 'qwen3.6:27b' : 'gpt-4o-mini')}
               onChange={(e) => setSettings({ ...settings, chatModel: e.target.value })}
-              placeholder={brainProvider === 'claude' ? 'claude-haiku-4-5' : 'gpt-4o-mini'}
+              placeholder={brainProvider === 'claude' ? 'claude-haiku-4-5' : brainProvider === 'local' ? 'qwen3.6:27b' : 'gpt-4o-mini'}
               className="w-full bg-cyan-950/20 border border-cyan-500/30 rounded px-3 py-2 text-cyan-100 focus:outline-none focus:border-cyan-400 focus:shadow-[0_0_10px_rgba(34,211,238,0.3)] transition-all font-mono text-sm"
             />
             <p className="text-xs text-cyan-700">
               {brainProvider === 'claude'
                 ? 'Uses the Claude API key above. Any Claude model with tool calling works.'
-                : 'Uses the OpenAI API key above. Any chat model with tool calling works.'}
+                : brainProvider === 'local'
+                  ? 'Runs fully on this Mac through Ollama — no API key, no internet, no per-question cost. Pick a model with tool calling.'
+                  : 'Uses the OpenAI API key above. Any chat model with tool calling works.'}
             </p>
           </div>
 

@@ -7,6 +7,8 @@ import { queryKeys } from '@/frontend/lib/query/keys';
 export interface BrainStatus {
   ok: boolean;
   error?: string;
+  /** Installed Ollama models — only present for the local provider. */
+  models?: string[];
 }
 
 export interface VoiceProfileStatus {

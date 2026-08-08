@@ -5,7 +5,7 @@ export interface VoiceEngineConfig {
   apiKey?: string;
   localAIProfile?: string;
   elevenLabsAgentId?: string;
-  brainProvider?: 'openai' | 'claude';
+  brainProvider?: 'openai' | 'claude' | 'local';
   claudeApiKey?: string;
   chatModel?: string;
   voiceboxProfileId?: string;
@@ -43,6 +43,7 @@ export function hasUsableVoiceEngineConfig(
   if (mode === 'local') return allowLocalAI;
   if (mode === 'elevenlabs') return Boolean(config.elevenLabsAgentId?.trim());
   if (mode === 'voicebox') {
+    if (config.brainProvider === 'local') return true; // Ollama needs no key
     return config.brainProvider === 'claude'
       ? Boolean(credentialStatus.anthropicApiKey)
       : Boolean(credentialStatus.openaiApiKey);

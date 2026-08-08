@@ -79,6 +79,7 @@ const REALTIME_TEXT_DONE_EVENTS = new Set([
 // tokens, and the reasoning-tier models think for seconds before speaking.
 const DEFAULT_OPENAI_CHAT_MODEL = 'gpt-4o-mini';
 const DEFAULT_CLAUDE_CHAT_MODEL = 'claude-haiku-4-5';
+const DEFAULT_LOCAL_CHAT_MODEL = 'qwen3.6:27b';
 
 const DEFAULT_SETTINGS: JarvisSettings = {
   schemaVersion: 1,
@@ -1520,7 +1521,11 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
         provider,
         model:
           currentSettings.chatModel?.trim() ||
-          (provider === 'claude' ? DEFAULT_CLAUDE_CHAT_MODEL : DEFAULT_OPENAI_CHAT_MODEL),
+          (provider === 'claude'
+            ? DEFAULT_CLAUDE_CHAT_MODEL
+            : provider === 'local'
+              ? DEFAULT_LOCAL_CHAT_MODEL
+              : DEFAULT_OPENAI_CHAT_MODEL),
         // Same music routing as the Realtime/ElevenLabs engines; the hook's
         // system prompt already appends the navigate_to_page caveat.
         initialPrompt: buildAssistantInstructions(currentSettings.initialPrompt, currentSettings.speechVocabulary),
@@ -1690,11 +1695,13 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
       mode === 'local' ||
       (mode === 'elevenlabs' && !!settings.elevenLabsAgentId?.trim()) ||
       (mode === 'openai' && !!credentialStatus?.openaiApiKey) ||
-      // Voicebox engine needs the API key matching its brain provider
+      // Voicebox engine needs the API key matching its brain provider;
+      // the local (Ollama) brain needs none.
       (mode === 'voicebox' &&
-        (settings.brainProvider === 'claude'
-          ? !!credentialStatus?.anthropicApiKey
-          : !!credentialStatus?.openaiApiKey));
+        (settings.brainProvider === 'local' ||
+          (settings.brainProvider === 'claude'
+            ? !!credentialStatus?.anthropicApiKey
+            : !!credentialStatus?.openaiApiKey)));
 
     console.log(
       `%c[Jarvis] Auto-start effect fired at ${new Date().toLocaleTimeString()} — restartTrigger=${restartTrigger}, shouldStart=${shouldStart}, mode=${mode}`,
