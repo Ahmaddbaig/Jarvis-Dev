@@ -49,6 +49,8 @@ export const localAIBaseUrlSchema = z.string().url().max(2_048).superRefine((val
 const jarvisSettingsBaseSchema = z.object({
   schemaVersion: z.literal(JARVIS_SETTINGS_SCHEMA_VERSION).default(JARVIS_SETTINGS_SCHEMA_VERSION),
   apiMode: voiceEngineModeSchema,
+  /** What fills the main screen: classic HUD ring or the 3D notes galaxy. */
+  mainScreen: z.enum(['hud', 'galaxy']).optional(),
   realtimeModel: realtimeModelSchema.optional(),
   localAIProfile: localAIProfileSchema.optional(),
   localAIBaseUrl: localAIBaseUrlSchema.optional(),

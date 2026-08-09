@@ -42,6 +42,11 @@ export const PRESENTATION_TOOLS = Object.freeze([
     policy: { operation: 'jarvis_disconnect', capability: 'voice.session.control', risk: 'local-reversible', ability: 'voice', confirmation: 'never' },
   }),
   defineStaticTool({
+    handlerId: 'presentation.set_main_screen',
+    inputSchema: z.strictObject({ screen: z.enum(['hud', 'galaxy']) }),
+    policy: { operation: 'set_main_screen', capability: 'ui.main-screen.control', risk: 'local-reversible', ability: 'interface', confirmation: 'never' },
+  }),
+  defineStaticTool({
     handlerId: 'presentation.navigate_to_page',
     inputSchema: z.strictObject({
       page: z.enum(['home', 'news', 'calendar', 'home-assistant', '3d-printers', 'music']),

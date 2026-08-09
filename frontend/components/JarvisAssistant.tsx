@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useConversation } from '@elevenlabs/react';
+import dynamic from 'next/dynamic';
 import Image from 'next/image';
 import { AnimatePresence, motion } from 'framer-motion';
 import { SettingsModal, type JarvisSettingsDraft } from './SettingsModal';
@@ -17,6 +18,12 @@ import { ToolRuntime, type ToolConfirmationRequest } from '@/frontend/lib/tools/
 import { ToolConfirmationModal } from './ToolConfirmationModal';
 import { XrayWidget } from './XrayWidget';
 import { CameraWidget } from './CameraWidget';
+
+// three + 3d-force-graph are heavy; load only when the galaxy screen is on.
+const GalaxyScreen = dynamic(
+  () => import('./GalaxyScreen').then((m) => m.GalaxyScreen),
+  { ssr: false },
+);
 import { ArcReactorVisualizer } from './visualizers/ArcReactorVisualizer';
 import { SphereNodesVisualizer } from './visualizers/SphereNodesVisualizer';
 import { QuarterRingsVisualizer } from './visualizers/QuarterRingsVisualizer';
@@ -95,7 +102,8 @@ const DEFAULT_SETTINGS: JarvisSettings = {
   voicePlaybackRate: 0.8,
   voice: 'echo',
   initialPrompt: 'You are Jarvis, a helpful AI assistant. You are always helpful, polite, and concise. Subtle British accent. Robotic. Emotionally controlled. Witty and a little bit poking fun at the user.',
-  enabledFunctions: ['desktop_mode', 'navigate_to_page', 'jarvis_disconnect', 'play_spotify'],
+  enabledFunctions: ['desktop_mode', 'navigate_to_page', 'jarvis_disconnect', 'play_spotify', 'set_main_screen'],
+  mainScreen: 'hud',
   theme: 'arc-reactor',
   grid: 'off',
   visualizer: 'frequency-ring',
@@ -746,6 +754,20 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
 
     window.addEventListener('jarvis:desktop-mode', handler);
     return () => window.removeEventListener('jarvis:desktop-mode', handler);
+  }, [saveSettingsToServer, settings]);
+
+  // jarvis:set-main-screen — fired by the set_main_screen function tool
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const requested = (event as CustomEvent<{ screen?: string }>).detail?.screen;
+      const screen = requested === 'galaxy' ? 'galaxy' as const : 'hud' as const;
+      if ((settings.mainScreen ?? 'hud') === screen) return;
+      const updated = { ...settings, mainScreen: screen };
+      setSettings(updated);
+      saveSettingsToServer({ jarvis_settings: JSON.stringify(updated) });
+    };
+    window.addEventListener('jarvis:set-main-screen', handler);
+    return () => window.removeEventListener('jarvis:set-main-screen', handler);
   }, [saveSettingsToServer, settings]);
 
   // jarvis:self-disconnect — fired by jarvis_disconnect function tool
@@ -1778,6 +1800,8 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
 
   const pos = settings.position ?? 'center';
   const isCenter = pos === 'center';
+  // Galaxy main screen replaces the center ring; compact mode keeps the ring.
+  const galaxyMain = !compact && (settings.mainScreen ?? 'hud') === 'galaxy';
 
   // Flex alignment classes for each position
   const positionClass: Record<string, string> = {
@@ -1828,6 +1852,17 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
         />
       )}
 
+      {/* Galaxy main screen — full-viewport backdrop under the HUD layers */}
+      {galaxyMain && (
+        <GalaxyScreen
+          onOpenSettings={() => {
+            sfx('sfx_settings_open', 0.7);
+            setIsSettingsOpen(true);
+          }}
+        />
+      )}
+
+      {!galaxyMain && (
       <div className={`fixed inset-0 flex overflow-hidden pointer-events-none select-none ${
         compact
           ? 'items-end justify-end pb-6 pr-6 z-[60]'
@@ -2071,9 +2106,12 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
           )}
         </motion.div>
 
-        {/* Hidden Audio Element */}
-        <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />
       </div>
+      )}
+
+      {/* Hidden Audio Element — always mounted so the realtime engines keep
+          their sink even while the galaxy main screen hides the ring HUD */}
+      <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />
 
       {!compact && !isSettingsOpen && (
         <ChatPanel

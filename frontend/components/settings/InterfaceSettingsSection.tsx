@@ -17,6 +17,11 @@ const GRID_OPTIONS: { id: JarvisGrid; label: string }[] = [
   { id: 'large', label: 'Large' },
 ];
 
+const MAIN_SCREENS: { id: 'hud' | 'galaxy'; name: string; desc: string }[] = [
+  { id: 'hud', name: 'Arc Reactor HUD', desc: 'Classic ring visualizer and status readout' },
+  { id: 'galaxy', name: 'Knowledge Galaxy', desc: '3D star map of your markdown notes — widgets float on top' },
+];
+
 export function InterfaceSettingsSection({
   settings,
   onChange,
@@ -26,6 +31,39 @@ export function InterfaceSettingsSection({
 }) {
   return (
     <div className="space-y-7">
+      <div className="space-y-3">
+        <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">Main Screen</label>
+        <div className="grid grid-cols-2 gap-3">
+          {MAIN_SCREENS.map((screen) => {
+            const active = (settings.mainScreen ?? 'hud') === screen.id;
+            return (
+              <button
+                key={screen.id}
+                onClick={() => { sfx('select', 0.5); onChange({ ...settings, mainScreen: screen.id }); }}
+                className={`relative px-4 py-3 rounded border transition-all text-left ${
+                  active
+                    ? 'border-cyan-400/60 bg-cyan-500/10 shadow-[0_0_12px_rgba(34,211,238,0.25)]'
+                    : 'border-white/10 bg-transparent hover:border-white/20'
+                }`}
+              >
+                <span className={`block text-sm font-semibold tracking-wide ${active ? 'text-white' : 'text-white/50'}`}>
+                  {screen.name}
+                </span>
+                <span className="block mt-1 text-[11px] text-white/40 leading-snug">{screen.desc}</span>
+                {active && (
+                  <span className="absolute top-1.5 right-2 text-[10px] text-white/40 font-mono uppercase">
+                    Active
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+        <p className="text-xs text-cyan-700">
+          You can also just ask: &quot;Jarvis, show my knowledge galaxy&quot; / &quot;back to the HUD&quot;.
+        </p>
+      </div>
+
       <div className="space-y-3">
         <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">Theme</label>
         <div className="grid grid-cols-2 gap-3">

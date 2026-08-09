@@ -35,6 +35,7 @@ const EXPECTED_STATIC_TOOLS = [
   'find_datasheet',
   'desktop_mode',
   'jarvis_disconnect',
+  'set_main_screen',
   'navigate_to_page',
   'map_command',
   'calendar_command',

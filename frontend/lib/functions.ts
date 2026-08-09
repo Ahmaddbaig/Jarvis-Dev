@@ -1445,6 +1445,42 @@ const LEGACY_FUNCTION_REGISTRY: LegacyJarvisFunction[] = [
     },
   },
   {
+    name: 'set_main_screen',
+    label: 'Main Screen',
+    description: 'Switch the Jarvis main screen between the classic HUD ring and the 3D knowledge galaxy',
+    tool: {
+      type: 'function',
+      name: 'set_main_screen',
+      description:
+        'Change what fills the Jarvis main screen. "galaxy" shows the 3D knowledge galaxy — a star map of the user\'s markdown notes. "hud" restores the classic arc-reactor ring. ' +
+        'Call this when the user says things like "show my knowledge galaxy", "galaxy view", "switch to the galaxy", "show my notes as stars", or "back to the normal view", "show the HUD", "arc reactor view". ' +
+        'Do NOT call navigate_to_page for this — the galaxy is a main-screen mode, not a page.',
+      parameters: {
+        type: 'object',
+        properties: {
+          screen: {
+            type: 'string',
+            enum: ['hud', 'galaxy'],
+            description: '"galaxy" = 3D notes galaxy main screen. "hud" = classic arc-reactor ring.',
+          },
+        },
+        required: ['screen'],
+      },
+    },
+    handler: async (args) => {
+      const screen = args.screen === 'galaxy' ? 'galaxy' : 'hud';
+      window.dispatchEvent(new CustomEvent('jarvis:set-main-screen', { detail: { screen } }));
+      return {
+        success: true,
+        main_screen: screen,
+        instruction:
+          screen === 'galaxy'
+            ? 'The knowledge galaxy now fills the main screen — every markdown note is a star, clustered by folder. Acknowledge briefly in character.'
+            : 'The classic HUD is back on the main screen. Acknowledge briefly.',
+      };
+    },
+  },
+  {
     name: 'navigate_to_page',
     label: 'Navigate to Page',
     description: 'Switch Jarvis to a different view — e.g. open the live news feed and stock ticker',
