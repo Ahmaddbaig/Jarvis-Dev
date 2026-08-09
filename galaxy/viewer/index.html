@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Knowledge Galaxy</title>
+<style>
+  :root {
+    --cyan: #7dd8ff;
+    --cyan-dim: #2a6d8f;
+    --panel-bg: rgba(2, 10, 18, 0.88);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; overflow: hidden; background: #000004; }
+  body {
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    color: var(--cyan);
+    user-select: none;
+  }
+  #graph { position: fixed; inset: 0; }
+
+  .hud {
+    position: fixed;
+    z-index: 10;
+    background: var(--panel-bg);
+    border: 1px solid rgba(125, 216, 255, 0.28);
+    border-radius: 8px;
+    box-shadow: 0 0 18px rgba(60, 170, 255, 0.12);
+    backdrop-filter: blur(6px);
+  }
+
+  #topbar {
+    top: 16px; left: 16px;
+    padding: 10px 14px;
+    letter-spacing: 0.12em;
+  }
+  #topbar .title { font-size: 13px; font-weight: 700; text-transform: uppercase; }
+  #topbar .stats { font-size: 10px; color: rgba(125, 216, 255, 0.6); margin-top: 4px; }
+
+  #legend {
+    bottom: 16px; left: 16px;
+    padding: 10px 14px;
+    max-height: 40vh;
+    overflow-y: auto;
+    font-size: 10px;
+  }
+  #legend .row { display: flex; align-items: center; gap: 8px; margin: 3px 0; }
+  #legend .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; box-shadow: 0 0 6px currentColor; }
+  #legend .count { color: rgba(125, 216, 255, 0.5); margin-left: auto; padding-left: 12px; }
+
+  #reset {
+    top: 16px; right: 16px;
+    padding: 8px 14px;
+    font: inherit; font-size: 10px;
+    letter-spacing: 0.15em;
+    color: var(--cyan);
+    cursor: pointer;
+    text-transform: uppercase;
+    transition: background 0.2s;
+  }
+  #reset:hover { background: rgba(125, 216, 255, 0.12); }
+
+  #panel {
+    top: 64px; right: 16px;
+    width: min(360px, calc(100vw - 32px));
+    max-height: calc(100vh - 96px);
+    display: none;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  #panel.open { display: flex; }
+  #panel header {
+    display: flex; align-items: flex-start; gap: 10px;
+    padding: 14px 16px 10px;
+    border-bottom: 1px solid rgba(125, 216, 255, 0.18);
+  }
+  #panel h2 { font-size: 14px; letter-spacing: 0.06em; flex: 1; word-break: break-word; }
+  #panel .group-chip {
+    display: inline-block;
+    font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase;
+    padding: 2px 8px; margin-top: 6px;
+    border: 1px solid currentColor; border-radius: 999px;
+  }
+  #panel .path { font-size: 9px; color: rgba(125, 216, 255, 0.45); margin-top: 6px; word-break: break-all; }
+  #panel .close {
+    font: inherit; font-size: 14px; line-height: 1;
+    background: none; border: none; color: rgba(125, 216, 255, 0.6);
+    cursor: pointer; padding: 2px 4px;
+  }
+  #panel .close:hover { color: #fff; }
+  #panel .body { padding: 12px 16px 16px; overflow-y: auto; }
+  #panel .excerpt {
+    font-size: 11.5px; line-height: 1.65;
+    color: rgba(210, 240, 255, 0.88);
+    white-space: pre-wrap;
+    user-select: text;
+  }
+  #panel .neighbors-title {
+    font-size: 9px; letter-spacing: 0.15em; text-transform: uppercase;
+    color: rgba(125, 216, 255, 0.55);
+    margin: 16px 0 6px;
+  }
+  #panel .neighbor {
+    display: flex; align-items: center; gap: 8px;
+    width: 100%;
+    font: inherit; font-size: 11px; text-align: left;
+    color: var(--cyan);
+    background: none; border: none;
+    padding: 4px 2px;
+    cursor: pointer;
+    border-radius: 4px;
+  }
+  #panel .neighbor:hover { background: rgba(125, 216, 255, 0.1); }
+  #panel .neighbor .dot { width: 6px; height: 6px; border-radius: 50%; flex: none; box-shadow: 0 0 5px currentColor; }
+
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-thumb { background: rgba(125, 216, 255, 0.25); border-radius: 3px; }
+
+  .scene-tooltip {
+    font-family: "SF Mono", Menlo, monospace !important;
+    color: var(--cyan) !important;
+    font-size: 11px !important;
+  }
+</style>
+
+<script type="importmap">
+  { "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three/build/three.module.js",
+    "three/webgpu": "https://cdn.jsdelivr.net/npm/three/build/three.webgpu.js",
+    "three/tsl": "https://cdn.jsdelivr.net/npm/three/build/three.tsl.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three/examples/jsm/",
+    "three/examples/jsm/": "https://cdn.jsdelivr.net/npm/three/examples/jsm/"
+  }}
+</script>
+</head>
+<body>
+<div id="graph"></div>
+
+<div id="topbar" class="hud">
+  <div class="title">&#9672; Knowledge Galaxy</div>
+  <div class="stats" id="stats">loading…</div>
+</div>
+
+<button id="reset" class="hud" type="button">Reset view</button>
+
+<div id="legend" class="hud"></div>
+
+<aside id="panel" class="hud" aria-live="polite">
+  <header>
+    <div style="flex:1">
+      <h2 id="panel-title"></h2>
+      <span class="group-chip" id="panel-group"></span>
+      <div class="path" id="panel-path"></div>
+    </div>
+    <button class="close" id="panel-close" aria-label="Close">&#10005;</button>
+  </header>
+  <div class="body">
+    <div class="excerpt" id="panel-excerpt"></div>
+    <div class="neighbors-title" id="panel-neighbors-title"></div>
+    <div id="panel-neighbors"></div>
+  </div>
+</aside>
+
+<script src="graph-data.js"></script>
+<script type="module">
+import * as THREE from 'three';
+// esm.sh rewrites the library's bare imports (three-forcegraph, kapsule, …)
+// to absolute URLs; ?external=three keeps 'three' resolving through the
+// importmap above, so the graph and our starfield share ONE three instance.
+import ForceGraph3D from 'https://esm.sh/3d-force-graph?external=three';
+
+/* ---------- data prep ------------------------------------------------- */
+const nodes = GRAPH.nodes;
+const links = GRAPH.links;
+
+// Group → color, golden-angle hues so any number of folders stays distinct.
+const groups = [...new Set(nodes.map(n => n.group))].sort();
+// Comma syntax: valid CSS *and* parseable by THREE.Color (the modern
+// space-separated hsl() form silently falls back to white in three.js).
+const groupColor = new Map(groups.map((g, i) =>
+  [g, `hsl(${Math.round(i * 137.508) % 360}, 85%, 62%)`]));
+
+// Adjacency (by numeric id === index) for highlighting + the side panel.
+const neighbors = nodes.map(() => new Set());
+const nodeLinks = nodes.map(() => []);
+for (const l of links) {
+  neighbors[l.source].add(l.target);
+  neighbors[l.target].add(l.source);
+  nodeLinks[l.source].push(l);
+  nodeLinks[l.target].push(l);
+}
+const degree = i => neighbors[i].size;
+
+/* ---------- graph ------------------------------------------------------ */
+const idOf = end => typeof end === 'object' ? end.id : end;
+
+let selected = null;               // selected node object or null
+let hlNodes = new Set();           // ids
+let hlLinks = new Set();           // link objects
+
+const glowTexture = (() => {
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const ctx = c.getContext('2d');
+  const g = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+  g.addColorStop(0, 'rgba(255,255,255,1)');
+  g.addColorStop(0.1, 'rgba(255,255,255,0.9)');
+  g.addColorStop(0.32, 'rgba(255,255,255,0.45)');
+  g.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 128, 128);
+  return new THREE.CanvasTexture(c);
+})();
+
+const Graph = ForceGraph3D({ controlType: 'orbit' })(document.getElementById('graph'))
+  .backgroundColor('#000004')
+  .graphData({ nodes, links })
+  .nodeLabel(n => `${n.label}  ·  ${n.group}`)
+  .nodeThreeObject(node => {
+    const material = new THREE.SpriteMaterial({
+      map: glowTexture,
+      color: new THREE.Color(groupColor.get(node.group)),
+      transparent: true,
+      opacity: 1,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    const sprite = new THREE.Sprite(material);
+    const size = 7 + Math.sqrt(degree(node.id)) * 3.5;
+    sprite.scale.set(size, size, 1);
+    node.__mat = material;
+    node.__size = size;
+    node.__sprite = sprite;
+    return sprite;
+  })
+  .linkColor(link => selected
+    ? (hlLinks.has(link) ? 'rgba(140,240,255,0.95)' : 'rgba(90,140,255,0.05)')
+    : 'rgba(110,170,255,0.3)')
+  .linkWidth(link => hlLinks.has(link) ? 1.4 : 0.4)
+  .linkDirectionalParticles(link => hlLinks.has(link) ? 3 : 0)
+  .linkDirectionalParticleSpeed(0.006)
+  .linkDirectionalParticleWidth(1.8)
+  .onNodeClick(selectNode)
+  .onNodeHover(n => document.body.style.cursor = n ? 'pointer' : 'default')
+  .onBackgroundClick(clearSelection);
+
+Graph.cameraPosition({ x: 0, y: 0, z: 850 });
+
+// Frame the whole galaxy once the layout settles (plus a timed fallback in
+// case the engine keeps simmering past the first paint).
+// The library's built-in camera tweens don't run under this module combo,
+// so animate the camera by hand: rAF + easeInOutCubic over instant
+// cameraPosition() sets (those are reliable). autoRotate pauses during the
+// flight — OrbitControls would rewrite the camera every frame otherwise.
+let spinAfterFly = true;
+let flightId = 0;
+function flyTo(pos, lookAt, ms) {
+  const id = ++flightId;
+  const controls = Graph.controls();
+  controls.autoRotate = false;
+  const start = Graph.cameraPosition();
+  const from = {
+    x: start.x, y: start.y, z: start.z,
+    lx: start.lookAt.x, ly: start.lookAt.y, lz: start.lookAt.z,
+  };
+  const to = { x: pos.x, y: pos.y, z: pos.z, lx: lookAt.x, ly: lookAt.y, lz: lookAt.z };
+  const t0 = performance.now();
+  (function step(now) {
+    if (id !== flightId) return; // a newer flight superseded this one
+    const t = Math.min(1, (now - t0) / ms);
+    const e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    Graph.cameraPosition(
+      {
+        x: from.x + (to.x - from.x) * e,
+        y: from.y + (to.y - from.y) * e,
+        z: from.z + (to.z - from.z) * e,
+      },
+      {
+        x: from.lx + (to.lx - from.lx) * e,
+        y: from.ly + (to.ly - from.ly) * e,
+        z: from.lz + (to.lz - from.lz) * e,
+      },
+      0,
+    );
+    if (t < 1) requestAnimationFrame(step);
+    else setTimeout(() => { if (id === flightId) controls.autoRotate = spinAfterFly; }, 150);
+  })(t0);
+}
+
+let framed = false;
+function frameGalaxy(ms = 1800) {
+  framed = true;
+  const b = Graph.getGraphBbox();
+  if (!b) return;
+  const c = { x: (b.x[0] + b.x[1]) / 2, y: (b.y[0] + b.y[1]) / 2, z: (b.z[0] + b.z[1]) / 2 };
+  const radius = Math.max(b.x[1] - b.x[0], b.y[1] - b.y[0], b.z[1] - b.z[0], 60) / 2;
+  const cam = Graph.cameraPosition();
+  const d = { x: cam.x - c.x, y: cam.y - c.y, z: cam.z - c.z };
+  const len = Math.hypot(d.x, d.y, d.z) || 1;
+  const dist = radius * 2.6;
+  flyTo(
+    { x: c.x + (d.x / len) * dist, y: c.y + (d.y / len) * dist, z: c.z + (d.z / len) * dist },
+    c,
+    ms,
+  );
+}
+Graph.onEngineStop(() => { if (!framed) frameGalaxy(); });
+setTimeout(() => { if (!framed) frameGalaxy(); }, 4500);
+
+// Handle for the browser console and for later features (nodes are
+// addressable by index — GRAPH.nodes[i].id === i).
+window.Graph = Graph;
+window.GALAXY = { nodes, links, groupColor, selectNode: n => selectNode(n) };
+
+/* ---------- starfield --------------------------------------------------- */
+{
+  const COUNT = 6000;
+  const pos = new Float32Array(COUNT * 3);
+  const col = new Float32Array(COUNT * 3);
+  const tints = [
+    new THREE.Color('#ffffff'),
+    new THREE.Color('#bfd9ff'),
+    new THREE.Color('#9bd4ff'),
+    new THREE.Color('#ffe4b8'),
+  ];
+  for (let i = 0; i < COUNT; i++) {
+    // Random direction, pushed far beyond the graph so stars read as a sky.
+    const v = new THREE.Vector3().randomDirection()
+      .multiplyScalar(2200 + Math.random() * 2600);
+    pos.set([v.x, v.y, v.z], i * 3);
+    const t = tints[(Math.random() * tints.length) | 0];
+    const dim = 0.35 + Math.random() * 0.65;
+    col.set([t.r * dim, t.g * dim, t.b * dim], i * 3);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  const stars = new THREE.Points(geo, new THREE.PointsMaterial({
+    size: 2.4,
+    vertexColors: true,
+    transparent: true,
+    opacity: 0.9,
+    sizeAttenuation: true,
+    depthWrite: false,
+  }));
+  Graph.scene().add(stars);
+  (function drift() {
+    stars.rotation.y += 0.00012;
+    stars.rotation.x += 0.00003;
+    requestAnimationFrame(drift);
+  })();
+}
+
+/* ---------- idle camera drift ------------------------------------------ */
+const controls = Graph.controls();
+controls.autoRotate = true;
+controls.autoRotateSpeed = 0.4;
+let idleTimer = null;
+controls.addEventListener('start', () => {
+  controls.autoRotate = false;
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => { if (!selected) controls.autoRotate = true; }, 10_000);
+});
+
+/* ---------- selection & panel ------------------------------------------- */
+const panel = document.getElementById('panel');
+
+function selectNode(node) {
+  selected = node;
+  hlNodes = new Set([node.id, ...neighbors[node.id]]);
+  hlLinks = new Set(nodeLinks[node.id]);
+  spinAfterFly = false; // hold still while the note is open
+
+  // Fly the camera to sit just outside the node, looking at it.
+  const dist = 140;
+  const len = Math.hypot(node.x, node.y, node.z) || 1;
+  const ratio = 1 + dist / len;
+  flyTo(
+    { x: node.x * ratio, y: node.y * ratio, z: node.z * ratio },
+    { x: node.x, y: node.y, z: node.z },
+    1600,
+  );
+
+  updateVisuals();
+  renderPanel(node);
+}
+
+function clearSelection() {
+  if (!selected) return;
+  selected = null;
+  hlNodes = new Set();
+  hlLinks = new Set();
+  spinAfterFly = true;
+  panel.classList.remove('open');
+  updateVisuals();
+  idleTimer = setTimeout(() => { if (!selected) controls.autoRotate = true; }, 4000);
+}
+
+function updateVisuals() {
+  for (const n of nodes) {
+    if (!n.__mat) continue;
+    const active = !selected || hlNodes.has(n.id);
+    n.__mat.opacity = active ? 1 : 0.08;
+    const s = n.id === selected?.id ? n.__size * 1.6 : n.__size;
+    n.__sprite.scale.set(s, s, 1);
+  }
+  // Re-assign accessors so link materials/particles re-evaluate.
+  Graph
+    .linkColor(Graph.linkColor())
+    .linkWidth(Graph.linkWidth())
+    .linkDirectionalParticles(Graph.linkDirectionalParticles());
+}
+
+function renderPanel(node) {
+  const color = groupColor.get(node.group);
+  document.getElementById('panel-title').textContent = node.label;
+  const chip = document.getElementById('panel-group');
+  chip.textContent = node.group;
+  chip.style.color = color;
+  document.getElementById('panel-path').textContent = node.path;
+  document.getElementById('panel-excerpt').textContent =
+    node.excerpt || '(empty note)';
+
+  const ids = [...neighbors[node.id]];
+  document.getElementById('panel-neighbors-title').textContent =
+    ids.length ? `Linked notes — ${ids.length}` : 'No linked notes';
+  const list = document.getElementById('panel-neighbors');
+  list.replaceChildren(...ids
+    .sort((a, b) => degree(b) - degree(a))
+    .map(id => {
+      const n = nodes[id]; // id === index — guaranteed by build.py
+      const btn = document.createElement('button');
+      btn.className = 'neighbor';
+      const dot = document.createElement('span');
+      dot.className = 'dot';
+      dot.style.color = groupColor.get(n.group);
+      btn.append(dot, document.createTextNode(n.label));
+      btn.addEventListener('click', () => selectNode(n));
+      return btn;
+    }));
+  panel.classList.add('open');
+}
+
+document.getElementById('panel-close').addEventListener('click', clearSelection);
+document.addEventListener('keydown', e => { if (e.key === 'Escape') clearSelection(); });
+document.getElementById('reset').addEventListener('click', () => {
+  clearSelection();
+  frameGalaxy(1200);
+});
+
+/* ---------- HUD chrome --------------------------------------------------- */
+document.getElementById('stats').textContent =
+  `${nodes.length} notes · ${links.length} links · drag to orbit · click a star`;
+
+document.getElementById('legend').replaceChildren(...groups.map(g => {
+  const row = document.createElement('div');
+  row.className = 'row';
+  const dot = document.createElement('span');
+  dot.className = 'dot';
+  dot.style.color = groupColor.get(g);
+  dot.style.background = groupColor.get(g);
+  const name = document.createElement('span');
+  name.textContent = g;
+  const count = document.createElement('span');
+  count.className = 'count';
+  count.textContent = nodes.filter(n => n.group === g).length;
+  row.append(dot, name, count);
+  return row;
+}));
+
+window.addEventListener('resize', () =>
+  Graph.width(window.innerWidth).height(window.innerHeight));
+</script>
+</body>
+</html>
