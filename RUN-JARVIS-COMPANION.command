@@ -1,9 +1,10 @@
 #!/bin/zsh
 set -e
 
+# The companion lives in the apps/companion npm workspace; its dependencies
+# are hoisted into the repo-root node_modules, so everything runs from root.
 PROJECT_DIR="${0:A:h}"
-COMPANION_DIR="$PROJECT_DIR/scripts/companion"
-cd "$COMPANION_DIR"
+cd "$PROJECT_DIR"
 
 if ! command -v npm >/dev/null 2>&1; then
   print "Node.js is required. Install the current Node.js LTS release, then run this file again."
@@ -18,4 +19,4 @@ fi
 
 print "Starting Jarvis Companion..."
 print "Look for the Jarvis icon in the menu bar. Keep this Terminal window open."
-npm start
+npm run companion
