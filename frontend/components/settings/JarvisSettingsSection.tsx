@@ -4,9 +4,6 @@ import { useEffect, useState } from 'react';
 import type {
   CredentialKey,
   CredentialStatus,
-  JarvisLogo,
-  JarvisPosition,
-  JarvisVisualizer,
   RealtimeModel,
 } from '@jarvis/contracts';
 import type { JarvisSettingsDraft } from '../SettingsModal';
@@ -16,39 +13,6 @@ import {
   LOCAL_AI_PROFILES,
 } from '@/frontend/lib/localAIProfiles';
 import { useBrainStatus, useVoiceProfiles } from '@/frontend/hooks/queries/useVoiceModelStatus';
-
-const VISUALIZERS: { id: JarvisVisualizer; name: string; desc: string }[] = [
-  { id: 'frequency-ring', name: 'Frequency Ring', desc: 'FFT bars radiating from the logo rings' },
-  { id: 'arc-reactor', name: 'Arc Reactor', desc: 'Polar wave + segmented reactor rings' },
-  {
-    id: 'sphere-nodes',
-    name: 'Sphere Nodes',
-    desc: '3D orbiting nodes + FFT glitch; logo built from particles',
-  },
-  {
-    id: 'quarter-rings',
-    name: 'Quarter Rings',
-    desc: 'Sporadic quarter-arc rings orbiting the logo with oscillating spin',
-  },
-  {
-    id: 'original',
-    name: 'Original',
-    desc: 'Multi-layer HUD — tick rings, bump-outs, slot rings, yellow pendulum arc, sweep hand',
-  },
-];
-
-const LOGOS: { id: JarvisLogo; name: string; src: string }[] = [
-  { id: 'logo', name: 'Classic', src: '/assets/logo.png' },
-  { id: 'logo2', name: 'Variant', src: '/assets/logo2.png' },
-];
-
-const POSITIONS: { id: JarvisPosition; label: string; icon: string }[] = [
-  { id: 'top-left', label: 'Top Left', icon: '↖' },
-  { id: 'top-right', label: 'Top Right', icon: '↗' },
-  { id: 'center', label: 'Center', icon: '⊙' },
-  { id: 'bottom-left', label: 'Bottom Left', icon: '↙' },
-  { id: 'bottom-right', label: 'Bottom Right', icon: '↘' },
-];
 
 interface JarvisSettingsSectionProps {
   settings: JarvisSettingsDraft;
@@ -207,21 +171,6 @@ export function JarvisSettingsSection({ settings, credentialStatus, onChange, on
             </select>
             <p className="text-[10px] leading-relaxed text-cyan-700">
               For clearer recognition while wearing Bluetooth headphones, try selecting the MacBook microphone instead of the headset microphone.
-            </p>
-          </div>
-
-          <div className="space-y-2">
-            <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">Speech Vocabulary</label>
-            <textarea
-              value={settings.speechVocabulary ?? ''}
-              onChange={(e) => setSettings({ ...settings, speechVocabulary: e.target.value })}
-              placeholder="Skillet, Ahmad, Bambu Lab, project names, device names…"
-              rows={3}
-              maxLength={1000}
-              className="w-full resize-y bg-[#021118] border border-cyan-500/30 rounded px-3 py-2 text-cyan-100 focus:outline-none focus:border-cyan-400 font-mono text-sm"
-            />
-            <p className="text-[10px] leading-relaxed text-cyan-700">
-              Add names, artists, applications, devices, acronyms, and technical terms separated by commas or new lines. Local AI uses them as recognition hints for every ability.
             </p>
           </div>
 
@@ -502,91 +451,6 @@ export function JarvisSettingsSection({ settings, credentialStatus, onChange, on
         </div>
       )}
 
-      <div className="space-y-2">
-        <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">Voice Visualizer</label>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-          {VISUALIZERS.map((v) => {
-            const active = settings.visualizer === v.id;
-            return (
-              <button
-                key={v.id}
-                onClick={() => { sfx('select', 0.5); setSettings({ ...settings, visualizer: v.id }); }}
-                className={`flex flex-col items-start px-3 py-2.5 border rounded text-left transition-all ${
-                  active
-                    ? 'bg-cyan-500/20 border-cyan-400 shadow-[0_0_10px_rgba(34,211,238,0.2)]'
-                    : 'bg-transparent border-cyan-500/20 hover:border-cyan-500/50'
-                }`}
-              >
-                <span className={`text-xs font-bold uppercase tracking-wide ${active ? 'text-cyan-300' : 'text-cyan-600'}`}>
-                  {v.name}
-                </span>
-                <span className="text-[10px] text-white/30 mt-0.5 leading-tight">{v.desc}</span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      <div className="space-y-2">
-        <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">Center Logo</label>
-        <div className="grid grid-cols-2 gap-2">
-          {LOGOS.map((l) => {
-            const active = (settings.logo ?? 'logo') === l.id;
-            return (
-              <button
-                key={l.id}
-                onClick={() => { sfx('select', 0.5); setSettings({ ...settings, logo: l.id }); }}
-                className={`flex flex-col items-center gap-2 px-3 py-3 border rounded transition-all ${
-                  active
-                    ? 'bg-cyan-500/20 border-cyan-400 shadow-[0_0_10px_rgba(34,211,238,0.2)]'
-                    : 'bg-transparent border-cyan-500/20 hover:border-cyan-500/50'
-                }`}
-              >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={l.src} alt={l.name} className="w-24 h-24 object-contain opacity-90" />
-                <span className={`text-xs font-bold uppercase tracking-wide ${active ? 'text-cyan-300' : 'text-cyan-600'}`}>
-                  {l.name}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      <div className="space-y-2">
-        <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">Position</label>
-        <div className="grid grid-cols-3 gap-2">
-          {POSITIONS.map((p) => {
-            const active = (settings.position ?? 'center') === p.id;
-            return (
-              <button
-                key={p.id}
-                onClick={() => { sfx('select', 0.5); setSettings({ ...settings, position: p.id }); }}
-                className={`flex flex-col items-center gap-1 px-2 py-2.5 border rounded transition-all ${
-                  active
-                    ? 'bg-cyan-500/20 border-cyan-400 shadow-[0_0_10px_rgba(34,211,238,0.2)]'
-                    : 'bg-transparent border-cyan-500/20 hover:border-cyan-500/50'
-                } ${p.id === 'center' ? 'col-start-2' : ''}`}
-              >
-                <span className={`text-base leading-none ${active ? 'text-cyan-300' : 'text-cyan-600'}`}>{p.icon}</span>
-                <span className={`text-[10px] font-bold uppercase tracking-wide leading-tight text-center ${active ? 'text-cyan-300' : 'text-cyan-600'}`}>
-                  {p.label}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      <div className="space-y-2">
-        <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">Initial Protocol (Prompt)</label>
-        <textarea
-          value={settings.initialPrompt}
-          onChange={(e) => setSettings({ ...settings, initialPrompt: e.target.value })}
-          rows={4}
-          className="w-full bg-cyan-950/20 border border-cyan-500/30 rounded px-3 py-2 text-cyan-100 focus:outline-none focus:border-cyan-400 focus:shadow-[0_0_10px_rgba(34,211,238,0.3)] transition-all font-mono text-sm resize-none"
-        />
-      </div>
     </>
   );
 }

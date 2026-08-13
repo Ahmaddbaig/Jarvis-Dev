@@ -50,6 +50,8 @@ import {
   acquireMicrophone,
   buildAssistantInstructions,
   buildTranscriptionPrompt,
+  DEFAULT_JARVIS_PERSONA,
+  migrateLegacyPersona,
   createLocalAIRealtimeAdapter,
   createOpenAIRealtimeAdapter,
   probeMicrophonePermission,
@@ -94,7 +96,7 @@ const DEFAULT_SETTINGS: JarvisSettings = {
   chatModel: DEFAULT_OPENAI_CHAT_MODEL,
   voicePlaybackRate: 0.8,
   voice: 'echo',
-  initialPrompt: 'You are Jarvis, a helpful AI assistant. You are always helpful, polite, and concise. Subtle British accent. Robotic. Emotionally controlled. Witty and a little bit poking fun at the user.',
+  initialPrompt: DEFAULT_JARVIS_PERSONA,
   enabledFunctions: ['desktop_mode', 'navigate_to_page', 'jarvis_disconnect', 'play_spotify'],
   theme: 'arc-reactor',
   grid: 'off',
@@ -972,6 +974,9 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
             const parsed = { ...migrated };
             delete parsed.apiKey;
             delete parsed.claudeApiKey;
+            // Stored stock personas upgrade to the current default; custom
+            // prompts are kept as-is.
+            parsed.initialPrompt = migrateLegacyPersona(parsed.initialPrompt);
             const result = jarvisSettingsPatchSchema.safeParse(parsed);
             if (!result.success) {
               console.warn('[Jarvis] Ignored invalid settings source:', result.error.issues);

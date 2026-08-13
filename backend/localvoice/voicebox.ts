@@ -1,5 +1,8 @@
-import { execFile } from 'child_process';
+import { execFile, spawn } from 'child_process';
 import { promisify } from 'util';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import { getVoiceboxUrl } from './config';
 
 /**
@@ -44,10 +47,65 @@ function api(pathname: string): string {
 
 let launchAttemptedAt = 0;
 
+const VOICEBOX_SERVER_BIN = '/Applications/Voicebox.app/Contents/MacOS/voicebox-server';
+const VOICEBOX_DATA_DIR = path.join(
+  os.homedir(),
+  'Library',
+  'Application Support',
+  'sh.voicebox.app',
+);
+
+/**
+ * Preferred launch path: the Voicebox app bundles a headless `voicebox-server`
+ * binary (the same one its GUI spawns). Running it directly serves the REST
+ * API with no window and no Dock icon, so speech works without the Voicebox
+ * app ever visibly opening. `--parent-pid` ties its lifetime to this Jarvis
+ * server, so quitting Jarvis does not leave a multi-gigabyte TTS process
+ * behind.
+ */
+function trySpawnHeadlessServer(): boolean {
+  if (!fs.existsSync(VOICEBOX_SERVER_BIN)) return false;
+  let port = '17493';
+  try {
+    port = new URL(getVoiceboxUrl()).port || port;
+  } catch {
+    // keep the default port
+  }
+  try {
+    const child = spawn(
+      VOICEBOX_SERVER_BIN,
+      ['--data-dir', VOICEBOX_DATA_DIR, '--port', port, '--parent-pid', String(process.pid)],
+      { detached: true, stdio: 'ignore' },
+    );
+    child.unref();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Best-effort fallback when the GUI app had to be launched: ask System Events
+ * to hide the Voicebox window. Needs the Automation/Accessibility permission;
+ * failures are silently ignored because speech still works with the window
+ * visible.
+ */
+function hideVoiceboxApp(): void {
+  execFile(
+    'osascript',
+    ['-e', 'tell application "System Events" to set visible of process "Voicebox" to false'],
+    () => {
+      /* ignore — permission may be missing */
+    },
+  );
+}
+
 /**
  * Voicebox only serves its API while the app is running, so a user who has
  * simply quit it would otherwise get a failed reply rather than speech. Start
- * it in the background (no window, no focus steal) and wait for the server.
+ * the bundled headless server (no window, no Dock icon); if that binary is
+ * missing, fall back to launching the app hidden and re-hiding it, because
+ * the app forces its window visible once it finishes booting.
  *
  * macOS-only because the launch is `open`-based; other platforms fall through
  * to the original connection error. Rate-limited so a missing or broken
@@ -58,18 +116,29 @@ async function tryStartVoicebox(): Promise<boolean> {
   if (Date.now() - launchAttemptedAt < LAUNCH_COOLDOWN_MS) return false;
   launchAttemptedAt = Date.now();
 
-  try {
-    await execFileAsync('open', ['-gj', '-a', 'Voicebox']);
-  } catch {
-    return false; // Voicebox is not installed
+  const headless = trySpawnHeadlessServer();
+  if (!headless) {
+    try {
+      await execFileAsync('open', ['-gj', '-a', 'Voicebox']);
+    } catch {
+      return false; // Voicebox is not installed
+    }
   }
 
   const deadline = Date.now() + LAUNCH_READY_TIMEOUT_MS;
+  let polls = 0;
   while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, LAUNCH_POLL_INTERVAL_MS));
+    // The GUI un-hides itself at an unpredictable point during its ~20s boot,
+    // so keep tucking it away while we wait (every ~2s).
+    if (!headless && polls % 4 === 0) hideVoiceboxApp();
+    polls += 1;
     try {
       const res = await fetch(api('/health'), { signal: AbortSignal.timeout(1_000) });
-      if (res.ok) return true;
+      if (res.ok) {
+        if (!headless) hideVoiceboxApp();
+        return true;
+      }
     } catch {
       // still booting
     }

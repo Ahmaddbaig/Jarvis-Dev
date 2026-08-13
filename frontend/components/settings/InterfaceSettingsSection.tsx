@@ -1,6 +1,13 @@
 'use client';
 
-import type { JarvisGrid, JarvisSettings, JarvisTheme } from '@jarvis/contracts';
+import type {
+  JarvisGrid,
+  JarvisLogo,
+  JarvisPosition,
+  JarvisSettings,
+  JarvisTheme,
+  JarvisVisualizer,
+} from '@jarvis/contracts';
 import { sfx } from '@/frontend/lib/sfx';
 
 const THEMES: { id: JarvisTheme; name: string; accent: string; glow: string }[] = [
@@ -15,6 +22,39 @@ const GRID_OPTIONS: { id: JarvisGrid; label: string }[] = [
   { id: 'small', label: 'Small' },
   { id: 'medium', label: 'Medium' },
   { id: 'large', label: 'Large' },
+];
+
+const VISUALIZERS: { id: JarvisVisualizer; name: string; desc: string }[] = [
+  { id: 'frequency-ring', name: 'Frequency Ring', desc: 'FFT bars radiating from the logo rings' },
+  { id: 'arc-reactor', name: 'Arc Reactor', desc: 'Polar wave + segmented reactor rings' },
+  {
+    id: 'sphere-nodes',
+    name: 'Sphere Nodes',
+    desc: '3D orbiting nodes + FFT glitch; logo built from particles',
+  },
+  {
+    id: 'quarter-rings',
+    name: 'Quarter Rings',
+    desc: 'Sporadic quarter-arc rings orbiting the logo with oscillating spin',
+  },
+  {
+    id: 'original',
+    name: 'Original',
+    desc: 'Multi-layer HUD — tick rings, bump-outs, slot rings, yellow pendulum arc, sweep hand',
+  },
+];
+
+const LOGOS: { id: JarvisLogo; name: string; src: string }[] = [
+  { id: 'logo', name: 'Classic', src: '/assets/logo.png' },
+  { id: 'logo2', name: 'Variant', src: '/assets/logo2.png' },
+];
+
+const POSITIONS: { id: JarvisPosition; label: string; icon: string }[] = [
+  { id: 'top-left', label: 'Top Left', icon: '↖' },
+  { id: 'top-right', label: 'Top Right', icon: '↗' },
+  { id: 'center', label: 'Center', icon: '⊙' },
+  { id: 'bottom-left', label: 'Bottom Left', icon: '↙' },
+  { id: 'bottom-right', label: 'Bottom Right', icon: '↘' },
 ];
 
 export function InterfaceSettingsSection({
@@ -79,6 +119,82 @@ export function InterfaceSettingsSection({
                 }`}
               >
                 {option.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="space-y-3">
+        <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">Voice Visualizer</label>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+          {VISUALIZERS.map((v) => {
+            const active = settings.visualizer === v.id;
+            return (
+              <button
+                key={v.id}
+                onClick={() => { sfx('select', 0.5); onChange({ ...settings, visualizer: v.id }); }}
+                className={`flex flex-col items-start px-3 py-2.5 border rounded text-left transition-all ${
+                  active
+                    ? 'bg-cyan-500/20 border-cyan-400 shadow-[0_0_10px_rgba(34,211,238,0.2)]'
+                    : 'bg-transparent border-cyan-500/20 hover:border-cyan-500/50'
+                }`}
+              >
+                <span className={`text-xs font-bold uppercase tracking-wide ${active ? 'text-cyan-300' : 'text-cyan-600'}`}>
+                  {v.name}
+                </span>
+                <span className="text-[10px] text-white/30 mt-0.5 leading-tight">{v.desc}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="space-y-3">
+        <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">Center Logo</label>
+        <div className="grid grid-cols-2 gap-2">
+          {LOGOS.map((l) => {
+            const active = (settings.logo ?? 'logo') === l.id;
+            return (
+              <button
+                key={l.id}
+                onClick={() => { sfx('select', 0.5); onChange({ ...settings, logo: l.id }); }}
+                className={`flex flex-col items-center gap-2 px-3 py-3 border rounded transition-all ${
+                  active
+                    ? 'bg-cyan-500/20 border-cyan-400 shadow-[0_0_10px_rgba(34,211,238,0.2)]'
+                    : 'bg-transparent border-cyan-500/20 hover:border-cyan-500/50'
+                }`}
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={l.src} alt={l.name} className="w-24 h-24 object-contain opacity-90" />
+                <span className={`text-xs font-bold uppercase tracking-wide ${active ? 'text-cyan-300' : 'text-cyan-600'}`}>
+                  {l.name}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="space-y-3">
+        <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">Position</label>
+        <div className="grid grid-cols-3 gap-2">
+          {POSITIONS.map((p) => {
+            const active = (settings.position ?? 'center') === p.id;
+            return (
+              <button
+                key={p.id}
+                onClick={() => { sfx('select', 0.5); onChange({ ...settings, position: p.id }); }}
+                className={`flex flex-col items-center gap-1 px-2 py-2.5 border rounded transition-all ${
+                  active
+                    ? 'bg-cyan-500/20 border-cyan-400 shadow-[0_0_10px_rgba(34,211,238,0.2)]'
+                    : 'bg-transparent border-cyan-500/20 hover:border-cyan-500/50'
+                } ${p.id === 'center' ? 'col-start-2' : ''}`}
+              >
+                <span className={`text-base leading-none ${active ? 'text-cyan-300' : 'text-cyan-600'}`}>{p.icon}</span>
+                <span className={`text-[10px] font-bold uppercase tracking-wide leading-tight text-center ${active ? 'text-cyan-300' : 'text-cyan-600'}`}>
+                  {p.label}
+                </span>
               </button>
             );
           })}

@@ -59,6 +59,24 @@ if [[ ! -x "$electron_binary" ]]; then
   exit 1
 fi
 
+# Brand the dev Electron shell as "Jarvis" so starting Jarvis does not look
+# like an unrelated "Electron" app opening in the Dock. Modifying Info.plist
+# invalidates the ad-hoc signature, so re-sign; on failure restore the
+# original names to keep the bundle launchable.
+brand_plist="$electron_app/Contents/Info.plist"
+if [[ -f "$brand_plist" ]] && \
+   [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$brand_plist" 2>/dev/null)" != "Jarvis" ]]; then
+  echo "Branding the development Electron shell as Jarvis..."
+  /usr/libexec/PlistBuddy -c 'Set :CFBundleDisplayName Jarvis' "$brand_plist" 2>/dev/null || true
+  /usr/libexec/PlistBuddy -c 'Set :CFBundleName Jarvis' "$brand_plist" 2>/dev/null || true
+  if ! codesign --force --deep --sign - "$electron_app" >/dev/null 2>&1; then
+    echo "Re-signing failed; keeping the stock Electron branding."
+    /usr/libexec/PlistBuddy -c 'Set :CFBundleDisplayName Electron' "$brand_plist" 2>/dev/null || true
+    /usr/libexec/PlistBuddy -c 'Set :CFBundleName Electron' "$brand_plist" 2>/dev/null || true
+    codesign --force --deep --sign - "$electron_app" >/dev/null 2>&1 || true
+  fi
+fi
+
 echo "Starting Jarvis Dev from the editable source code..."
 echo "Close this Terminal window or press Control-C to stop it."
 
