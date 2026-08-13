@@ -191,11 +191,42 @@ function ChatPanel({
   onTogglePower,
 }: ChatPanelProps) {
   const historyRef = useRef<HTMLDivElement | null>(null);
+  // Collapsed state is per-session so the panel stays out of the way once
+  // dismissed but returns after a real restart.
+  const [collapsed, setCollapsed] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return sessionStorage.getItem('jarvis_chat_collapsed') === '1';
+  });
+  const [seenCount, setSeenCount] = useState(0);
+
+  const setCollapsedPersisted = (next: boolean) => {
+    setCollapsed(next);
+    if (next) setSeenCount(messages.length);
+    try {
+      sessionStorage.setItem('jarvis_chat_collapsed', next ? '1' : '0');
+    } catch { /* private-mode storage — non-critical */ }
+  };
 
   useEffect(() => {
     const history = historyRef.current;
     if (history) history.scrollTop = history.scrollHeight;
   }, [messages]);
+
+  if (collapsed) {
+    const unread = messages.length > seenCount;
+    return (
+      <button
+        type="button"
+        onClick={() => setCollapsedPersisted(false)}
+        aria-label="Open Jarvis chat"
+        className="fixed bottom-5 right-5 z-[80] flex items-center gap-2 rounded-full border border-cyan-500/40 bg-black/85 px-4 py-2.5 font-mono text-[10px] font-bold uppercase tracking-widest text-cyan-400 shadow-[0_0_18px_rgba(var(--accent-rgb),0.18)] backdrop-blur-md transition-colors hover:border-cyan-400 hover:text-cyan-300"
+      >
+        {unread && <span className="h-2 w-2 rounded-full bg-cyan-400 shadow-[0_0_8px_rgba(34,211,238,0.8)]" />}
+        Chat
+        {error && <span className="h-2 w-2 rounded-full bg-red-500" />}
+      </button>
+    );
+  }
 
   return (
     <section
@@ -288,7 +319,17 @@ function ChatPanel({
         <span className={online ? 'text-emerald-400/70' : 'text-white/35'}>
           {online ? 'Text link ready · voice reply enabled' : 'Jarvis is offline'}
         </span>
-        {error && <span className="ml-3 normal-case text-red-400">{error}</span>}
+        <span className="flex items-center gap-3">
+          {error && <span className="normal-case text-red-400">{error}</span>}
+          <button
+            type="button"
+            onClick={() => setCollapsedPersisted(true)}
+            aria-label="Hide Jarvis chat"
+            className="text-cyan-600 transition-colors hover:text-cyan-300"
+          >
+            Hide ▾
+          </button>
+        </span>
       </div>
     </section>
   );
@@ -1680,6 +1721,7 @@ export function JarvisAssistant({ compact = false, roundDisplay = false }: { com
         initialPrompt: buildAssistantInstructions(currentSettings.initialPrompt, currentSettings.speechVocabulary) + memoryDigest,
         firstMessage: currentSettings.localFirstMessage?.trim() || undefined,
         voiceProfileId: currentSettings.voiceboxProfileId?.trim() || undefined,
+        microphoneDeviceId: currentSettings.microphoneDeviceId?.trim() || undefined,
         playbackRate: currentSettings.voicePlaybackRate,
         enabledFunctionNames: currentSettings.enabledFunctions,
         getFunctions: () => (dynamicState.loaded ? dynamicState.allFunctions : FUNCTION_REGISTRY),

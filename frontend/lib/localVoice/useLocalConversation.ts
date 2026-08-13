@@ -46,6 +46,12 @@ export interface LocalSessionOptions {
   initialPrompt: string;
   firstMessage?: string;
   voiceProfileId?: string;
+  /**
+   * Specific input device from Settings → Voice. Without it the VAD listens
+   * on the system-default microphone, which silently hears nothing when the
+   * default is a Bluetooth headset or virtual device.
+   */
+  microphoneDeviceId?: string;
   /** Pitch-preserving playback speed for Voicebox speech. */
   playbackRate?: number;
   enabledFunctionNames: string[];
@@ -464,6 +470,21 @@ export function useLocalConversation(
         baseAssetPath: VAD_ASSET_PATH,
         onnxWASMBasePath: VAD_ASSET_PATH,
         startOnLoad: false,
+        // Honor the microphone chosen in Settings; otherwise the library's
+        // default stream (system-default device) is used.
+        ...(options.microphoneDeviceId
+          ? {
+              getStream: () =>
+                navigator.mediaDevices.getUserMedia({
+                  audio: {
+                    deviceId: { exact: options.microphoneDeviceId },
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true,
+                  },
+                }),
+            }
+          : {}),
         onSpeechEnd: (audio: Float32Array) => {
           if (mutedRef.current || busyRef.current) return;
           // The mic inevitably hears Jarvis through the speakers. While he

@@ -155,25 +155,6 @@ export function JarvisSettingsSection({ settings, credentialStatus, onChange, on
             </p>
           </div>
 
-          <div className="space-y-2">
-            <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">Microphone Input</label>
-            <select
-              value={settings.microphoneDeviceId ?? ''}
-              onChange={(e) => setSettings({ ...settings, microphoneDeviceId: e.target.value })}
-              className="w-full bg-[#021118] border border-cyan-500/30 rounded px-3 py-2 text-cyan-100 focus:outline-none focus:border-cyan-400 font-mono text-sm"
-            >
-              <option value="">System default microphone</option>
-              {audioInputs.map((device, index) => (
-                <option key={device.deviceId} value={device.deviceId}>
-                  {device.label || `Microphone ${index + 1}`}
-                </option>
-              ))}
-            </select>
-            <p className="text-[10px] leading-relaxed text-cyan-700">
-              For clearer recognition while wearing Bluetooth headphones, try selecting the MacBook microphone instead of the headset microphone.
-            </p>
-          </div>
-
           <p className="text-[10px] leading-relaxed text-cyan-600 border border-cyan-500/20 bg-cyan-950/20 rounded px-3 py-2">
             Local voice: Kokoro British male — a more natural, calm synthetic voice. It is Jarvis-inspired, not a clone of an actor&apos;s voice.
           </p>
@@ -426,6 +407,30 @@ export function JarvisSettingsSection({ settings, credentialStatus, onChange, on
             />
             <p className="text-xs text-cyan-700">Spoken when the session starts. Leave empty for silence.</p>
           </div>
+        </div>
+      )}
+
+      {/* Microphone — both on-device listening engines (Local AI and Voicebox) */}
+      {((settings.apiMode ?? 'openai') === 'local' || settings.apiMode === 'voicebox') && (
+        <div className="space-y-2">
+          <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">Microphone Input</label>
+          <select
+            value={settings.microphoneDeviceId ?? ''}
+            onChange={(e) => setSettings({ ...settings, microphoneDeviceId: e.target.value })}
+            className="w-full bg-[#021118] border border-cyan-500/30 rounded px-3 py-2 text-cyan-100 focus:outline-none focus:border-cyan-400 font-mono text-sm"
+          >
+            <option value="">System default microphone</option>
+            {audioInputs.map((device, index) => (
+              <option key={device.deviceId} value={device.deviceId}>
+                {device.label || `Microphone ${index + 1}`}
+              </option>
+            ))}
+          </select>
+          <p className="text-[10px] leading-relaxed text-cyan-700">
+            If Jarvis does not react to your voice, pick the MacBook microphone here — the
+            system default is often a Bluetooth headset or virtual device that arrives silent.
+            Changes apply the next time the session starts.
+          </p>
         </div>
       )}
 
