@@ -11,7 +11,7 @@ import {
   type CredentialPatch,
   type JarvisSettings,
 } from '@jarvis/contracts';
-import { FUNCTION_REGISTRY, getFunctionByName, JarvisFunction } from '@/frontend/lib/functions';
+import { FUNCTION_REGISTRY, getFunctionByName, getMemoryAccountId, JarvisFunction } from '@/frontend/lib/functions';
 import { createGetFunctionByName, resolveEnabledFunction } from '@/frontend/lib/dynamic-functions';
 import { ToolRuntime, type ToolConfirmationRequest } from '@/frontend/lib/tools/runtime';
 import { ToolConfirmationModal } from './ToolConfirmationModal';
@@ -24,6 +24,8 @@ import { OriginalVisualizer } from './visualizers/OriginalVisualizer';
 import { PhotoWidget, PhotoEntry } from './PhotoWidget';
 import { sfx } from '@/frontend/lib/sfx';
 import { installErrorInterceptors, emitError } from '@/frontend/lib/errorBus';
+import { ModelViewerWidget } from '@/frontend/components/ModelViewerWidget';
+import { isInterfaceLocked } from '@/frontend/components/LockScreen';
 import { useSaveServerSettings, useServerSettings } from '@/frontend/hooks/queries/useServerSettings';
 import { useSaveCredentials } from '@/frontend/hooks/queries/useCredentials';
 import { desktopControlFetch } from '@/frontend/lib/desktopControlClient';
@@ -83,6 +85,41 @@ const DEFAULT_OPENAI_CHAT_MODEL = 'gpt-4o-mini';
 const DEFAULT_CLAUDE_CHAT_MODEL = 'claude-haiku-4-5';
 const DEFAULT_LOCAL_CHAT_MODEL = 'qwen3.6:27b';
 
+// Tools that remain usable while the PIN lock screen is active
+const LOCK_ALLOWED_FUNCTIONS = new Set(['get_time', 'get_date', 'jarvis_disconnect', 'lock_interface']);
+
+const LOCKED_RESULT = {
+  error: 'The interface is locked. Tell the user the interface is in lockdown and the PIN must be entered on screen to unlock it.',
+};
+
+/** Feed the COMMS LOG TranscriptWidget with user/assistant utterances. */
+function dispatchTranscript(role: 'user' | 'jarvis', text: string): void {
+  if (!text?.trim()) return;
+  window.dispatchEvent(new CustomEvent('jarvis:transcript', { detail: { role, text } }));
+}
+
+/**
+ * Long-term memory digest appended to the assistant instructions at session
+ * start. Pre-loading it means Jarvis opens the conversation already knowing
+ * the user instead of having to call `recall` before it can say anything
+ * useful. A missing memory store must never block the voice session.
+ */
+async function fetchMemoryDigestBlock(): Promise<string> {
+  try {
+    const accountId = getMemoryAccountId();
+    const res = await fetch(`/api/memory?accountId=${encodeURIComponent(accountId)}&limit=30`, {
+      cache: 'no-store',
+    });
+    if (!res.ok) return '';
+    const data = await res.json() as { digest?: string };
+    const digest = data.digest?.trim();
+    if (!digest) return '';
+    return `\n\nLong-term memory digest (facts you remember about the user from previous conversations):\n${digest}`;
+  } catch {
+    return '';
+  }
+}
+
 const DEFAULT_SETTINGS: JarvisSettings = {
   schemaVersion: 1,
   apiMode: 'openai',
@@ -97,7 +134,10 @@ const DEFAULT_SETTINGS: JarvisSettings = {
   voicePlaybackRate: 0.8,
   voice: 'echo',
   initialPrompt: DEFAULT_JARVIS_PERSONA,
-  enabledFunctions: ['desktop_mode', 'navigate_to_page', 'jarvis_disconnect', 'play_spotify'],
+  enabledFunctions: [
+    'desktop_mode', 'navigate_to_page', 'jarvis_disconnect', 'play_spotify',
+    'lock_interface', 'set_timer', 'set_reminder', 'hud_layout', 'briefing', 'set_theme', 'ambient_mode',
+  ],
   theme: 'arc-reactor',
   grid: 'off',
   visualizer: 'frequency-ring',
@@ -263,7 +303,7 @@ function isDesktopPanelPosition(value: unknown): value is DesktopPanelPosition {
   );
 }
 
-export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
+export function JarvisAssistant({ compact = false, roundDisplay = false }: { compact?: boolean; roundDisplay?: boolean }) {
   const voiceSession = useJarvisVoice();
   const serverSettingsQuery = useServerSettings();
   const { mutate: saveSettingsToServer, mutateAsync: saveSettingsToServerAsync } = useSaveServerSettings();
@@ -282,6 +322,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
   const remoteStreamRef = useRef<MediaStream | null>(null);
   const [ring1Rotation, setRing1Rotation] = useState(0);
   const [ring2Rotation, setRing2Rotation] = useState(0);
+  const [centerWidget, setCenterWidget] = useState<{ type: 'model'; path: string; name: string } | null>(null);
   const rotationFrameRef = useRef<number | null>(null);
   const lastTimeRef = useRef<number>(Date.now());
   const dataChannelRef = useRef<RTCDataChannel | null>(null);
@@ -323,6 +364,10 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
   function appendChatMessage(role: ChatMessage['role'], rawText: string): void {
     const text = rawText.trim();
     if (!text) return;
+
+    // Feed the COMMS LOG transcript widget — every engine routes its
+    // user/assistant utterances through this single chokepoint.
+    dispatchTranscript(role === 'user' ? 'user' : 'jarvis', text);
 
     setChatMessages((current) => {
       const previous = current[current.length - 1];
@@ -398,6 +443,11 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     args: Record<string, unknown>,
     source: 'model' | 'user',
   ): Promise<unknown> => {
+    // PIN lockdown: while the interface is locked, only the small allowlist of
+    // harmless tools may run, mirroring the on-screen lock semantics.
+    if (isInterfaceLocked() && !LOCK_ALLOWED_FUNCTIONS.has(name)) {
+      return LOCKED_RESULT;
+    }
     const outcome = await toolRuntimeRef.current?.invoke({ name, args, source });
     if (outcome) {
       if (outcome.ok) return outcome.result;
@@ -415,6 +465,9 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
       FUNCTION_REGISTRY.map((fn) => [
         fn.name,
         async (params: Record<string, unknown>) => {
+          if (isInterfaceLocked() && !LOCK_ALLOWED_FUNCTIONS.has(fn.name)) {
+            return LOCKED_RESULT;
+          }
           const result = await fn.handler(params);
           if (fn.name === 'play_spotify') {
             scheduleMusicRestore(MUSIC_PLAYBACK_RESTORE_FALLBACK_MS);
@@ -671,6 +724,17 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
   // Install global error interceptors once so all console.error calls,
   // uncaught JS errors, and unhandled rejections stream to TerminalWidget.
   useEffect(() => { installErrorInterceptors(); }, []);
+
+  // Listen for open-model events — only show center widget when in round display mode
+  useEffect(() => {
+    const handler = (e: Event) => {
+      if (!roundDisplay) return;
+      const { path, name } = (e as CustomEvent<{ path: string; name: string }>).detail;
+      setCenterWidget({ type: 'model', path, name });
+    };
+    window.addEventListener('jarvis:open-model', handler);
+    return () => window.removeEventListener('jarvis:open-model', handler);
+  }, [roundDisplay]);
 
   useEffect(() => {
     statusRef.current = status;
@@ -956,6 +1020,61 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
     }
   }, [settings.theme, settings.grid]);
 
+  // Open settings from the radial nav / command palette
+  useEffect(() => {
+    const handler = () => setIsSettingsOpen(true);
+    window.addEventListener('jarvis:open-settings', handler);
+    return () => window.removeEventListener('jarvis:open-settings', handler);
+  }, []);
+
+  // UI-triggered announcements (e.g. manufacturing BUILD button): feed the
+  // event text into the live session so Jarvis speaks a response. No-op when
+  // disconnected.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const text = (e as CustomEvent<{ text?: string }>).detail?.text?.trim();
+      if (!text) return;
+
+      // ElevenLabs path — sendUserMessage triggers a spoken agent reply
+      if (elConversation.status === 'connected') {
+        Promise.resolve(elConversation.sendUserMessage(text)).catch(() => {});
+        return;
+      }
+
+      // Voicebox path
+      if (voiceboxConversation.status === 'connected') {
+        void voiceboxConversation.sendUserMessage(text).catch(() => {});
+        return;
+      }
+
+      // OpenAI / LocalAI Realtime path
+      const dc = dataChannelRef.current;
+      if (!dc || dc.readyState !== 'open') return;
+      dc.send(JSON.stringify({
+        type: 'conversation.item.create',
+        item: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] },
+      }));
+      dc.send(JSON.stringify({ type: 'response.create' }));
+    };
+    window.addEventListener('jarvis:announce', handler);
+    return () => window.removeEventListener('jarvis:announce', handler);
+  }, [elConversation, voiceboxConversation]);
+
+  // Theme change by voice (set_theme tool) — persist like a settings save
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const theme = (e as CustomEvent<{ theme?: JarvisSettings['theme'] }>).detail?.theme;
+      if (!theme || !['arc-reactor', 'midnight', 'crimson', 'matrix'].includes(theme)) return;
+      setSettings((prev) => {
+        const updated = { ...prev, theme };
+        saveSettingsToServer({ jarvis_settings: JSON.stringify(updated) });
+        return updated;
+      });
+    };
+    window.addEventListener('jarvis:set-theme', handler);
+    return () => window.removeEventListener('jarvis:set-theme', handler);
+  }, [saveSettingsToServer]);
+
   // Load settings from Core, retaining a read-only legacy fallback for migration.
   useEffect(() => {
     if (serverSettingsQuery.isPending) return;
@@ -1167,7 +1286,11 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
       // remediation messages (model not installed, engine unreachable).
       voiceSession.starting();
       await realtimeProvider.prepare();
-      
+
+      // Long-term memory digest, fetched before the session opens so the
+      // dc.onopen closure can append it to the instructions synchronously.
+      const memoryDigest = await fetchMemoryDigestBlock();
+
       // Get microphone access
       const { stream } = await acquireMicrophone({
         deviceId: currentSettings.microphoneDeviceId,
@@ -1256,7 +1379,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
         );
 
         const sessionConfig = realtimeProvider.createSessionUpdate({
-          instructions: buildAssistantInstructions(currentSettings.initialPrompt, currentSettings.speechVocabulary),
+          instructions: buildAssistantInstructions(currentSettings.initialPrompt, currentSettings.speechVocabulary) + memoryDigest,
           transcriptionPrompt: buildTranscriptionPrompt(currentSettings.speechVocabulary),
           tools: enabledTools,
         });
@@ -1516,9 +1639,10 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
         return;
       }
 
+      const memoryDigest = await fetchMemoryDigestBlock();
       const overrideAgent: Record<string, unknown> = {};
       if (currentSettings.initialPrompt) {
-        overrideAgent.prompt = { prompt: buildAssistantInstructions(currentSettings.initialPrompt, currentSettings.speechVocabulary) };
+        overrideAgent.prompt = { prompt: buildAssistantInstructions(currentSettings.initialPrompt, currentSettings.speechVocabulary) + memoryDigest };
       }
       if (currentSettings.elevenLabsFirstMessage?.trim()) overrideAgent.firstMessage = currentSettings.elevenLabsFirstMessage.trim();
       const overrides = Object.keys(overrideAgent).length > 0 ? { agent: overrideAgent } : undefined;
@@ -1541,6 +1665,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
       voiceSession.starting();
 
       const provider = currentSettings.brainProvider ?? 'openai';
+      const memoryDigest = await fetchMemoryDigestBlock();
       await voiceboxConversation.startSession({
         provider,
         model:
@@ -1552,7 +1677,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
               : DEFAULT_OPENAI_CHAT_MODEL),
         // Same music routing as the Realtime/ElevenLabs engines; the hook's
         // system prompt already appends the navigate_to_page caveat.
-        initialPrompt: buildAssistantInstructions(currentSettings.initialPrompt, currentSettings.speechVocabulary),
+        initialPrompt: buildAssistantInstructions(currentSettings.initialPrompt, currentSettings.speechVocabulary) + memoryDigest,
         firstMessage: currentSettings.localFirstMessage?.trim() || undefined,
         voiceProfileId: currentSettings.voiceboxProfileId?.trim() || undefined,
         playbackRate: currentSettings.voicePlaybackRate,
@@ -1836,10 +1961,12 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
       <div className={`fixed inset-0 flex overflow-hidden pointer-events-none select-none ${
         compact
           ? 'items-end justify-end pb-6 pr-6 z-[60]'
+          : roundDisplay
+          ? 'items-center justify-center z-[50]'
           : `${positionClass[pos]} ${positionPadding[pos]}`
       }`}>
-        {/* Background with slight gradient — hidden in compact mode */}
-        {!compact && (
+        {/* Background with slight gradient — hidden in compact/round mode */}
+        {!compact && !roundDisplay && (
           <div className="absolute inset-0 bg-gradient-to-b from-black/20 via-transparent to-black/20 pointer-events-none" />
         )}
 
@@ -1849,6 +1976,8 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
           className={`relative flex items-center justify-center aspect-square pointer-events-auto ${
             compact
               ? 'w-[160px]'
+              : roundDisplay
+              ? 'w-[min(100vw,100vh)]'
               : isCenter
               ? 'w-[80vw] max-w-[500px]'
               : 'w-[50vw] max-w-[340px]'
@@ -1975,8 +2104,20 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
             </div>
           )}
 
-          {/* Logo - Center (Clickable for Settings); 3D mode uses particle logo instead */}
-          {settings.visualizer !== 'sphere-nodes' && (
+          {/* Center widget (model viewer etc.) — overlays logo when active */}
+          <AnimatePresence>
+            {centerWidget?.type === 'model' && (
+              <ModelViewerWidget
+                key="model-viewer"
+                modelPath={centerWidget.path}
+                modelName={centerWidget.name}
+                onClose={() => setCenterWidget(null)}
+              />
+            )}
+          </AnimatePresence>
+
+          {/* Logo - Center (Clickable for Settings); hidden when a center widget is open; 3D mode uses particle logo instead */}
+          {settings.visualizer !== 'sphere-nodes' && !centerWidget && (
             <div
               className={`relative z-10 w-[55%] h-[55%] cursor-pointer group ${isCompactMuted ? 'opacity-35 grayscale' : ''}`}
               role="button"
@@ -2001,7 +2142,7 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
               />
             </div>
           )}
-          {settings.visualizer === 'sphere-nodes' && (
+          {settings.visualizer === 'sphere-nodes' && !centerWidget && (
             <button
               type="button"
               aria-label={compact ? (micMuted ? 'Unmute microphone' : 'Mute microphone') : 'Open settings'}
@@ -2013,8 +2154,8 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
             />
           )}
 
-          {/* Status Info — hidden in compact corner mode */}
-          {!compact && (
+          {/* Status Info — hidden in compact/round-display mode */}
+          {!compact && !roundDisplay && (
             <div className="absolute bottom-[-100px] left-1/2 -translate-x-1/2 text-center space-y-4 w-full">
               <button 
                 onClick={() => {
@@ -2078,9 +2219,19 @@ export function JarvisAssistant({ compact = false }: { compact?: boolean }) {
 
         {/* Hidden Audio Element */}
         <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />
+
+        {/* Round Display — back button */}
+        {roundDisplay && (
+          <button
+            className="fixed top-4 left-4 z-[70] pointer-events-auto text-cyan-400/60 hover:text-cyan-300 transition-colors text-xs uppercase tracking-widest"
+            onClick={() => window.dispatchEvent(new CustomEvent('jarvis:navigate', { detail: { page: 'home' } }))}
+          >
+            ← Back
+          </button>
+        )}
       </div>
 
-      {!compact && !isSettingsOpen && (
+      {!compact && !roundDisplay && !isSettingsOpen && (
         <ChatPanel
           messages={chatMessages}
           value={chatText}

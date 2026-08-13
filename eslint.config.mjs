@@ -74,5 +74,8 @@ export default defineConfig([
     'release/**',
     'scripts/dist/**',
     'public/vad/**',
+    // Vendored MediaPipe wasm runtime, synced from node_modules by
+    // electron-scripts/sync-mediapipe.js — generated code, never hand-edited.
+    'public/mediapipe/**',
   ]),
 ]);

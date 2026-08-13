@@ -71,6 +71,15 @@ const jarvisSettingsBaseSchema = z.object({
   position: jarvisPositionSchema,
   shellPathOverride: optionalBoundedString(4_096),
   pythonPathOverride: optionalBoundedString(4_096),
+  // Lock screen (PIN gate over the interface) and ambient screensaver mode.
+  lockEnabled: z.boolean().optional(),
+  lockPinHash: optionalBoundedString(512),
+  lockAutoMinutes: z.number().finite().min(0).max(1_440).optional(),
+  ambientAutoMinutes: z.number().finite().min(0).max(1_440).optional(),
+  /** Memory bucket for the remember/recall tools on shared installs. */
+  memoryAccountId: optionalBoundedString(128),
+  /** Skip the boot animation on launch. */
+  disableIntroAnimation: z.boolean().optional(),
 }).strict();
 
 function requireUniqueFunctions(

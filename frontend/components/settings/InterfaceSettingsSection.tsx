@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import type {
   JarvisGrid,
   JarvisLogo,
@@ -9,6 +10,7 @@ import type {
   JarvisVisualizer,
 } from '@jarvis/contracts';
 import { sfx } from '@/frontend/lib/sfx';
+import { hashPin } from '@/frontend/lib/pin';
 
 const THEMES: { id: JarvisTheme; name: string; accent: string; glow: string }[] = [
   { id: 'arc-reactor', name: 'Arc Reactor', accent: '#22d3ee', glow: 'rgba(34,211,238,0.4)' },
@@ -64,6 +66,8 @@ export function InterfaceSettingsSection({
   settings: JarvisSettings;
   onChange: (settings: JarvisSettings) => void;
 }) {
+  const [newPin, setNewPin] = useState('');
+
   return (
     <div className="space-y-7">
       <div className="space-y-3">
@@ -173,6 +177,94 @@ export function InterfaceSettingsSection({
               </button>
             );
           })}
+        </div>
+      </div>
+
+      <div className="space-y-3">
+        <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">Boot & Idle</label>
+        <div className="space-y-3 rounded border border-cyan-500/20 bg-cyan-950/10 px-3 py-3">
+          <label className="flex items-center justify-between gap-3 text-xs text-cyan-300">
+            <span>Skip intro animation on launch</span>
+            <input
+              type="checkbox"
+              checked={settings.disableIntroAnimation ?? false}
+              onChange={(e) => { sfx('click_sfx', 0.4); onChange({ ...settings, disableIntroAnimation: e.target.checked }); }}
+              className="accent-cyan-400"
+            />
+          </label>
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-xs text-cyan-300">Ambient mode after idle</span>
+            <select
+              value={String(settings.ambientAutoMinutes ?? 0)}
+              onChange={(e) => { sfx('select', 0.5); onChange({ ...settings, ambientAutoMinutes: Number(e.target.value) }); }}
+              className="bg-[#021118] border border-cyan-500/30 rounded px-2 py-1 text-cyan-100 text-xs font-mono focus:outline-none focus:border-cyan-400"
+            >
+              <option value="0">Never</option>
+              <option value="5">5 min</option>
+              <option value="10">10 min</option>
+              <option value="20">20 min</option>
+              <option value="30">30 min</option>
+            </select>
+          </div>
+          <p className="text-[10px] leading-relaxed text-cyan-700">
+            Ambient mode is a JARVIS screensaver — say &quot;ambient mode&quot; or press the palette
+            (⌘K) to enter it manually; any input exits.
+          </p>
+        </div>
+      </div>
+
+      <div className="space-y-3">
+        <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">Interface Lock</label>
+        <div className="space-y-3 rounded border border-cyan-500/20 bg-cyan-950/10 px-3 py-3">
+          <label className="flex items-center justify-between gap-3 text-xs text-cyan-300">
+            <span>Require a PIN to use Jarvis</span>
+            <input
+              type="checkbox"
+              checked={settings.lockEnabled ?? false}
+              onChange={(e) => { sfx('click_sfx', 0.4); onChange({ ...settings, lockEnabled: e.target.checked }); }}
+              className="accent-cyan-400"
+            />
+          </label>
+          <div className="flex items-center gap-2">
+            <input
+              type="password"
+              inputMode="numeric"
+              value={newPin}
+              onChange={(e) => setNewPin(e.target.value.replace(/\D/g, '').slice(0, 8))}
+              placeholder={settings.lockPinHash ? 'PIN set — enter new to replace' : '4-8 digit PIN'}
+              className="flex-1 bg-[#021118] border border-cyan-500/30 rounded px-3 py-1.5 text-cyan-100 text-xs font-mono focus:outline-none focus:border-cyan-400"
+            />
+            <button
+              type="button"
+              disabled={newPin.length < 4}
+              onClick={() => {
+                sfx('select_confirm', 0.5);
+                onChange({ ...settings, lockPinHash: hashPin(newPin) });
+                setNewPin('');
+              }}
+              className="rounded border border-cyan-500/40 bg-cyan-500/15 px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-cyan-300 transition-all hover:bg-cyan-500/25 disabled:opacity-40"
+            >
+              Set PIN
+            </button>
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-xs text-cyan-300">Auto-lock after idle</span>
+            <select
+              value={String(settings.lockAutoMinutes ?? 0)}
+              onChange={(e) => { sfx('select', 0.5); onChange({ ...settings, lockAutoMinutes: Number(e.target.value) }); }}
+              className="bg-[#021118] border border-cyan-500/30 rounded px-2 py-1 text-cyan-100 text-xs font-mono focus:outline-none focus:border-cyan-400"
+            >
+              <option value="0">Never</option>
+              <option value="5">5 min</option>
+              <option value="15">15 min</option>
+              <option value="30">30 min</option>
+              <option value="60">1 hour</option>
+            </select>
+          </div>
+          <p className="text-[10px] leading-relaxed text-cyan-700">
+            Locking needs both the toggle and a PIN. Say &quot;lock the interface&quot;, use ⌘K, or wait
+            for auto-lock; voice tools are gated while locked.
+          </p>
         </div>
       </div>
 

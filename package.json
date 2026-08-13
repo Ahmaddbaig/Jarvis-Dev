@@ -23,6 +23,11 @@
     "serve": "next build && next start -H 127.0.0.1 -p 3000",
     "build:next": "next build",
     "build:electron": "tsc -p tsconfig.electron.json",
+    "sync:mediapipe": "node electron-scripts/sync-mediapipe.js",
+    "el:list": "node scripts/elevenlabs-sync.mjs --list",
+    "el:sync": "node scripts/elevenlabs-sync.mjs",
+    "el:sync:dry": "node scripts/elevenlabs-sync.mjs --dry-run",
+    "el:tune": "node scripts/elevenlabs-tune-agent.mjs",
     "ai:setup": "node electron-scripts/ai-engine.js setup",
     "ai:test": "node electron-scripts/ai-engine.js test",
     "ai:lint": "node electron-scripts/ai-engine.js lint",
@@ -30,7 +35,7 @@
     "build:ai": "node electron-scripts/ai-engine.js build",
     "build:python": "node electron-scripts/build-python.js && npm run build:ai",
     "ai:smoke": "node scripts/release/ai-frozen-smoke.mjs",
-    "build": "npm run build:python && npm run build:next && node electron-scripts/postbuild.js && npm run build:electron && npm run build:companion && npm run release:evidence",
+    "build": "npm run sync:mediapipe && npm run build:python && npm run build:next && node electron-scripts/postbuild.js && npm run build:electron && npm run build:companion && npm run release:evidence",
     "dist:mac": "npm run build && electron-builder --mac --arm64 --publish never",
     "dist:win": "npm run build && electron-builder --win --x64 --publish never",
     "dist:linux": "npm run build && electron-builder --linux --x64 --publish never",
@@ -76,6 +81,7 @@
     "smart-buffer": "^4.2.0"
   },
   "devDependencies": {
+    "@mediapipe/tasks-vision": "^0.10.17",
     "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.5.0",
     "@tailwindcss/postcss": "^4",

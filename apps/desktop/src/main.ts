@@ -23,6 +23,12 @@ import {
     type LanGatewayController,
 } from './lan-gateway';
 import { AIEngineSupervisor } from './ai-engine-supervisor';
+import { TouchInputService, type TouchInputStatus } from './touch-input';
+import {
+    SocialViewsService,
+    type SocialBounds,
+    type SocialPlatformId,
+} from './social-views';
 
 type DesktopPanelPosition = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
 type DesktopWindowKind = 'visual' | 'hitbox';
@@ -211,6 +217,8 @@ let desktopVisualWindow: BrowserWindow | null = null;
 let desktopHitboxWindow: BrowserWindow | null = null;
 let nextServer: ChildProcess | null = null;
 let aiEngine: AIEngineSupervisor | null = null;
+let touchInputService: TouchInputService | null = null;
+let socialViewsService: SocialViewsService | null = null;
 // Set to true only after the Next.js server is confirmed ready and the first
 // window has been created. Guards activate/reopen handlers from firing early.
 let appReady = false;
@@ -548,6 +556,52 @@ function setupDesktopModeIpc(): void {
         return status;
     });
 }
+function setupTouchAndSocialIpc(): void {
+    // USB touch-screen (ILITEK IR film) — reads raw HID touch reports and
+    // replays them into the window as clicks/drags. node-hid is an optional
+    // dependency; when it (or the hardware) is absent the service just idles.
+    touchInputService = new TouchInputService(
+        () => mainWindow,
+        (status: TouchInputStatus) => {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('touch-input:status', status);
+            }
+        },
+    );
+    try {
+        touchInputService.start();
+    }
+    catch (err) {
+        console.error('[jarvis] Touch-input service failed to start:', err);
+    }
+    ipcMain.handle('touch-input:get-status', () => touchInputService?.status ?? { connected: false });
+    // Transparent windows blank out guest views on macOS. Social Command flips
+    // the main window opaque while open so the four WebContentsViews can paint.
+    ipcMain.handle('window:set-opaque', (_event, opaque: boolean) => {
+        if (!mainWindow || mainWindow.isDestroyed())
+            return { success: false };
+        try {
+            mainWindow.setBackgroundColor(opaque ? '#020814' : '#00000000');
+            return { success: true, opaque: !!opaque };
+        }
+        catch (err) {
+            return { success: false, error: err instanceof Error ? err.message : 'failed' };
+        }
+    });
+    // Social Command — four WebContentsView browser panes over the main UI
+    socialViewsService = new SocialViewsService(() => mainWindow);
+    ipcMain.handle('social:start', () => socialViewsService!.start());
+    ipcMain.handle('social:stop', () => socialViewsService!.stop());
+    ipcMain.handle('social:set-bounds', (_e, all: Partial<Record<SocialPlatformId, SocialBounds>>) => socialViewsService!.setAllBounds(all ?? {}));
+    ipcMain.handle('social:navigate', (_e, id: SocialPlatformId, url: string) => socialViewsService!.navigate(id, url));
+    ipcMain.handle('social:navigate-all', (_e, url: string) => socialViewsService!.navigateAll(url));
+    ipcMain.handle('social:reload', (_e, id: SocialPlatformId) => socialViewsService!.reload(id));
+    ipcMain.handle('social:home', (_e, id: SocialPlatformId) => socialViewsService!.goHome(id));
+    ipcMain.handle('social:get-url', (_e, id: SocialPlatformId) => socialViewsService!.getUrl(id));
+    ipcMain.handle('social:capture-html', (_e, id: SocialPlatformId) => socialViewsService!.captureHtml(id));
+    ipcMain.handle('social:exec', (_e, id: SocialPlatformId, code: string) => socialViewsService!.executeJavaScript(id, code));
+    ipcMain.handle('social:post-reply', (_e, id: SocialPlatformId, author: string, commentText: string, reply: string, options?: { typingMsPerChar?: number; typingJitterMs?: number }) => socialViewsService!.postReply(id, author, commentText, reply, options));
+}
 function waitForServer(retries = 40, delay = 500): Promise<void> {
     return new Promise<void>((resolve, reject) => {
         const attempt = (n: number) => {
@@ -773,6 +827,7 @@ app.whenReady().then(async () => {
     registerJarvisPdfProtocol();
     setupPermissions();
     setupDesktopModeIpc();
+    setupTouchAndSocialIpc();
     // Do not hold the entire app startup behind a macOS privacy dialog. The
     // request continues in the background and the UI can open immediately.
     if (!isReleaseSmoke) void requestMediaPermissions();
@@ -855,6 +910,10 @@ app.on('before-quit', (event) => {
         return;
     shutdownStarted = true;
     event.preventDefault();
+    socialViewsService?.stop();
+    socialViewsService = null;
+    touchInputService?.stop();
+    touchInputService = null;
     nextServer?.kill();
     nextServer = null;
     lanGateway?.close();

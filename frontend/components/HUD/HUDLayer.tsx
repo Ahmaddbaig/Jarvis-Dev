@@ -20,11 +20,29 @@ import { PrinterWidget } from './widgets/PrinterWidget';
 import { WeatherHomeWidget } from './widgets/WeatherHomeWidget';
 import { HADeviceWidget } from './widgets/HADeviceWidget';
 import { CompanionDisplayWidget } from './widgets/CompanionDisplayWidget';
+import { ModelHudWidget } from './widgets/ModelHudWidget';
+import { AgendaWidget } from './widgets/AgendaWidget';
+import { TodoWidget } from './widgets/TodoWidget';
+import { StocksWidget } from './widgets/StocksWidget';
+import { HeadlinesWidget } from './widgets/HeadlinesWidget';
+import { TimerWidget } from './widgets/TimerWidget';
+import { WeatherRadarWidget } from './widgets/WeatherRadarWidget';
+import { CameraFeedWidget } from './widgets/CameraFeedWidget';
+import { TranscriptWidget } from './widgets/TranscriptWidget';
+import { UptimeWidget } from './widgets/UptimeWidget';
+import { OrbitWidget } from './widgets/OrbitWidget';
+import { CalculatorWidget } from './widgets/CalculatorWidget';
 import { getCachedSetting } from '@/frontend/lib/serverSettings';
+import { notify } from '@/frontend/lib/notify';
 import { useServerSettings } from '@/frontend/hooks/queries/useServerSettings';
 import { useHomeAssistantService, useHomeAssistantStates } from '@/frontend/hooks/queries/useHomeAssistant';
 
-type WidgetType = 'system' | 'network' | 'map' | 'clock' | 'suit' | 'music' | 'text' | 'pdf' | 'image' | 'terminal' | 'tv' | 'printer' | 'weather-home' | 'ha-device' | 'ha-toggle' | 'companion-display';
+type WidgetType =
+  | 'system' | 'network' | 'map' | 'clock' | 'suit' | 'music' | 'text' | 'pdf' | 'image'
+  | 'terminal' | 'tv' | 'printer' | 'weather-home' | 'ha-device' | 'ha-toggle' | 'companion-display'
+  | 'model-viewer'
+  | 'agenda' | 'todo' | 'stocks' | 'headlines' | 'timer' | 'weather-radar' | 'camera-feed'
+  | 'transcript' | 'uptime' | 'orbit' | 'calculator';
 
 interface ModuleData {
   id: string;
@@ -48,6 +66,8 @@ interface ModuleData {
   rightOffset?: number;
   /** Extra config for dynamic widgets (tv, printer, ha-device) */
   widgetConfig?: Record<string, unknown>;
+  /** Path for model-viewer widget */
+  modelPath?: string;
 }
 
 const WIDGET_META: Record<WidgetType, { title: string; width: number; height: number }> = {
@@ -67,7 +87,66 @@ const WIDGET_META: Record<WidgetType, { title: string; width: number; height: nu
   'ha-device':  { title: 'DEVICES',         width: 280, height: 260 },
   'ha-toggle':  { title: 'TOGGLE',          width: 80,  height: 80  },
   'companion-display': { title: 'REMOTE DISPLAY', width: 420, height: 290 },
+  'model-viewer': { title: '3D MODEL',      width: 360, height: 360 },
+  agenda:       { title: 'AGENDA',          width: 320, height: 260 },
+  todo:         { title: 'TASKS',           width: 300, height: 280 },
+  stocks:       { title: 'MARKETS',         width: 320, height: 240 },
+  headlines:    { title: 'HEADLINES',       width: 320, height: 210 },
+  timer:        { title: 'TIMERS',          width: 280, height: 240 },
+  'weather-radar': { title: 'WEATHER RADAR', width: 340, height: 300 },
+  'camera-feed': { title: 'CAMERA FEED',    width: 360, height: 280 },
+  transcript:   { title: 'COMMS LOG',       width: 340, height: 300 },
+  uptime:       { title: 'HOST MONITOR',    width: 300, height: 220 },
+  orbit:        { title: 'ORBITAL TRACKER', width: 340, height: 290 },
+  calculator:   { title: 'COMPUTE',         width: 280, height: 380 },
 };
+
+// ── HUD layout persistence ───────────────────────────────────────────────────
+// The live layout (positions + sizes) is saved to localStorage so it survives
+// reloads. Named presets ("workshop", "monitoring"…) are stored separately and
+// can be saved/loaded via the jarvis:hud event (voice + command palette).
+
+const LAYOUT_KEY = 'jarvis_hud_layout_current';
+const PRESETS_KEY = 'jarvis_hud_layouts';
+
+/** Widgets whose state can't meaningfully survive a reload (large base64
+ *  payloads or one-shot content) are excluded from persistence. */
+const NON_PERSISTED_TYPES: WidgetType[] = ['image'];
+
+function sanitizeForStorage(modules: ModuleData[]): ModuleData[] {
+  return modules
+    .filter(m => !NON_PERSISTED_TYPES.includes(m.type))
+    .map(m => {
+      const copy = { ...m };
+      delete copy.imageBase64;
+      delete copy.imageLoading;
+      delete copy.imageError;
+      return copy;
+    });
+}
+
+function loadSavedLayout(w: number): ModuleData[] | null {
+  try {
+    const raw = localStorage.getItem(LAYOUT_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as ModuleData[];
+    if (!Array.isArray(parsed)) return null;
+    return parsed
+      .filter(m => m && typeof m.id === 'string' && WIDGET_META[m.type])
+      .map(m => m.rightOffset !== undefined ? { ...m, x: w - m.rightOffset } : m);
+  } catch {
+    return null;
+  }
+}
+
+function loadPresets(): Record<string, ModuleData[]> {
+  try {
+    const raw = localStorage.getItem(PRESETS_KEY);
+    return raw ? (JSON.parse(raw) as Record<string, ModuleData[]>) : {};
+  } catch {
+    return {};
+  }
+}
 
 /** Scan the screen in a grid and return the first (x,y) where a rect of
  *  size (newW × newH) doesn't overlap any existing module (with padding). */
@@ -116,11 +195,15 @@ export function HUDLayer({ scanReady = true }: { scanReady?: boolean }) {
   const isMobile = useIsMobile();
   const [modules, setModules] = useState<ModuleData[]>([]);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const hydratedRef = useRef(false);
 
   useEffect(() => {
     // On mobile, start with no default widgets — keeps the UI clean
     if (isMobile) return;
-    setModules(buildDefaultModules(window.innerWidth));
+    // Restore the persisted layout; fall back to defaults on first run
+    const saved = loadSavedLayout(window.innerWidth);
+    setModules(saved ?? buildDefaultModules(window.innerWidth));
+    hydratedRef.current = true;
 
     const handleResize = () => {
       const w = window.innerWidth;
@@ -132,6 +215,17 @@ export function HUDLayer({ scanReady = true }: { scanReady?: boolean }) {
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
+
+  // Persist the live layout so widgets survive reloads (debounced)
+  useEffect(() => {
+    if (!hydratedRef.current || isMobile) return;
+    const t = window.setTimeout(() => {
+      try {
+        localStorage.setItem(LAYOUT_KEY, JSON.stringify(sanitizeForStorage(modules)));
+      } catch { /* storage full — non-critical */ }
+    }, 400);
+    return () => window.clearTimeout(t);
+  }, [modules, isMobile]);
 
   // Listen for Jarvis HUD control events
   useEffect(() => {
@@ -149,10 +243,55 @@ export function HUDLayer({ scanReady = true }: { scanReady?: boolean }) {
         image_error?: string;
         id?: string;
         widget_config?: Record<string, unknown>;
+        layout_name?: string;
       }>).detail;
 
-      const { command, widget, text, title, pdf_source, module_id, image_loading, image_base64, image_caption, widget_config } =
+      const { command, widget, text, title, pdf_source, module_id, image_loading, image_base64, image_caption, widget_config, layout_name } =
         detail;
+
+      // ── Named layout presets ──────────────────────────────────────────────
+      if (command === 'save_layout') {
+        const name = (layout_name ?? '').trim().toLowerCase();
+        if (!name) return;
+        setModules(prev => {
+          const presets = loadPresets();
+          presets[name] = sanitizeForStorage(prev);
+          try { localStorage.setItem(PRESETS_KEY, JSON.stringify(presets)); } catch { /* non-critical */ }
+          notify('LAYOUT SAVED', `Preset "${name.toUpperCase()}" stored (${prev.length} widgets).`, 'success');
+          return prev;
+        });
+        return;
+      }
+
+      if (command === 'load_layout') {
+        const name = (layout_name ?? '').trim().toLowerCase();
+        if (!name) return;
+        const presets = loadPresets();
+        const preset = presets[name];
+        if (!preset) {
+          notify('LAYOUT NOT FOUND', `No preset named "${name.toUpperCase()}".`, 'warn');
+          return;
+        }
+        const w = window.innerWidth;
+        setModules(preset
+          .filter(m => WIDGET_META[m.type])
+          .map(m => m.rightOffset !== undefined ? { ...m, x: w - m.rightOffset } : m));
+        setExpandedId(null);
+        notify('LAYOUT LOADED', `Preset "${name.toUpperCase()}" active.`, 'info');
+        return;
+      }
+
+      if (command === 'delete_layout') {
+        const name = (layout_name ?? '').trim().toLowerCase();
+        if (!name) return;
+        const presets = loadPresets();
+        if (presets[name]) {
+          delete presets[name];
+          try { localStorage.setItem(PRESETS_KEY, JSON.stringify(presets)); } catch { /* non-critical */ }
+          notify('LAYOUT DELETED', `Preset "${name.toUpperCase()}" removed.`, 'info');
+        }
+        return;
+      }
 
       if (command === 'set_image') {
         const targetId = detail.id;
@@ -196,7 +335,7 @@ export function HUDLayer({ scanReady = true }: { scanReady?: boolean }) {
         const newModuleId =
           type === 'image' && module_id?.trim() ? module_id.trim() : String(Date.now());
         setModules(prev => {
-          const multiInstance = ['text', 'pdf', 'image', 'printer', 'ha-device', 'ha-toggle'].includes(type);
+          const multiInstance = ['text', 'pdf', 'image', 'printer', 'ha-device', 'ha-toggle', 'stocks', 'uptime'].includes(type);
           const meta = WIDGET_META[type];
           const moduleTitle = title?.trim()
             ? title.trim().toUpperCase()
@@ -258,6 +397,27 @@ export function HUDLayer({ scanReady = true }: { scanReady?: boolean }) {
     return () => window.removeEventListener('jarvis:hud', handler);
   }, [expandedId]);
 
+  // Listen for open-model events from function calls
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { path, name } = (e as CustomEvent<{ path: string; name: string }>).detail;
+      const meta = WIDGET_META['model-viewer'];
+      const spot = findOpenSpot(meta.width, meta.height, modules);
+      setModules(prev => [...prev, {
+        id: `model-${Date.now()}`,
+        type: 'model-viewer',
+        title: name.toUpperCase(),
+        x: spot.x,
+        y: spot.y,
+        width: meta.width,
+        height: meta.height,
+        modelPath: path,
+      }]);
+    };
+    window.addEventListener('jarvis:open-model', handler);
+    return () => window.removeEventListener('jarvis:open-model', handler);
+  }, [modules]);
+
   const removeModule = (id: string) => {
     setModules(prev => prev.filter(m => m.id !== id));
     if (expandedId === id) setExpandedId(null);
@@ -310,7 +470,7 @@ export function HUDLayer({ scanReady = true }: { scanReady?: boolean }) {
           onResize={handleResize}
           scanReady={scanReady}
           expandedSize={module.type === 'pdf' || module.type === 'companion-display' ? 'large' : 'standard'}
-          embedContent={module.type === 'image' || module.type === 'companion-display'}
+          embedContent={module.type === 'image' || module.type === 'companion-display' || module.type === 'model-viewer' || module.type === 'weather-radar' || module.type === 'camera-feed'}
         >
           {module.type === 'clock' && <ClockWidget />}
           {module.type === 'system' && <SystemStatusWidget />}
@@ -342,6 +502,18 @@ export function HUDLayer({ scanReady = true }: { scanReady?: boolean }) {
               config={module.widgetConfig}
             />
           )}
+          {module.type === 'model-viewer' && <ModelHudWidget modelPath={module.modelPath ?? ''} />}
+          {module.type === 'agenda' && <AgendaWidget />}
+          {module.type === 'todo' && <TodoWidget />}
+          {module.type === 'stocks' && <StocksWidget config={module.widgetConfig} />}
+          {module.type === 'headlines' && <HeadlinesWidget />}
+          {module.type === 'timer' && <TimerWidget />}
+          {module.type === 'weather-radar' && <WeatherRadarWidget />}
+          {module.type === 'camera-feed' && <CameraFeedWidget />}
+          {module.type === 'transcript' && <TranscriptWidget />}
+          {module.type === 'uptime' && <UptimeWidget config={module.widgetConfig} />}
+          {module.type === 'orbit' && <OrbitWidget />}
+          {module.type === 'calculator' && <CalculatorWidget />}
         </HUDModule>
       ))}
     </div>

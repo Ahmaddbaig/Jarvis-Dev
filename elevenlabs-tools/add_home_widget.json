@@ -1,0 +1,104 @@
+{
+  "type": "client",
+  "name": "add_home_widget",
+  "description": "Add or remove a live widget on the Jarvis home screen dashboard. Widget types: 'tv' = TV remote, 'printer' = 3D printer status, 'weather-home' = current weather, 'ha-device' = Home Assistant device card (multiple devices), 'ha-toggle' = single glowing power button for ONE specific device. IMPORTANT — when adding an 'ha-toggle': call home_assistant_command with command='list_devices' FIRST to get exact entity IDs, then pass entity_ids=[exact entity_id] and label=short human name (e.g. 'Light 2').",
+  "disable_interruptions": false,
+  "force_pre_tool_speech": false,
+  "pre_tool_speech": "auto",
+  "tool_call_sound": null,
+  "tool_call_sound_behavior": "auto",
+  "tool_error_handling_mode": "auto",
+  "execution_mode": "immediate",
+  "assignments": [],
+  "expects_response": false,
+  "response_timeout_secs": 1,
+  "parameters": [
+    {
+      "id": "action",
+      "type": "string",
+      "value_type": "llm_prompt",
+      "description": "Use 'add' to show a widget on the home screen. Use 'remove' to close/hide it.",
+      "dynamic_variable": "",
+      "constant_value": "",
+      "enum": ["add", "remove"],
+      "is_system_provided": false,
+      "required": true
+    },
+    {
+      "id": "widget_type",
+      "type": "string",
+      "value_type": "llm_prompt",
+      "description": "Which widget. 'tv' = TV remote. 'printer' = 3D printer status. 'weather-home' = weather. 'ha-device' = HA device card (multiple devices). 'ha-toggle' = single glowing power button for one specific device (use after calling list_devices to get the entity_id).",
+      "dynamic_variable": "",
+      "constant_value": "",
+      "enum": [
+        "tv", "printer", "weather-home", "weather-radar", "agenda", "todo", "stocks", "headlines",
+        "timer", "camera-feed", "transcript", "uptime", "orbit", "calculator", "ha-device", "ha-toggle"
+      ],
+      "is_system_provided": false,
+      "required": true
+    },
+    {
+      "id": "title",
+      "type": "string",
+      "value_type": "llm_prompt",
+      "description": "Optional custom title for the widget header, e.g. 'Living Room TV'.",
+      "dynamic_variable": "",
+      "constant_value": "",
+      "is_system_provided": false,
+      "required": false
+    },
+    {
+      "id": "printer_name",
+      "type": "string",
+      "value_type": "llm_prompt",
+      "description": "For widget_type='printer': the printer name, e.g. 'X1 Carbon'. Omit for all printers.",
+      "dynamic_variable": "",
+      "constant_value": "",
+      "is_system_provided": false,
+      "required": false
+    },
+    {
+      "id": "domain",
+      "type": "string",
+      "value_type": "llm_prompt",
+      "description": "For widget_type='ha-device': HA domain to filter, e.g. 'light', 'switch', 'climate'.",
+      "dynamic_variable": "",
+      "constant_value": "",
+      "is_system_provided": false,
+      "required": false
+    },
+    {
+      "id": "entity_ids",
+      "type": "string",
+      "value_type": "llm_prompt",
+      "description": "For widget_type='ha-toggle' or 'ha-device': comma-separated exact HA entity IDs, e.g. 'switch.light_2' or 'switch.light_1,switch.light_2'. Get these from list_devices first.",
+      "dynamic_variable": "",
+      "constant_value": "",
+      "is_system_provided": false,
+      "required": false
+    },
+    {
+      "id": "name_filter",
+      "type": "string",
+      "value_type": "llm_prompt",
+      "description": "For widget_type='ha-device': fuzzy name filter, e.g. 'bedroom'. For ha-toggle prefer entity_ids instead.",
+      "dynamic_variable": "",
+      "constant_value": "",
+      "is_system_provided": false,
+      "required": false
+    },
+    {
+      "id": "label",
+      "type": "string",
+      "value_type": "llm_prompt",
+      "description": "For widget_type='ha-toggle': short display name shown under the power button, e.g. 'Light 2'. Always set this.",
+      "dynamic_variable": "",
+      "constant_value": "",
+      "is_system_provided": false,
+      "required": false
+    }
+  ],
+  "dynamic_variables": { "dynamic_variable_placeholders": {} },
+  "response_mocks": []
+}

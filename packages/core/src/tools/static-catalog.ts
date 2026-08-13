@@ -55,12 +55,23 @@ const COMPATIBILITY_ORDER = [
   'desktop_mode',
   'jarvis_disconnect',
   'navigate_to_page',
+  'open_3d_model',
   'map_command',
   'calendar_command',
   'home_assistant_command',
   'printer_command',
   'add_home_widget',
   'fullscreen',
+  'lock_interface',
+  'set_timer',
+  'set_reminder',
+  'hud_layout',
+  'briefing',
+  'set_theme',
+  'ambient_mode',
+  'remember',
+  'recall',
+  'forget',
 ] as const;
 
 const declarations = COMPATIBILITY_ORDER.map((operation) => {

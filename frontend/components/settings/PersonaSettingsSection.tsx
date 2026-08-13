@@ -67,6 +67,24 @@ export function PersonaSettingsSection({ settings, onChange }: PersonaSettingsSe
           unusual words correctly.
         </p>
       </div>
+
+      <div className="space-y-2">
+        <label className="text-xs font-bold text-cyan-500 uppercase tracking-widest">
+          Memory Account <span className="text-cyan-700 normal-case font-normal">(optional)</span>
+        </label>
+        <input
+          type="text"
+          value={settings.memoryAccountId ?? ''}
+          onChange={(e) => onChange({ ...settings, memoryAccountId: e.target.value })}
+          placeholder="default"
+          className="w-full bg-cyan-950/20 border border-cyan-500/30 rounded px-3 py-2 text-cyan-100 focus:outline-none focus:border-cyan-400 focus:shadow-[0_0_10px_rgba(34,211,238,0.3)] transition-all font-mono text-sm"
+        />
+        <p className="text-[10px] leading-relaxed text-cyan-700">
+          Jarvis remembers facts you tell it (&quot;remember that…&quot;) and recalls them in later
+          sessions. On a shared install, give each person their own account name so memories
+          stay separate.
+        </p>
+      </div>
     </div>
   );
 }
