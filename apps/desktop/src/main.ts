@@ -914,9 +914,26 @@ app.on('before-quit', (event) => {
     socialViewsService = null;
     touchInputService?.stop();
     touchInputService = null;
-    nextServer?.kill();
-    nextServer = null;
-    lanGateway?.close();
-    lanGateway = null;
-    void (aiEngine?.stop() ?? Promise.resolve()).finally(() => app.quit());
+    // Close the Voicebox sidecar so its TTS engine doesn't keep ~1 GB
+    // resident after Jarvis exits. Must run while the internal server is
+    // still up to relay the request; time-capped so quit never hangs on it.
+    // Bearer authenticates in the packaged app (env token); the same-origin
+    // Origin header satisfies the loopback mutation rule in dev, where the
+    // Next server runs outside this process and lacks JARVIS_DESKTOP_TOKEN.
+    const voiceboxShutdown = fetch(`http://127.0.0.1:${PORT}/api/voice/voicebox-shutdown`, {
+        method: 'POST',
+        headers: {
+            Authorization: `Bearer ${DESKTOP_CONTROL_TOKEN}`,
+            Origin: `http://127.0.0.1:${PORT}`,
+        },
+        signal: AbortSignal.timeout(1500),
+    }).catch(() => undefined);
+    void Promise.allSettled([voiceboxShutdown, aiEngine?.stop() ?? Promise.resolve()])
+        .finally(() => {
+        nextServer?.kill();
+        nextServer = null;
+        lanGateway?.close();
+        lanGateway = null;
+        app.quit();
+    });
 });

@@ -197,6 +197,34 @@ export async function resolveProfile(profileId?: string): Promise<VoiceboxProfil
   return (await res.json()) as VoiceboxProfile;
 }
 
+/**
+ * Ask a running Voicebox to exit. Jarvis treats Voicebox as a managed
+ * sidecar: it is auto-launched in the background on first use, so it is
+ * also closed when Jarvis quits — otherwise its TTS engine keeps ~1 GB of
+ * model memory resident with no window to notice it by. It relaunches
+ * automatically on the next voice session.
+ *
+ * Skipped while a voice-model download is in progress so quitting Jarvis
+ * never aborts one.
+ */
+export async function shutdownVoicebox(): Promise<{ shutdown: boolean; reason?: string }> {
+  try {
+    const statusRes = await fetch(api('/models/status'), {
+      signal: AbortSignal.timeout(1_000),
+    });
+    if (statusRes.ok) {
+      const { models } = (await statusRes.json()) as { models?: { downloading?: boolean }[] };
+      if ((models ?? []).some((m) => m.downloading)) {
+        return { shutdown: false, reason: 'voice-model download in progress' };
+      }
+    }
+    await fetch(api('/shutdown'), { method: 'POST', signal: AbortSignal.timeout(1_500) });
+    return { shutdown: true };
+  } catch {
+    return { shutdown: false, reason: 'not running' };
+  }
+}
+
 // Cold-loading a TTS engine into MLX takes ~40s for luxtts on this machine.
 const MODEL_LOAD_TIMEOUT_MS = 150_000;
 

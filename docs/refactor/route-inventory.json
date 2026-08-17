@@ -1184,6 +1184,23 @@
       ]
     },
     {
+      "route": "/api/voice/voicebox-shutdown",
+      "methods": [
+        "POST"
+      ],
+      "exposure": "desktop-only",
+      "actors": [
+        "desktop-shell"
+      ],
+      "auth": "desktop-bearer",
+      "secretUse": "none",
+      "sideEffect": "asks the local Voicebox sidecar to exit (skipped mid-download)",
+      "confirmation": "none-in-route",
+      "capability": "ai.lifecycle",
+      "risk": "low",
+      "priority": "P1"
+    },
+    {
       "route": "/api/voice/warmup",
       "methods": [
         "POST"
